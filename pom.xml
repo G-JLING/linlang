@@ -6,15 +6,42 @@
 
     <groupId>me.jling</groupId>
     <artifactId>linlang</artifactId>
-    <version>1.0.0.1-SNAPSHOT</version>
+    <version>${revision}</version>
     <packaging>pom</packaging>
     <modules>
         <module>linlang-core</module>
         <module>linlang-api</module>
         <module>linlang-adapter-bukkit</module>
+        <module>linlang-audit</module>
     </modules>
 
+    <dependencyManagement>
+        <dependencies>
+            <dependency>
+                <groupId>me.jling</groupId>
+                <artifactId>linlang-api</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>me.jling</groupId>
+                <artifactId>linlang-core</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>me.jling</groupId>
+                <artifactId>linlang-adapter-bukkit</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>me.jling</groupId>
+                <artifactId>linlang-audit</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
+
     <properties>
+        <revision>1.0.1.1-SNAPSHOT</revision>
         <maven.compiler.source>17</maven.compiler.source>
         <maven.compiler.target>17</maven.compiler.target>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>

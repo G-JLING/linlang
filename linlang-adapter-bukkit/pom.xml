@@ -6,7 +6,7 @@
     <parent>
         <groupId>me.jling</groupId>
         <artifactId>linlang</artifactId>
-        <version>1.0.0.1-SNAPSHOT</version>
+        <version>${revision}</version>
     </parent>
 
     <artifactId>linlang-adapter-bukkit</artifactId>
@@ -18,16 +18,22 @@
     </properties>
     <dependencies>
         <dependency>
-            <groupId>com.magicpowered</groupId>
-            <artifactId>linlang-core</artifactId>
-            <version>1.0.0.1-SNAPSHOT</version>
-            <scope>compile</scope>
-        </dependency>
-        <dependency>
             <groupId>org.spigotmc</groupId>
             <artifactId>spigot-api</artifactId>
             <version>1.12-R0.1-SNAPSHOT</version>
             <scope>provided</scope>
+        </dependency>
+        <dependency>
+            <groupId>me.jling</groupId>
+            <artifactId>linlang-core</artifactId>
+            <version>${project.version}</version>
+            <scope>compile</scope>
+        </dependency>
+        <dependency>
+            <groupId>me.jling</groupId>
+            <artifactId>linlang-audit</artifactId>
+            <version>${project.version}</version>
+            <scope>compile</scope>
         </dependency>
     </dependencies>
 

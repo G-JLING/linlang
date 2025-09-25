@@ -9,12 +9,23 @@
         <version>${revision}</version>
     </parent>
 
-    <artifactId>linlang-api</artifactId>
+    <artifactId>linlang-audit</artifactId>
 
     <properties>
         <maven.compiler.source>17</maven.compiler.source>
         <maven.compiler.target>17</maven.compiler.target>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
     </properties>
+    <dependencies>
+        <dependency>
+            <groupId>me.jling</groupId>
+            <artifactId>linlang-api</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>me.jling</groupId>
+            <artifactId>linlang-core</artifactId>
+        </dependency>
+    </dependencies>
 
 </project>
