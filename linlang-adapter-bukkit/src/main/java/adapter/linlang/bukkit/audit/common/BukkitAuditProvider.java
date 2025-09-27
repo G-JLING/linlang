@@ -1,8 +1,11 @@
 package adapter.linlang.bukkit.audit.common;
 
-// BukkitAuditProvider.java
+/*
+ * BukkitAuditProvider.java
+ * 是用于装配 audit 审计与日志 的类
+ */
 
-import api.linlang.called.LinLogs;
+import api.linlang.audit.called.LinLogs;
 import java.util.logging.Logger;
 
 public final class BukkitAuditProvider implements LinLogs.Provider {

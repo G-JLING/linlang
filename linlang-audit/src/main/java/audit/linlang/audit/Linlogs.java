@@ -1,6 +1,6 @@
 package audit.linlang.audit;
 
-import api.linlang.called.LinLogs;
+import api.linlang.audit.called.LinLogs;
 
 /**
  * Backward-compatible facade. Delegates to API-level Logs.

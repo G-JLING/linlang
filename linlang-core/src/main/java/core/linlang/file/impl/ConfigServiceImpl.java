@@ -2,7 +2,7 @@ package core.linlang.file.impl;
 
 // linlang-core/src/main/java/io/linlang/file/impl/ConfigServiceImpl.java
 
-import api.linlang.called.LinLogs;
+import api.linlang.audit.called.LinLogs;
 import api.linlang.file.annotations.ConfigVersion;
 import api.linlang.file.annotations.Migrator;
 import api.linlang.file.doc.MutableDocument;

@@ -10,7 +10,7 @@ public final class BukkitMainThread {
     private final Plugin plugin;
     public BukkitMainThread(Plugin plugin){ this.plugin = plugin; }
 
-    /* 在主线程执行；若当前已在主线程则直接执行 */
+    /* 在主线程执行 */
     public void runSync(Runnable task){
         if (Bukkit.isPrimaryThread()) task.run();
         else Bukkit.getScheduler().runTask(plugin, task);

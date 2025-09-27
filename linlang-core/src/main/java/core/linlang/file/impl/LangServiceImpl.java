@@ -2,7 +2,7 @@ package core.linlang.file.impl;
 
 // linlang-core/src/main/java/io/linlang/file/impl/LangServiceImpl.java
 
-import api.linlang.called.LinLogs;
+import api.linlang.audit.called.LinLogs;
 import api.linlang.file.annotations.Comment;
 import api.linlang.file.annotations.L10nComment;
 import api.linlang.file.annotations.NamingStyle;
@@ -17,6 +17,7 @@ import api.linlang.file.types.LocaleTag;
 import core.linlang.file.util.IOs;
 import core.linlang.yaml.YamlCodec;
 import core.linlang.json.JsonCodec;
+import lombok.Getter;
 
 import java.nio.file.Path;
 import java.text.MessageFormat;
@@ -24,6 +25,7 @@ import java.util.*;
 
 public final class LangServiceImpl implements LangService {
     private final PathResolver paths;
+    @Getter
     private LocaleTag current;
 
     private final Map<String, Map<String,String>> cache = new HashMap<>(); // locale -> (key->msg)

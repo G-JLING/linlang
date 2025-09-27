@@ -2,7 +2,7 @@ package adapter.linlang.bukkit.file.common.file;
 
 // file.io.linlang.adapter.bukkit.common.file.BukkitFsHotReloader
 
-import api.linlang.called.LinLogs;
+import api.linlang.audit.called.LinLogs;
 import audit.linlang.audit.Linlogs;
 import core.linlang.file.impl.AddonServiceImpl;
 import core.linlang.file.impl.ConfigServiceImpl;

@@ -3,11 +3,14 @@ package adapter.linlang.bukkit;
 // file.io.linlang.adapter.bukkit.common.file.LinlangFileBoostrap
 
 import adapter.linlang.bukkit.audit.common.BukkitAuditProvider;
+import adapter.linlang.bukkit.command.message.CommandLangKeys;
+import adapter.linlang.bukkit.command.message.LangBackedMessages;
 import adapter.linlang.bukkit.file.common.file.BukkitFsHotReloader;
 import adapter.linlang.bukkit.file.common.file.BukkitPathResolver;
 import api.linlang.file.service.ConfigService;
 import api.linlang.database.services.DataService;
 import api.linlang.file.service.LangService;
+import api.linlang.file.types.LocaleTag;
 import audit.linlang.audit.Linlogs;
 import api.linlang.database.config.DbConfig;
 import api.linlang.file.called.LinFile;
@@ -23,6 +26,9 @@ import org.bukkit.plugin.java.JavaPlugin;
 
 import java.nio.file.Path;
 import java.util.List;
+
+import api.linlang.command.CommandMessages;
+import adapter.linlang.bukkit.command.LinlangBukkitCommand;
 
 /* 在 Bukkit 中装配 linlang 的文件与数据模块 */
 public final class LinlangBukkitBootstrap implements AutoCloseable {
@@ -41,6 +47,8 @@ public final class LinlangBukkitBootstrap implements AutoCloseable {
     public final AddonServiceImpl addon;
     public final LangServiceImpl lang;
     public final DataServiceImpl data;
+
+    public final LinlangBukkitCommand commands;
 
     private final BukkitFsHotReloader hot;
     private final PathResolver resolver;
@@ -62,6 +70,20 @@ public final class LinlangBukkitBootstrap implements AutoCloseable {
             public LangService lang()  { return lang; }
             public DataService data()  { return data; }
         });
+
+        // 3) 装载命令系统并自动接入语言（若可用）
+        CommandMessages messages = CommandMessages.defaults();
+        try {
+            String locale = String.valueOf(this.lang.getCurrent());
+            CommandLangKeys keys = this.lang.bindObject(CommandLangKeys.class, locale, java.util.List.of());
+            messages = new LangBackedMessages(keys);
+        } catch (Throwable ignore) {  }
+
+        String prefix = "§f[§d" + plugin.getDescription().getName() + "§f]";
+        this.commands = (LinlangBukkitCommand) new LinlangBukkitCommand()
+                .install(prefix, plugin, messages)
+                .withDefaultResolvers()
+                .withInteractiveResolvers();
     }
 
     /* 启用热重载监听。 */
@@ -81,5 +103,8 @@ public final class LinlangBukkitBootstrap implements AutoCloseable {
     /* 获取仓库。 */
     public <T> Repository<T, ?> repo(Class<T> entity){ return data.repo(entity); }
 
-    @Override public void close(){ hot.close(); }
+    @Override public void close(){
+        try { hot.close(); } catch (Exception ignore) {}
+        try { if (commands != null) commands.close(); } catch (Exception ignore) {}
+    }
 }

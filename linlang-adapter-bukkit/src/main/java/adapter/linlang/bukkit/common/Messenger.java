@@ -1,6 +1,9 @@
 package adapter.linlang.bukkit.common;
 
-// impl.io.linlang.adapter.bukkit.common.file.Messenger
+/*
+ * Messenger 是 Lang（语言系统）的 Bukkit 适配器，用于直接发送 Bukkit 消息
+ * 对于任意 {placeholder}，使用 "{placeholder}", "msg" 的格式进行替换
+ */
 
 import adapter.linlang.bukkit.file.common.file.VersionDetector;
 import api.linlang.file.service.LangService;
