@@ -39,7 +39,7 @@ public final class BukkitFsHotReloader implements AutoCloseable {
             String n = p.getFileName().toString().toLowerCase();
             if (n.endsWith(".yml") || n.endsWith(".yaml") || n.endsWith(".json")) {
                 cfgSvc.reload(cfgClass);
-                LinLogs.info("[linlang-io] reloaded config: " + p.getFileName());
+                LinLogs.info("[linlang] reloaded config: " + p.getFileName());
             }
         });
     }
@@ -49,7 +49,7 @@ public final class BukkitFsHotReloader implements AutoCloseable {
             String n = p.getFileName().toString().toLowerCase();
             if (n.endsWith(".yml") || n.endsWith(".yaml") || n.endsWith(".json")) {
                 addonSvc.reload(addonClass);
-                Linlogs.info("[linlang-io] reloaded addon: " + p.getFileName());
+                Linlogs.info("[linlang] reloaded addon: " + p.getFileName());
             }
         });
     }
@@ -58,7 +58,7 @@ public final class BukkitFsHotReloader implements AutoCloseable {
         watchDir(dir, p -> {
             String n = p.getFileName().toString().toLowerCase();
             if (n.endsWith(".yml") || n.endsWith(".yaml") || n.endsWith(".json")) {
-                LinLogs.info("[linlang-io] language file changed: " + p.getFileName());
+                LinLogs.info("[linlang] language file changed: " + p.getFileName());
             }
         });
     }

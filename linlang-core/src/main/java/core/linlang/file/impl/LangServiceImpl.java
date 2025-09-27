@@ -63,7 +63,7 @@ public final class LangServiceImpl implements LangService {
                 TreeMapper.export(holder, defaults);
                 mergeDefaultsCollect(defaults, doc, "", missing);
                 if (!missing.isEmpty()){
-                    LinLogs.warn("[linlang-io] " + file + " 缺失键 " + missing.size() + " 个，想要了解详情，请见 " + file.getFileName() + "-diffrent 文件");
+                    LinLogs.warn("[linlang] " + file + " 缺失键 " + missing.size() + " 个，想要了解详情，请见 " + file.getFileName() + "-diffrent 文件");
                     writeDiff(file, meta.fmt(), doc, missing);
                 }
                 persist(file, meta.fmt(), doc);
@@ -92,7 +92,7 @@ public final class LangServiceImpl implements LangService {
                 }
             });
             if (!missing.isEmpty()){
-                LinLogs.warn("[linlang-io] " + file + " 缺失键 " + missing.size() + " 个。想要了解详情，请见 " + file.getFileName() + "-diffrent 文件");
+                LinLogs.warn("[linlang] " + file + " 缺失键 " + missing.size() + " 个。想要了解详情，请见 " + file.getFileName() + "-diffrent 文件");
                 writeDiff(file, meta.fmt(), doc, missing);
             }
             persist(file, meta.fmt(), doc);
@@ -135,7 +135,7 @@ public final class LangServiceImpl implements LangService {
         } else {
             // 已有文件：若有缺失，生成 diffrent 文件
             if (!missing.isEmpty()){
-                LinLogs.warn("[linlang-io] " + file + " 缺失键 " + missing.size() + " 个。想要了解详情，请见 " + file.getFileName() + "-diffrent 文件");
+                LinLogs.warn("[linlang] " + file + " 缺失键 " + missing.size() + " 个。想要了解详情，请见 " + file.getFileName() + "-diffrent 文件");
                 writeDiff(file, FileFormat.YAML, doc, missing);
             }
             persist(file, FileFormat.YAML, doc);
@@ -444,7 +444,7 @@ public final class LangServiceImpl implements LangService {
                 wrapper.put("_file", fullDoc);
                 IOs.writeString(diff, JsonCodec.dump(wrapper));
             }
-            LinLogs.warn("[linlang-io] " + diff + " generated with " + missing.size() + " missing keys.");
+            LinLogs.warn("[linlang] " + diff + " generated with " + missing.size() + " missing keys.");
         } catch (Exception e){ /* swallow */ }
     }
 

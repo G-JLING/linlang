@@ -10,14 +10,34 @@ import java.util.*;
 public final class TreeMapper {
     private TreeMapper(){}
 
+    private static boolean isListStyle(Class<?> clz){
+        NamingStyle ns = clz.getAnnotation(NamingStyle.class);
+        return ns != null && ns.value() == NamingStyle.Style.LIST;
+    }
+
     // 将对象写入 Map 文档（支持嵌套 static class、Map、List）
     public static void export(Object bean, Map<String,Object> doc){
-        writeObject(bean, "", doc, styleOf(bean.getClass()));
+        if (bean == null) return;
+        var style = styleOf(bean.getClass());
+        if (style == NamingStyle.Style.LIST) {
+            // Root LIST：写入到特殊键 "_" 以避免破坏根 Map 结构（建议在持有者字段上使用 LIST 更常见）
+            List<Object> lst = collectListFromBean(bean);
+            doc.put("_", lst);
+            return;
+        }
+        writeObject(bean, "", doc, style);
     }
 
     // 从 Map 文档填充对象
     public static void populate(Object bean, Map<String,Object> doc){
-        readObject(bean, "", doc, styleOf(bean.getClass()));
+        if (bean == null) return;
+        var style = styleOf(bean.getClass());
+        if (style == NamingStyle.Style.LIST) {
+            Object v = doc.get("_");
+            if (v instanceof Collection<?> col) assignListToBean(bean, col);
+            return;
+        }
+        readObject(bean, "", doc, style);
     }
 
     private static NamingStyle.Style styleOf(Class<?> clz){
@@ -37,6 +57,15 @@ public final class TreeMapper {
     }
 
     private static void writeObject(Object bean, String prefix, Map<String,Object> doc, NamingStyle.Style style){
+        if (isListStyle(bean.getClass())){
+            List<Object> lst = collectListFromBean(bean);
+            if (!prefix.isEmpty()) {
+                put(doc, prefix, lst);
+            } else {
+                doc.put("_", lst);
+            }
+            return;
+        }
         if (bean==null) return;
         for (Field f: bean.getClass().getFields()){
             try {
@@ -60,6 +89,11 @@ public final class TreeMapper {
     }
 
     private static void readObject(Object bean, String prefix, Map<String,Object> doc, NamingStyle.Style style){
+        if (isListStyle(bean.getClass())){
+            Object v = prefix.isEmpty()? doc.get("_") : get(doc, prefix);
+            if (v instanceof Collection<?> col) assignListToBean(bean, col);
+            return;
+        }
         for (Field f: bean.getClass().getFields()){
             String name = keyOf(f, style);
             String path = prefix.isEmpty()? name : prefix + "." + name;
@@ -123,5 +157,72 @@ public final class TreeMapper {
             cur = (Map<String,Object>) n;
         }
         return cur.get(ps[ps.length-1]);
+    }
+
+    // 将带有 LIST 样式的 bean 汇总为 List：
+    // 规则：优先使用第一个类型为 Collection 或 数组 的公开字段；
+    // 否则收集所有公开 String/基本类型字段的非空值为字符串列表。
+    private static List<Object> collectListFromBean(Object bean){
+        try {
+            // 1) 首选集合字段
+            for (Field f : bean.getClass().getFields()){
+                Object v = f.get(bean);
+                if (v == null) continue;
+                if (v instanceof Collection<?> col) return new ArrayList<>(col);
+                if (f.getType().isArray()){
+                    int len = java.lang.reflect.Array.getLength(v);
+                    List<Object> out = new ArrayList<>(len);
+                    for (int i=0;i<len;i++) out.add(java.lang.reflect.Array.get(v, i));
+                    return out;
+                }
+            }
+            // 2) 退化：收集简单字段为字符串
+            List<Object> out = new ArrayList<>();
+            for (Field f : bean.getClass().getFields()){
+                Object v = f.get(bean);
+                if (v == null) continue;
+                if (simpleType(f.getType())) out.add(v);
+            }
+            return out;
+        } catch (IllegalAccessException e){
+            return java.util.Collections.emptyList();
+        }
+    }
+
+    // 将集合写回 LIST 样式的 bean
+    private static void assignListToBean(Object bean, Collection<?> col){
+        try {
+            // 1) 如存在集合字段，直接赋值（尝试保持原实现类型）
+            for (Field f : bean.getClass().getFields()){
+                if (Collection.class.isAssignableFrom(f.getType())){
+                    // 尝试使用原实例，否则用 ArrayList
+                    Object cur = f.get(bean);
+                    if (cur instanceof Collection target){
+                        target.clear();
+                        target.addAll(col);
+                        return;
+                    } else {
+                        f.set(bean, new ArrayList<>(col));
+                        return;
+                    }
+                }
+                if (f.getType().isArray()){
+                    Class<?> ct = f.getType().getComponentType();
+                    Object arr = java.lang.reflect.Array.newInstance(ct, col.size());
+                    int i=0; for (Object o: col){ java.lang.reflect.Array.set(arr, i++, coerce(o, ct)); }
+                    f.set(bean, arr);
+                    return;
+                }
+            }
+            // 2) 退化：若有单个 String 字段，拼接为多行文本（不推荐，但避免丢数据）
+            for (Field f : bean.getClass().getFields()){
+                if (f.getType()==String.class){
+                    StringBuilder sb = new StringBuilder();
+                    for (Object o: col){ if (sb.length()>0) sb.append('\n'); sb.append(String.valueOf(o)); }
+                    f.set(bean, sb.toString());
+                    return;
+                }
+            }
+        } catch (Exception ignore){}
     }
 }

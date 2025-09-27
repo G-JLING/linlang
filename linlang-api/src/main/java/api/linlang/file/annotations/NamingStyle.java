@@ -11,5 +11,5 @@ import static java.lang.annotation.RetentionPolicy.RUNTIME;
 @Retention(RUNTIME) @Target(TYPE)
 public @interface NamingStyle {
     Style value() default Style.KEBAB;
-    enum Style { IDENTITY, KEBAB }
+    enum Style { IDENTITY, KEBAB, LIST }
 }
