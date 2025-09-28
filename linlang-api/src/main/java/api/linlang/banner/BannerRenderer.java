@@ -16,7 +16,9 @@ public final class BannerRenderer {
         // 第二行起：系列、插件、作者
         out.accept(pad(font) + "    " + opt.seriesZh()+" "+opt.seriesEn());
         out.accept(pad(font) + "    " + opt.pluginZh()+" "+opt.pluginEn()+" "+opt.version());
-        out.accept(pad(font) + "    开发者: "+opt.developer());
+
+        String devLine = String.join(", ", opt.developers());
+        out.accept(pad(font) + "    开发者: " + devLine);
         out.accept(pad(font) + "    "+opt.site());
         out.accept(" ");
     }
