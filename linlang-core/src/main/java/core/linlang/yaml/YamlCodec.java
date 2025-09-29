@@ -2,28 +2,70 @@ package core.linlang.yaml;
 
 // linlang-core/src/main/java/io/linlang/file/yaml/YamlCodec.java
 
-import org.yaml.snakeyaml.DumperOptions;
-import org.yaml.snakeyaml.Yaml;
+import api.linlang.audit.called.LinLogs;
 
 import java.util.*;
 
-/** 最小 YAML 编解码，保序。注释写入依赖我们自己在写文件时拼接。 */
+import java.lang.reflect.Method;
+import java.util.Map;
+
 public final class YamlCodec {
-    private static final Yaml YAML;
-    static {
-        DumperOptions opt = new DumperOptions();
-        opt.setDefaultFlowStyle(DumperOptions.FlowStyle.BLOCK);
-        opt.setPrettyFlow(true);
-        opt.setIndent(2);
-        opt.setIndicatorIndent(2);
-        YAML = new Yaml(opt);
+    private static volatile Object YAML; // 不要写成 org.yaml.snakeyaml.Yaml
+
+    private static Object yaml(){
+        Object y = YAML;
+        if (y != null) return y;
+        synchronized (YamlCodec.class){
+            if (YAML != null) return YAML;
+            try {
+                LinLogs.debug("YamlCodec initializing");
+                Class<?> dumperClz = Class.forName("org.yaml.snakeyaml.DumperOptions");
+                Object opt = dumperClz.getConstructor().newInstance();
+                // opt.setDefaultFlowStyle(DumperOptions.FlowStyle.BLOCK);
+                Object flowEnum = Class.forName("org.yaml.snakeyaml.DumperOptions$FlowStyle")
+                        .getField("BLOCK").get(null);
+                dumperClz.getMethod("setDefaultFlowStyle", flowEnum.getClass()).invoke(opt, flowEnum);
+                dumperClz.getMethod("setPrettyFlow", boolean.class).invoke(opt, true);
+                dumperClz.getMethod("setIndent", int.class).invoke(opt, 4);
+                dumperClz.getMethod("setIndicatorIndent", int.class).invoke(opt, 2);
+
+                Class<?> yamlClz = Class.forName("org.yaml.snakeyaml.Yaml");
+                Object yaml = yamlClz.getConstructor(dumperClz).newInstance(opt);
+                YAML = yaml;
+
+                String ver;
+                try {
+                    Package p = yamlClz.getPackage();
+                    ver = p==null ? "unknown" : String.valueOf(p.getImplementationVersion());
+                } catch (Throwable ignore){ ver = "unknown"; }
+                LinLogs.info("YamlCodec ready", "impl", yamlClz.getName(), "version", ver);
+                return YAML;
+            } catch (Throwable t){
+                LinLogs.error("YamlCodec init failed", t);
+                throw new IllegalStateException("[linlang] SnakeYAML not available or failed to initialize", t);
+            }
+        }
     }
+
+    @SuppressWarnings("unchecked")
     public static Map<String,Object> load(String s){
-        Object o = YAML.load(s == null ? "" : s);
-        if (o instanceof Map) return cast(o);
-        return new LinkedHashMap<>();
+        try {
+            Object y = yaml();
+            Method m = y.getClass().getMethod("load", String.class);
+            Object o = m.invoke(y, s==null? "" : s);
+            return (o instanceof Map) ? (Map<String,Object>) o : java.util.Map.of();
+        } catch (RuntimeException re){ throw re;
+        } catch (Throwable e){ throw new IllegalStateException("[linlang] yaml load failed", e); }
     }
-    public static String dump(Map<String,Object> m){ return YAML.dump(m); }
+
+    public static String dump(Map<String,Object> m){
+        try {
+            Object y = yaml();
+            Method mtd = y.getClass().getMethod("dump", Object.class);
+            return (String) mtd.invoke(y, m);
+        } catch (RuntimeException re){ throw re;
+        } catch (Throwable e){ throw new IllegalStateException("[linlang] yaml dump failed", e); }
+    }
 
     /** 首次写入：按点分路径插入注释（每个键上方）。顶层头注释用键 "__header__" 或空串 ""。 */
     public static String dump(Map<String,Object> doc, Map<String, List<String>> comments){

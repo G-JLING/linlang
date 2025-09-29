@@ -31,7 +31,7 @@ public final class BukkitAuditProvider implements LinLogs.Provider {
     }
 
     private static String fmt(String lvl, String msg, Object... kv) {
-        StringBuilder sb = new StringBuilder().append("[").append(lvl).append("] ").append(msg);
+        StringBuilder sb = new StringBuilder().append(msg);
         for (int i = 0; i + 1 < kv.length; i += 2)
             sb.append(" ").append(kv[i]).append("=").append(String.valueOf(kv[i + 1]));
         if ((kv.length & 1) == 1) sb.append(" kv_odd=").append(kv[kv.length - 1]);

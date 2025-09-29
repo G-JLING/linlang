@@ -4,6 +4,7 @@ package core.linlang.file.impl;
 
 import api.linlang.audit.called.LinLogs;
 import api.linlang.file.annotations.Comment;
+import api.linlang.file.annotations.LangPack;
 import api.linlang.file.annotations.L10nComment;
 import api.linlang.file.annotations.NamingStyle;
 import api.linlang.file.annotations.LocaleProvider;
@@ -22,6 +23,7 @@ import lombok.Getter;
 import java.nio.file.Path;
 import java.text.MessageFormat;
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 
 public final class LangServiceImpl implements LangService {
     private final PathResolver paths;
@@ -30,11 +32,31 @@ public final class LangServiceImpl implements LangService {
 
     private final Map<String, Map<String,String>> cache = new HashMap<>(); // locale -> (key->msg)
 
+    // 已绑定对象：用于 reload/saveAll/saveObject 无需外部传参
+    private record BoundKey(Class<?> type, String locale) {}
+    private static record PackPath(String path, String name, FileFormat fmt) {}
+    private static <T> PackPath resolvePackPath(Class<T> keysClass, String locale){
+        LangPack lp = keysClass.getAnnotation(LangPack.class);
+        if (lp == null){
+            return new PackPath("lang", locale, FileFormat.YAML);
+        }
+        String name = (lp.name()==null || lp.name().isBlank()) ? locale : lp.name();
+        return new PackPath(lp.path(), name, lp.format());
+    }
+    private static final class BoundMeta {
+        Object holder; Path file; FileFormat fmt;
+        BoundMeta(Object h, Path f, FileFormat fm){ this.holder=h; this.file=f; this.fmt=fm; }
+    }
+    private final Map<BoundKey, BoundMeta> bound = new ConcurrentHashMap<>();
+
     public LangServiceImpl(PathResolver paths, String defaultLocale){
         this.paths = paths; this.current = LocaleTag.parse(defaultLocale);
     }
 
-    @Override public <T> T bind(Class<T> type){
+    @Override public String currentLocale(){ return current==null? null : current.tag(); }
+
+    // (no @Override) -- not in interface
+    public <T> T bind(Class<T> type){
         Binder.BoundLang meta = Binder.langOf(type).orElseThrow(()->new IllegalArgumentException("@LangPack required"));
         // 对象模式：若无任何 @Message/@Plurals 字段，则按配置对象处理
         if (meta.fieldMessages().isEmpty()) {
@@ -123,27 +145,45 @@ public final class LangServiceImpl implements LangService {
         Map<String,Object> defDoc = new LinkedHashMap<>();
         TreeMapper.export(defaults, defDoc);
 
-        // 3) 读取/合并/写回 lang/<locale>.yml（固定 YAML；如需 JSON 可扩展）
-        Path file = file("lang", locale, FileFormat.YAML);
+        // 3) 读取/合并/写回，优先依据 @LangPack(path/name/format)
+        var pp = resolvePackPath(keysClass, locale);
+        Path file = file(pp.path(), pp.name(), pp.fmt());
         boolean exists = IOs.exists(file);
-        Map<String,Object> doc = exists ? YamlCodec.load(IOs.readString(file)) : new LinkedHashMap<>();
+        Map<String,Object> doc = exists
+                ? (pp.fmt()==FileFormat.YAML ? YamlCodec.load(IOs.readString(file)) : JsonCodec.load(IOs.readString(file)))
+                : new LinkedHashMap<>();
         java.util.Set<String> missing = new java.util.LinkedHashSet<>();
         mergeDefaultsCollect(defDoc, doc, "", missing);
         if (!exists) {
-            Map<String, List<String>> comments = extractCommentsByLocale(keysClass, locale);
-            IOs.writeString(file, YamlCodec.dump(doc, comments));
+            if (pp.fmt()==FileFormat.YAML){
+                Map<String, List<String>> comments = extractCommentsByLocale(keysClass, locale);
+                IOs.writeString(file, YamlCodec.dump(doc, comments));
+            } else {
+                persist(file, pp.fmt(), doc);
+            }
         } else {
-            // 已有文件：若有缺失，生成 diffrent 文件
             if (!missing.isEmpty()){
                 LinLogs.warn("[linlang] " + file + " 缺失键 " + missing.size() + " 个。想要了解详情，请见 " + file.getFileName() + "-diffrent 文件");
-                writeDiff(file, FileFormat.YAML, doc, missing);
+                writeDiff(file, pp.fmt(), doc, missing);
             }
-            persist(file, FileFormat.YAML, doc);
+            persist(file, pp.fmt(), doc);
         }
 
-        // 4) 回填对象 + 构建扁平缓存 + 切换当前语言
-        T holder = newInstance(keysClass);
-        TreeMapper.populate(holder, doc);
+        // 4) 回填到已有 holder（若之前绑定过），否则创建新实例
+        BoundKey bk = new BoundKey(keysClass, locale);
+        T holder;
+        BoundMeta bm = bound.get(bk);
+        if (bm != null && keysClass.isInstance(bm.holder)){
+            holder = keysClass.cast(bm.holder);
+            TreeMapper.populate(holder, doc);
+            bm.file = file; bm.fmt = pp.fmt();
+        } else {
+            holder = newInstance(keysClass);
+            TreeMapper.populate(holder, doc);
+            bound.put(bk, new BoundMeta(holder, file, pp.fmt()));
+        }
+
+        // 5) 缓存扁平化并设置当前语言
         cache.put(locale, flatten(doc));
         setLocale(locale);
         return holder;
@@ -151,30 +191,58 @@ public final class LangServiceImpl implements LangService {
 
     @Override
     public <T> T reloadObject(Class<T> keysClass, String locale) {
-        Path f = file("lang", locale, FileFormat.YAML);
-        Map<String,Object> doc = IOs.exists(f) ? YamlCodec.load(IOs.readString(f)) : new LinkedHashMap<>();
-        T holder = newInstance(keysClass);
-        TreeMapper.populate(holder, doc);
+        var pp = resolvePackPath(keysClass, locale);
+        Path f = file(pp.path(), pp.name(), pp.fmt());
+        Map<String,Object> doc = IOs.exists(f)
+                ? (pp.fmt()==FileFormat.YAML ? YamlCodec.load(IOs.readString(f)) : JsonCodec.load(IOs.readString(f)))
+                : new LinkedHashMap<>();
+        BoundKey bk = new BoundKey(keysClass, locale);
+        BoundMeta bm = bound.get(bk);
+        T holder;
+        if (bm != null && keysClass.isInstance(bm.holder)){
+            holder = keysClass.cast(bm.holder);
+            TreeMapper.populate(holder, doc);
+            bm.file = f; bm.fmt = pp.fmt();
+        } else {
+            holder = newInstance(keysClass);
+            TreeMapper.populate(holder, doc);
+            bound.put(bk, new BoundMeta(holder, f, pp.fmt()));
+        }
         cache.put(locale, flatten(doc));
         setLocale(locale);
         return holder;
     }
 
     @Override
-    public <T> void saveObject(Class<T> keysClass, String locale, T holder) {
+    public <T> void saveObject(Class<T> keysClass, String locale) {
+        BoundKey bk = new BoundKey(keysClass, locale);
+        BoundMeta bm = bound.get(bk);
+        if (bm == null || bm.holder == null) return; // 未绑定，忽略
+        @SuppressWarnings("unchecked")
+        T holder = (T) bm.holder;
         // 导出当前对象
         Map<String,Object> out = new LinkedHashMap<>();
         TreeMapper.export(holder, out);
         // 与磁盘合并：保留未知键，已知键用对象值覆盖
-        Path f = file("lang", locale, FileFormat.YAML);
-        Map<String,Object> curr = IOs.exists(f) ? YamlCodec.load(IOs.readString(f)) : new LinkedHashMap<>();
-        mergeOverwrite(curr, out); // 用 out 覆盖 curr
-        persist(f, FileFormat.YAML, curr);
-        // 刷新缓存
+        var pp = resolvePackPath(keysClass, locale);
+        Path f = bm.file != null ? bm.file : file(pp.path(), pp.name(), pp.fmt());
+        Map<String,Object> curr = IOs.exists(f)
+                ? (pp.fmt()==FileFormat.YAML ? YamlCodec.load(IOs.readString(f)) : JsonCodec.load(IOs.readString(f)))
+                : new LinkedHashMap<>();
+        mergeOverwrite(curr, out);
+        persist(f, pp.fmt(), curr);
         cache.put(locale, flatten(curr));
     }
 
     @Override
+    public void saveAll() {
+        for (Map.Entry<BoundKey, BoundMeta> e : bound.entrySet()){
+            BoundKey k = e.getKey();
+            saveObject((Class<Object>) k.type(), k.locale());
+        }
+    }
+
+    // (no @Override) -- not in interface
     public <T> T reload(Class<T> type) {
         Binder.BoundLang meta = Binder.langOf(type)
                 .orElseThrow(() -> new IllegalArgumentException("@LangPack required"));
@@ -205,13 +273,22 @@ public final class LangServiceImpl implements LangService {
         return holder;
     }
 
-    @Override
+    // (no @Override) -- not in interface
     public <T> void save(Class<T> type, T holder) {
         Binder.BoundLang meta = Binder.langOf(type)
                 .orElseThrow(() -> new IllegalArgumentException("@LangPack required"));
-        // 对象模式 → 复用对象版保存
+        // 对象模式：导出 holder → 合并磁盘 → 写回，并刷新缓存
         if (meta.fieldMessages().isEmpty()) {
-            saveObject(type, meta.locale(), holder);
+            // 对象模式：导出 holder → 合并磁盘 → 写回，并刷新缓存
+            Path f = file(meta.path(), meta.name(), meta.fmt());
+            Map<String,Object> curr = IOs.exists(f)
+                    ? (meta.fmt()==FileFormat.YAML? YamlCodec.load(IOs.readString(f)) : JsonCodec.load(IOs.readString(f)))
+                    : new LinkedHashMap<>();
+            Map<String,Object> out = new LinkedHashMap<>();
+            TreeMapper.export(holder, out);
+            mergeOverwrite(curr, out);
+            persist(f, meta.fmt(), curr);
+            cache.put(meta.locale(), flatten(curr));
             return;
         }
         // 注解键模式：读取现有文档，覆盖对应键为对象当前值
@@ -348,19 +425,33 @@ public final class LangServiceImpl implements LangService {
         try { return t.getDeclaredConstructor().newInstance(); } catch (Exception e){ throw new RuntimeException(e); }
     }
 
-    private static Map<String,String> flatten(Map<String,Object> doc){
+    private Map<String,String> flatten(Map<String,Object> doc){
         Map<String,String> out = new LinkedHashMap<>();
-        walk("", doc, out);
+        walk(doc, "", out);
         return out;
     }
 
     @SuppressWarnings("unchecked")
-    private static void walk(String prefix, Map<String,Object> m, Map<String,String> out){
-        for (Map.Entry<String,Object> e: m.entrySet()){
-            String k = prefix.isEmpty()? e.getKey() : prefix+"."+e.getKey();
-            Object v = e.getValue();
-            if (v instanceof Map) walk(k, (Map<String,Object>) v, out);
-            else out.put(k, String.valueOf(v));
+    private void walk(Object node, String prefix, Map<String, String> out){
+        if (node instanceof Map<?,?> map){
+            for (var e : map.entrySet()){
+                String k = String.valueOf(e.getKey());
+                Object v = e.getValue();
+                String path = prefix.isEmpty() ? k : prefix + "." + k;
+                walk(v, path, out);
+            }
+            return;
+        }
+        if (node instanceof Iterable<?> it){
+            int i = 0;
+            for (Object v : it){
+                String path = prefix + "." + i++;
+                walk(v, path, out);
+            }
+            return;
+        }
+        if (node != null){
+            out.put(prefix, String.valueOf(node));
         }
     }
 
