@@ -11,7 +11,7 @@ package api.linlang.audit.called;
  * 键值参数以 <code>key, value, key, value...</code> 形式传入，日志实现应按需结构化输出。
  * </p>
  */
-public final class LinLogs {
+public final class LinLog {
     /**
      * 日志实现提供者。由适配层（例如 Bukkit/Log4j/Slf4j）实现并注入。
      */
@@ -48,6 +48,8 @@ public final class LinLogs {
     public static void info (String m, Object...kv){ P.log("INFO",  m, kv); }
     /** 输出 WARN 日志。 */
     public static void warn (String m, Object...kv){ P.log("WARN",  m, kv); }
+    /** 输出模块加载日志  */
+    public static void init(String m, Object...kv){ P.log("INIT",  m, kv); }
     /**
      * 输出 ERROR 日志。
      * <p>若提供异常，将其摘要追加到键值中，键为 <code>err</code>。</p>
@@ -57,6 +59,8 @@ public final class LinLogs {
         if (t != null) kv2 = append(kv, "err", t.toString());
         P.log("ERROR", m, kv2);
     }
+    public static void op(String m, Object...kv){ P.log("OP",  m, kv); }
+    public static void startup(String m, Object...kv){P.log("STARTUP",  m, kv);}
     /**
      * 记录审计事件。
      * <p>用于安全、合规、关键路径操作的留痕与检索。</p>
@@ -79,5 +83,5 @@ public final class LinLogs {
         System.arraycopy(b,0,r,a.length,b.length);
         return r;
     }
-    private LinLogs() {}
+    private LinLog() {}
 }

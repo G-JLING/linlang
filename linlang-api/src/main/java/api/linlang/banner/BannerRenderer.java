@@ -8,18 +8,30 @@ public final class BannerRenderer {
 
     /** 渲染 initials 的 ASCII 字，并打印固定信息块。行输出用 out.accept(line) */
     public static void print(AsciiFont font, BannerOptions opt, Consumer<String> out){
-        // 空行
+        // 顶部空行
         out.accept(" ");
-        // ASCII 牌头
-        List<String> lines = renderWord(font, opt.initials());
-        for (String ln : lines) out.accept(ln + "    " + opt.teamZh()+" "+opt.teamEn());
-        // 第二行起：系列、插件、作者
-        out.accept(pad(font) + "    " + opt.seriesZh()+" "+opt.seriesEn());
-        out.accept(pad(font) + "    " + opt.pluginZh()+" "+opt.pluginEn()+" "+opt.version());
 
+        // 左侧 ASCII 牌头
+        List<String> art = renderWord(font, opt.initials());
+
+        // 右侧信息行（与 ASCII 行并排打印），中间空 4 个空格
         String devLine = String.join(", ", opt.developers());
-        out.accept(pad(font) + "    开发者: " + devLine);
-        out.accept(pad(font) + "    "+opt.site());
+
+        List<String> info = new ArrayList<>();
+        info.add(opt.teamZh() + " " + opt.teamEn());
+        info.add(opt.seriesZh() + " " + opt.seriesEn());
+        info.add(opt.pluginZh() + " " + opt.pluginEn() + " " + opt.version());
+        info.add("开发者: " + devLine + " | 由 琳琅(Linlang) 构建");
+        info.add(opt.site());
+
+        int rows = Math.max(art.size(), info.size());
+        for (int i = 0; i < rows; i++) {
+            String left  = i < art.size()  ? art.get(i)  : pad(font);
+            String right = i < info.size() ? info.get(i) : "";
+            out.accept(left + "    " + right);
+        }
+
+        // 底部空行
         out.accept(" ");
     }
 

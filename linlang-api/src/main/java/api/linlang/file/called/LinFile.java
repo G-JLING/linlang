@@ -7,12 +7,12 @@ import api.linlang.file.service.Services;
 
 /**
  * LinFile：文件与语言、数据服务的全局门面入口。
- * <p>
- * 在插件启动时调用 {@code LinlangBukkitBootstrap.install(JavaPlugin)} 以装载；
- * 业务侧在任意位置通过 {@link #services()} 取得 {@link Services} 并进一步获取
+ *
+ * <p>在插件启动时调用 {@code LinlangBukkitBootstrap.install(JavaPlugin)} 以装载；</p>
+ * <p>业务侧在任意位置通过 {@link #services()} 取得 {@link Services} 并进一步获取</p>
  * {@link api.linlang.file.service.ConfigService}、{@link api.linlang.file.service.LangService}、
  * {@link api.linlang.database.services.DataService}。
- * </p>
+ *
  */
 public final class LinFile {
     private static volatile Services S = new Noop();

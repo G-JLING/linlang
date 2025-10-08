@@ -2,6 +2,9 @@ package core.linlang.file.runtime;
 
 import api.linlang.file.annotations.Key;
 import api.linlang.file.annotations.NamingStyle;
+import api.linlang.file.annotations.Comment;
+import api.linlang.file.annotations.I18nComment;
+import api.linlang.audit.called.LinLog;
 
 import java.lang.reflect.Field;
 import java.util.*;
@@ -224,5 +227,144 @@ public final class TreeMapper {
                 }
             }
         } catch (Exception ignore){}
+    }
+
+    // 注释收集（Config 用）
+    public static Map<String, List<String>> extractComments(Class<?> root){
+        Map<String, List<String>> out = new LinkedHashMap<>();
+        collectComments(root, "", styleOf(root), out);
+        return out;
+    }
+
+    private static void collectComments(Class<?> clz, String prefix, NamingStyle.Style style,
+                                        Map<String, List<String>> out){
+        // 类级注释（支持重复注解）
+        Comment[] classComments = clz.getAnnotationsByType(Comment.class);
+        if (classComments != null && classComments.length > 0) {
+            List<String> lines = new ArrayList<>();
+            for (Comment c : classComments) {
+                if (c.value() != null) lines.addAll(Arrays.asList(c.value()));
+            }
+            if (!lines.isEmpty()) out.put(prefix, lines);
+        }
+
+        // 字段级
+        for (Field f : clz.getFields()){
+            String name = keyOf(f, style);
+            String path = prefix.isEmpty()? name : prefix + "." + name;
+
+            Comment[] fieldComments = f.getAnnotationsByType(Comment.class);
+            if (fieldComments != null && fieldComments.length > 0) {
+                List<String> lines = new ArrayList<>();
+                for (Comment c : fieldComments) {
+                    if (c.value() != null) lines.addAll(Arrays.asList(c.value()));
+                }
+                if (!lines.isEmpty()) out.put(path, lines);
+            }
+
+            Class<?> ft = f.getType();
+            // 仅对 POJO 递归（排除简单类型、集合、Map）
+            if (simpleType(ft) || Map.class.isAssignableFrom(ft) || Collection.class.isAssignableFrom(ft)) {
+                continue;
+            }
+            collectComments(ft, path, styleOf(ft), out);
+        }
+    }
+
+    public static Map<String, List<String>> extractI18nComments(Class<?> root, String localeTag){
+        LinLog.debug("[TreeMapper] extractI18nComments root=" + (root==null?"null":root.getName()) + ", locale=" + localeTag);
+        Map<String, List<String>> out = new LinkedHashMap<>();
+        collectI18nComments(root, "", styleOf(root), normalizeLocale(localeTag), out);
+        LinLog.debug("[TreeMapper] extractI18nComments collected keys=" + out.size());
+        return out;
+    }
+
+    private static void collectI18nComments(Class<?> clz, String prefix, NamingStyle.Style style,
+                                            String localeTag, Map<String, List<String>> out){
+        LinLog.debug("[TreeMapper] collectI18nComments class=" + (clz==null?"null":clz.getName()) + ", prefix=" + prefix + ", style=" + style + ", locale=" + localeTag);
+        // 类级 I18nComment（支持重复注解）
+        I18nComment[] classComments = clz.getAnnotationsByType(I18nComment.class);
+        LinLog.debug("[TreeMapper]  class-level I18nComment count=" + (classComments==null?0:classComments.length));
+        List<String> chosen = pickL10nLines(classComments, localeTag);
+        LinLog.debug("[TreeMapper]  class-level chosen lines=" + chosen.size() + (chosen.isEmpty()?"":" -> " + chosen));
+        if (chosen != null && !chosen.isEmpty()) {
+            out.put(prefix, chosen);
+        }
+
+        // 字段级 I18nComment
+        for (Field f : clz.getFields()){
+            LinLog.debug("[TreeMapper]   field=" + f.getName());
+            String name = keyOf(f, style);
+            String path = prefix.isEmpty()? name : prefix + "." + name;
+            LinLog.debug("[TreeMapper]    key=" + name + ", path=" + path);
+
+            I18nComment[] fieldComments = f.getAnnotationsByType(I18nComment.class);
+            LinLog.debug("[TreeMapper]    field I18nComment count=" + (fieldComments==null?0:fieldComments.length));
+            List<String> fieldChosen = pickL10nLines(fieldComments, localeTag);
+            LinLog.debug("[TreeMapper]    field chosen lines=" + fieldChosen.size() + (fieldChosen.isEmpty()?"":" -> " + fieldChosen));
+            if (fieldChosen != null && !fieldChosen.isEmpty()) {
+                out.put(path, fieldChosen);
+            }
+
+            Class<?> ft = f.getType();
+            if (simpleType(ft) || Map.class.isAssignableFrom(ft) || Collection.class.isAssignableFrom(ft)) {
+                LinLog.debug("[TreeMapper]    skip recursion: simple/map/collection for " + f.getType().getName());
+                continue;
+            }
+            LinLog.debug("[TreeMapper]    recurse into " + ft.getName());
+            collectI18nComments(ft, path, styleOf(ft), localeTag, out);
+        }
+    }
+
+    private static String normalizeLocale(String tag){
+        if (tag == null || tag.isBlank()) return "zh_CN";
+        return tag.replace('-', '_');
+    }
+
+    private static List<String> pickL10nLines(I18nComment[] anns, String wanted){
+        LinLog.debug("[TreeMapper] pickL10nLines wanted=" + wanted + ", anns=" + (anns==null?0:anns.length));
+        List<String> empty = java.util.Collections.emptyList();
+        if (anns == null || anns.length == 0) return empty;
+
+        String norm = normalizeLocale(wanted);
+        String langOnly = norm.contains("_") ? norm.substring(0, norm.indexOf('_')) : norm;
+        LinLog.debug("[TreeMapper] normalized locale=" + norm + ", langOnly=" + langOnly);
+
+        List<String> exact = null, langMatch = null, fallbackZh = null, fallbackEn = null, firstAny = null;
+
+        for (I18nComment a : anns){
+            LinLog.debug("[TreeMapper] ann locale=" + normalizeLocale(a.locale()) + ", lines=" + (a.lines()==null?0:a.lines().length));
+            String loc = normalizeLocale(a.locale());
+            List<String> lines = a.lines()==null ? List.of() : Arrays.asList(a.lines());
+            if (firstAny == null && !lines.isEmpty()) firstAny = lines;
+            if (loc.equalsIgnoreCase(norm)) { exact = lines; continue; }
+            String aLang = loc.contains("_") ? loc.substring(0, loc.indexOf('_')) : loc;
+            if (aLang.equalsIgnoreCase(langOnly) && (langMatch == null || langMatch.isEmpty())) langMatch = lines;
+            if (loc.equalsIgnoreCase("zh_CN") && (fallbackZh == null || fallbackZh.isEmpty())) fallbackZh = lines;
+            if (loc.equalsIgnoreCase("en_GB") && (fallbackEn == null || fallbackEn.isEmpty())) fallbackEn = lines;
+        }
+
+        if (exact != null && !exact.isEmpty()) {
+            LinLog.debug("[TreeMapper]  choose=exact");
+            return exact;
+        }
+        if (langMatch != null && !langMatch.isEmpty()) {
+            LinLog.debug("[TreeMapper]  choose=langMatch");
+            return langMatch;
+        }
+        if (fallbackZh != null && !fallbackZh.isEmpty()) {
+            LinLog.debug("[TreeMapper]  choose=fallback zh_CN");
+            return fallbackZh;
+        }
+        if (fallbackEn != null && !fallbackEn.isEmpty()) {
+            LinLog.debug("[TreeMapper]  choose=fallback en_GB");
+            return fallbackEn;
+        }
+        if (firstAny != null && !firstAny.isEmpty()) {
+            LinLog.debug("[TreeMapper]  choose=firstAny");
+            return firstAny;
+        }
+        LinLog.debug("[TreeMapper]  choose=empty");
+        return empty;
     }
 }

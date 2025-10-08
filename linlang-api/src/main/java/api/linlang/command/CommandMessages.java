@@ -16,6 +16,6 @@ public interface CommandMessages {
 
     /** 默认消息实现（内置硬编码）。 */
     static CommandMessages defaults() {
-        return DefaultCommandMessages.INSTANCE;
+        return DefaultCommandMessage.INSTANCE;
     }
 }

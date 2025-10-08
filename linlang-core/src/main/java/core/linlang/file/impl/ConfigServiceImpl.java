@@ -2,16 +2,16 @@ package core.linlang.file.impl;
 
 // linlang-core/src/main/java/io/linlang/file/impl/ConfigServiceImpl.java
 
-import api.linlang.audit.called.LinLogs;
+import api.linlang.audit.called.LinLog;
 import api.linlang.file.annotations.ConfigVersion;
-import api.linlang.file.annotations.Migrator;
+import api.linlang.file.implement.Migrator;
 import api.linlang.file.doc.MutableDocument;
+import api.linlang.file.types.FileType;
 import core.linlang.file.runtime.TreeMapper;
 import core.linlang.json.JsonCodec;
 import core.linlang.file.runtime.Binder;
 import core.linlang.file.runtime.PathResolver;
 import api.linlang.file.service.ConfigService;
-import api.linlang.file.types.FileFormat;
 import core.linlang.file.util.IOs;
 import core.linlang.yaml.YamlCodec;
 
@@ -22,6 +22,8 @@ import java.util.*;
 public final class ConfigServiceImpl implements ConfigService {
     private final PathResolver paths;
     private final List<Migrator> migrators;
+    // Keep track of bound config instances so we can flush them all with saveAll()
+    private final java.util.Map<Class<?>, Object> liveConfigs = new java.util.LinkedHashMap<>();
 
     public ConfigServiceImpl(PathResolver paths, List<Migrator> migrators) {
         this.paths = paths;
@@ -53,33 +55,89 @@ public final class ConfigServiceImpl implements ConfigService {
         T inst = newInstance(type);
         populate(inst, meta.keyMap(), doc);
         if (!missing.isEmpty()) {
-            LinLogs.warn("[linlang] " + file + " 缺失键 " + missing.size() + " 个。想要了解详情，请见 " + file.getFileName() + "-diffrent 文件");
+            LinLog.warn("[linlang] " + file + " 缺失键 " + missing.size() + " 个。想要了解详情，请见 " + file.getFileName() + "-diffrent 文件");
             writeDiff(file, meta.fmt(), doc, missing);
         }
-        // 保存回文件，保证生成注释与默认值
-        persist(file, meta.fmt(), doc);
-        return inst;
+        // 提取注释：仅包含普通 @Comment
+        Map<String, List<String>> comments = new LinkedHashMap<>();
+        try {
+            // 普通注释
+            Map<String, List<String>> baseComments = TreeMapper.extractComments(type);
+            if (baseComments != null) comments.putAll(baseComments);
+        } catch (Throwable t) {
+            LinLog.warn("[linlang] failed to extract comments: " + t.getMessage());
+        }
+        persist(file, meta.fmt(), doc, comments);
+        // Remember the bound instance for future saveAll()
+         synchronized (liveConfigs) { liveConfigs.put(type, inst); }
+         return inst;
     }
 
+
+
     @Override
-    public void save(Object config) {
-        Class<?> type = config.getClass();
-        Binder.BoundConfig meta = Binder.configOf(type).orElseThrow();
+    public <T> void save(Class<T> type, T config) {
+        if (config == null) throw new IllegalArgumentException("config is null");
+
+        Binder.BoundConfig meta = Binder.configOf(type)
+                .orElseThrow(() -> new IllegalArgumentException("[linlang] missing @ConfigFile on " + type));
         Path file = toFile(meta.path(), meta.name(), meta.fmt());
+
+        // Snapshot current object fields into a flat doc
         Map<String, Object> doc = new LinkedHashMap<>();
-        // 反射导出
         export(config, meta.keyMap(), doc);
-        persist(file, meta.fmt(), doc);
+
+        // 提取注释：仅包含普通 @Comment
+        Map<String, List<String>> comments = new LinkedHashMap<>();
+        try {
+            // 普通注释
+            Map<String, List<String>> baseComments = TreeMapper.extractComments(type);
+            if (baseComments != null) comments.putAll(baseComments);
+        } catch (Throwable t) {
+            LinLog.warn("[linlang] failed to extract comments: " + t.getMessage());
+        }
+        // Write with comments if available
+        persist(file, meta.fmt(), doc, comments);
     }
 
-    @Override
-    public void reload(Class<?> type) {
-        bind(type);
+    public void saveAll() {
+        java.util.List<java.util.Map.Entry<Class<?>, Object>> snapshot;
+        synchronized (liveConfigs) {
+            snapshot = new java.util.ArrayList<>(liveConfigs.entrySet());
+        }
+        for (var e : snapshot) {
+            Class<?> type = e.getKey();
+            Object config = e.getValue();
+            try {
+                Binder.BoundConfig meta = Binder.configOf(type)
+                        .orElseThrow(() -> new IllegalArgumentException("[linlang] missing @ConfigFile on " + type));
+                Path file = toFile(meta.path(), meta.name(), meta.fmt());
+
+                // Export current in-memory values
+                Map<String, Object> doc = new LinkedHashMap<>();
+                export(config, meta.keyMap(), doc);
+
+                // 提取注释：仅包含普通 @Comment
+                Map<String, List<String>> comments = new LinkedHashMap<>();
+                try {
+                    // 普通注释
+                    Map<String, List<String>> baseComments = TreeMapper.extractComments(type);
+                    if (baseComments != null) comments.putAll(baseComments);
+                } catch (Throwable t) {
+                    LinLog.warn("[linlang] failed to extract comments: " + t.getMessage());
+                }
+                // Attach comments if any and persist
+                persist(file, meta.fmt(), doc, comments);
+            } catch (Exception ex) {
+                LinLog.warn("[linlang] saveAll failed for " + type + ": " + ex);
+            }
+        }
     }
+
 
     // —— 私有 —— //
-    private Path toFile(String path, String name, FileFormat fmt) {
-        String ext = fmt == FileFormat.YAML ? ".yml" : ".json";
+    private Path toFile(String path, String name, FileType fmt) {
+        String ext = fmt == FileType.YAML ? ".yml" : ".json";
         Path dir = paths.sub(path);
         IOs.ensureDir(dir);
         return dir.resolve(name + ext);
@@ -91,21 +149,22 @@ public final class ConfigServiceImpl implements ConfigService {
             try {
                 Object inst = type.getDeclaredConstructor().newInstance();
                 export(inst, meta.keyMap(), doc);
+                Map<String,List<String>> comments = TreeMapper.extractComments(type);
+                persist(file, meta.fmt(), doc, comments);
             } catch (Exception e) {
                 throw new RuntimeException(e);
             }
-            persist(file, meta.fmt(), doc);
             return doc;
         }
         String raw = IOs.readString(file);
-        return meta.fmt() == FileFormat.YAML ? YamlCodec.load(raw) : JsonCodec.load(raw);
+        return meta.fmt() == FileType.YAML ? YamlCodec.load(raw) : JsonCodec.load(raw);
     }
-
-    private void persist(Path file, FileFormat fmt, Map<String, Object> doc) {
-        String out = fmt == FileFormat.YAML ? YamlCodec.dump(doc) : JsonCodec.dump(doc);
+    private void persist(Path file, FileType fmt, Map<String,Object> doc, Map<String,java.util.List<String>> comments) {
+        String out = (fmt == FileType.YAML)
+                ? YamlCodec.dumpWithComments(doc, comments)
+                : JsonCodec.dump(doc);
         IOs.writeString(file, out);
     }
-
     private void applyMigrations(Class<?> type, Map<String, Object> doc) {
         ConfigVersion ver = type.getAnnotation(ConfigVersion.class);
         if (ver == null) return;
@@ -197,11 +256,11 @@ public final class ConfigServiceImpl implements ConfigService {
         }
     }
 
-    private void writeDiff(Path f, FileFormat fmt, Map<String, Object> fullDoc, java.util.Set<String> missing) {
+    private void writeDiff(Path f, FileType fmt, Map<String, Object> fullDoc, java.util.Set<String> missing) {
         if (missing.isEmpty()) return;
         try {
             Path diff = f.getParent().resolve(stripExt(f.getFileName().toString()) + "-diffrent" + extOf(fmt));
-            if (fmt == FileFormat.YAML) {
+            if (fmt == FileType.YAML) {
                 String base = YamlCodec.dump(fullDoc);
                 String marked = insertYamlMissingMarkers(base, missing);
                 IOs.writeString(diff, marked);
@@ -211,6 +270,7 @@ public final class ConfigServiceImpl implements ConfigService {
                 wrapper.put("_file", fullDoc);
                 IOs.writeString(diff, JsonCodec.dump(wrapper));
             }
+            LinLog.warn("[linlang] ConfigService generated a " + diff + " file, because there are " + missing.size() + " keys differences/missing");
         } catch (Exception ignore) {
         }
     }
@@ -239,7 +299,8 @@ public final class ConfigServiceImpl implements ConfigService {
         return i > 0 ? name.substring(0, i) : name;
     }
 
-    private static String extOf(FileFormat fmt) {
-        return fmt == FileFormat.YAML ? ".yml" : ".json";
+    private static String extOf(FileType fmt) {
+        return fmt == FileType.YAML ? ".yml" : ".json";
     }
+
 }

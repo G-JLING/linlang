@@ -1,7 +1,9 @@
 # 琳琅 linlang
-琳琅是由 JLING/MagicPowered 编写的，适用于 Minecraft 插件与模组的开发库。
+琳琅是由 JLING 编写的，适用于 Minecraft 插件与模组的开发库。
 
-此开发库通过了诸 Java 优秀开发框架的代码模式，尝试简化 Minecraft 开发的繁琐程度。我们期望其拥有如下特点:
+>此项目正在开发过程中。
+
+此开发库通过了诸 Java 优秀开发框架的代码模式，尝试简化 Minecraft 开发的繁琐程度。我期望其拥有如下特点:
 1. 在稳定可靠的基础上，在保证良好的逻辑性与可读性的前提下，尽可能简化 Minecraft 开发过程中高重复、高繁琐、低逻辑意义的代码。
 2. 通过分离接口和适配器，使得其具有高可移植性，可以简单地转移到 Bukkit、Sponge，甚至是 Forge/NeoForge 模组平台。
 3. 拥有全面的功能框架，包括文件、命令、GUI、显示、上下文、验证、通信等诸多功能。
@@ -10,6 +12,14 @@
 现有功能:
 - 文件与数据
 
+## 依赖
+琳琅目前仍在开发，还未发布仓库。
+
+在插件主类（继承 JavaPlugin）的 `onEnable()` 方法中
+```java
+LinlangBukkitBootstrap bootstrap = LinlangBukkitBootstrap.install(this);
+```
+即可装载 Linlang 服务。
 
 ## 文件与数据
 通过 linlang，可以简单地实现创建文件、管理文件与连接数据库。
@@ -17,13 +27,25 @@
 ### 1. 配置文件（ConfigService）
 
 #### 注解与定义
-- 使用 `@ConfigFile` 注解在配置类上，自动绑定到配置文件（如 `config.yml`）。
+- 使用一个类来定义一个文件，该类被 `@ConfigFile` 注解，应传入如下参数：
+  1. `name="文件名"` 是配置文件的名字，不包含拓展名。
+  2. `path=""` 是配置文件的生成路径，根为 `plugins/当前插件/` 即插件文件夹。
+  3. `format=FileFormat` 是配置文件类型，枚举 `FileFormat.YAML` 和 `FileFormat.JSON`。
+- 声明一个公开的变量来定义一个配置键，声明匿名类来定义层级结构。为变量赋值以为配置键赋默认值。
+- 要为配置键添加注释，应使用 `@Comment` 注解。支持多行，使用 `@Comment({"1", "2"})` 的写法。可以注解类、匿名类和变量。
+- 默认情况下，变量名按 `驼峰 -> KEBAB` 的形式生成为配置键名，使用 `@NamingStyle` 注解来使用其他命名方法，枚举如下
+  - `NamingStyle.Style.KEBAB` 即默认的情况。
+  - `NamingStyle.Style.IDENTITY` 有序列表，适用于 `List<String>`。
+  - `NamingStyle.Style.LIST` 无序列表，适用于 `List<String>`。
+
+
 - 支持字段默认值、注释（字段上 `@Comment`）、嵌套类（自动递归绑定）。
 - 字段名自动从驼峰转为 kebab-case（如 `someField` → `some-field`）。
 
 #### 示例
 ```java
-@ConfigFile("config.yml")
+@ConfigFile(name="config.yml", path="", format=FileFormat.YAML)
+@Comment("主配置文件")
 public class MainConfig {
     @Comment("最大玩家数")
     public int maxPlayers = 20;
@@ -38,11 +60,30 @@ public class MainConfig {
 ```
 
 #### 绑定与操作
+要将文件类绑定至插件，需要先装载 Linlang 服务。
+
+随后，初始化 LinFile 文件服务，并将文件类绑定至 LinFile 文件服务。假设您的文件类是 `MainConfig`。
 ```java
-MainConfig config = cfgSvc.bind(MainConfig.class);
-cfgSvc.save(config);    // 保存到文件
-cfgSvc.reload(config);  // 重新加载
+private ConfigService configSvc;
+private MainConfig config;
+
+configSvc = LinFile.services().config();
+config = configSvc.bind(MainConfig.class);
 ```
+
+到此，您可以直接使用 `config` 访问您的文件类中声明的变量，这些变量的值就是对应键的值。
+
+#### 重载
+要热重新载入配置文件，使用
+```configSvc.reload(MainConfig.class);```
+
+特别的，您可以启用动态热重载
+```java
+bootstrap.enableHotReloadFor(Config.class, Addon.class);
+```
+
+如果您没有 `Addon` 或 `Config`，传递 `Null`
+
 
 #### 行为说明
 - “**文件值优先，默认值兜底**”：已有配置文件优先读取，未填写项自动写入默认值。

@@ -2,21 +2,16 @@ package adapter.linlang.bukkit;
 
 // file.io.linlang.adapter.bukkit.common.file.LinlangFileBoostrap
 
-import adapter.linlang.bukkit.audit.common.BukkitAuditProvider;
-import adapter.linlang.bukkit.command.message.CommandLangKeys;
-import adapter.linlang.bukkit.command.message.LangBackedMessages;
 import adapter.linlang.bukkit.file.common.file.BukkitFsHotReloader;
 import adapter.linlang.bukkit.file.common.file.BukkitPathResolver;
+import adapter.linlang.bukkit.runtime.LinlangBootstrapRuntime;
 import api.linlang.file.service.ConfigService;
 import api.linlang.database.services.DataService;
 import api.linlang.file.service.LangService;
-import api.linlang.file.types.LocaleTag;
-import audit.linlang.audit.Linlogs;
 import api.linlang.database.config.DbConfig;
 import api.linlang.file.called.LinFile;
 import api.linlang.file.service.Services;
 import api.linlang.database.repo.Repository;
-import core.linlang.file.impl.AddonServiceImpl;
 import core.linlang.file.impl.ConfigServiceImpl;
 import core.linlang.database.impl.DataServiceImpl;
 import core.linlang.file.impl.LangServiceImpl;
@@ -24,87 +19,112 @@ import core.linlang.file.runtime.PathResolver;
 import api.linlang.database.types.DbType;
 import org.bukkit.plugin.java.JavaPlugin;
 
-import java.nio.file.Path;
 import java.util.List;
+import java.util.function.Function;
 
-import api.linlang.command.CommandMessages;
 import adapter.linlang.bukkit.command.LinlangBukkitCommand;
 
-/* 在 Bukkit 中装配 linlang 的文件与数据模块 */
 public final class LinlangBukkitBootstrap implements AutoCloseable {
 
-
-    /**
-     * 安装并返回 Bootstrap 实例。
-     * 该方法：
-     * 1) 安装 Bukkit 日志/审计 Provider 到 Linlogs；
-     * 2) 将 core 实现实例注入到 API 门面 LinFile；
-     */
-    public static LinlangBukkitBootstrap install(JavaPlugin plugin){
+    public static LinlangBukkitBootstrap install(JavaPlugin plugin) {
         return new LinlangBukkitBootstrap(plugin);
     }
+
     public final ConfigServiceImpl config;
-    public final AddonServiceImpl addon;
     public final LangServiceImpl lang;
     public final DataServiceImpl data;
 
-    public final LinlangBukkitCommand commands;
+    public LinlangBukkitCommand commands;
 
     private final BukkitFsHotReloader hot;
     private final PathResolver resolver;
 
-    public LinlangBukkitBootstrap(JavaPlugin plugin){
+    private final JavaPlugin plugin;
+
+    private LinlangBootstrapRuntime runtime;
+
+    // 装配方法
+    public LinlangBukkitBootstrap(JavaPlugin plugin) {
+        this.plugin = plugin;
+
+        // 1) 核心路径解析与服务初始化
         this.resolver = new BukkitPathResolver(plugin);
         this.config = new ConfigServiceImpl(resolver, List.of());
-        this.addon  = new AddonServiceImpl(resolver);
-        this.lang   = new LangServiceImpl(resolver, "zh_CN");
-        this.data   = new DataServiceImpl(resolver);
-        this.hot    = new BukkitFsHotReloader(plugin);
+        this.lang = new LangServiceImpl(resolver, "zh_CN");
+        this.data = new DataServiceImpl(resolver);
+        this.hot = new BukkitFsHotReloader(plugin);
 
-        // 1) 安装日志/审计
-        Linlogs.install(new BukkitAuditProvider(plugin));
-
-        // 2) 注入 API 门面
+        // 2) 注入 LinFile API 门面
         LinFile.install(new Services() {
-            public ConfigService config(){ return config; }
-            public LangService lang()  { return lang; }
-            public DataService data()  { return data; }
+            public ConfigService config() { return config; }
+            public LangService lang() { return lang; }
+            public DataService data() { return data; }
         });
 
-        // 3) 装载命令系统并自动接入语言（若可用）
-        CommandMessages messages = CommandMessages.defaults();
-        try {
-            String locale = String.valueOf(this.lang.getCurrent());
-            CommandLangKeys keys = this.lang.bindObject(CommandLangKeys.class, locale, java.util.List.of());
-            messages = new LangBackedMessages(keys);
-        } catch (Throwable ignore) {  }
-
-        String prefix = "§f[§d" + plugin.getDescription().getName() + "§f]";
-        this.commands = (LinlangBukkitCommand) new LinlangBukkitCommand()
-                .install(prefix, plugin, messages)
-                .withDefaultResolvers()
-                .withInteractiveResolvers();
+        // 3) 使用运行期辅助类初始化审计和命令
+        this.runtime = new LinlangBootstrapRuntime(plugin, this.lang);
+        this.runtime.installAudit(false);
+        this.runtime.initCommands();
+        this.commands = this.runtime.getCommands();
     }
 
-    /* 启用热重载监听。 */
-    public LinlangBukkitBootstrap enableHotReloadFor(Class<?> cfgClz, Class<?> addonClz){
-        Path root = resolver.root();
-        hot.watchConfigDir(root.resolve("config"), config, cfgClz);
-        hot.watchAddonDir (root.resolve("addons"), addon,  addonClz);
-        hot.watchLangDir  (root.resolve("lang"),   lang);
-        return this;
-    }
-
-    /* 初始化数据源。 */
-    public void initDb(DbType type, DbConfig cfg){
+    /* 初始化数据源 */
+    public void initDb(DbType type, DbConfig cfg) {
         data.init(type, cfg);
     }
 
-    /* 获取仓库。 */
-    public <T> Repository<T, ?> repo(Class<T> entity){ return data.repo(entity); }
+    /* 获取仓库 */
+    public <T> Repository<T, ?> repo(Class<T> entity) {
+        return data.repo(entity);
+    }
 
-    @Override public void close(){
-        try { hot.close(); } catch (Exception ignore) {}
-        try { if (commands != null) commands.close(); } catch (Exception ignore) {}
+    @Override
+    public void close() {
+        try {
+            hot.close();
+        } catch (Exception ignore) {
+        }
+        try {
+            if (runtime != null) runtime.close();
+        } catch (Exception ignore) {
+        }
+    }
+
+    /**
+     * 固定前缀
+     */
+    public LinlangBukkitBootstrap withCommandPrefix(String prefix) {
+        this.runtime.withCommandPrefix(prefix);
+        this.commands = this.runtime.getCommands();
+        return this;
+    }
+
+    /**
+     * 自定义前缀提供者
+     */
+    public LinlangBukkitBootstrap withCommandPrefix(Function<JavaPlugin, String> provider) {
+        this.runtime.withCommandPrefix(provider);
+        this.commands = this.runtime.getCommands();
+        return this;
+    }
+
+    /**
+     * 切换是否使用 Plugin.getLogger() 输出日志
+     */
+    public LinlangBukkitBootstrap withPluginLogger(boolean usePluginLogger) {
+        this.runtime.withPluginLogger(usePluginLogger);
+        return this;
+    }
+
+    public LinlangBukkitBootstrap withInitialLanguage(String locale) {
+        this.runtime.withInitialLanguage(locale);
+        this.commands = this.runtime.getCommands();
+        return this;
+    }
+
+    public LinlangBukkitBootstrap reload() {
+        this.runtime.reloadI18n();
+        this.commands = this.runtime.getCommands();
+        return this;
     }
 }

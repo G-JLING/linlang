@@ -1,4 +1,4 @@
-package api.linlang.file.types;
+package core.linlang.file.runtime;
 import java.util.Locale;
 
 /**
@@ -14,7 +14,7 @@ public final class LocaleTag {
     }
 
     public static LocaleTag parse(String s) {
-        if (s == null || s.isEmpty()) return new LocaleTag("en", "US");
+        if (s == null || s.isEmpty()) return new LocaleTag("zh", "CN");
         String[] p = s.replace('-', '_').split("_", 2);
         String l = p[0];
         String c = p.length > 1 ? p[1] : "";

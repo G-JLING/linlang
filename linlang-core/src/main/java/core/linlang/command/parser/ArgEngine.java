@@ -1,7 +1,6 @@
 package core.linlang.command.parser;
 
-// 参数解析 + Tab，内建基础类型，平台类型交由外部 resolvers
-// linlang-core/src/main/java/io/linlang/lincommand/core/ArgEngine.java
+// 参数解析 + Tab，负责内建基础类型
 
 import api.linlang.command.LinCommand;
 import core.linlang.command.model.Model;
@@ -21,7 +20,6 @@ public final class ArgEngine {
             var m = new LinkedHashMap<String,String>(ts.meta);
             return r.parse(new Ctx(pctx.vars(), m, pctx.platform(), pctx.sender()), token);
         }
-        // Message key: error.type.no-resolver
         throw new IllegalArgumentException("error.type.no-resolver");
     }
 

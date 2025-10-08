@@ -13,12 +13,13 @@ public final class Model {
         public List<Param>  params   = new ArrayList<>();
         public Exec exec;
         public String usage;
-        public String descZh;
+        public Map<String,String> descI18n;
     }
     public static final class Param {
         public String name; public boolean optional; public String defVal; public String desc;
         // 复合：允许多种类型 union，如 enum|minecraft:item
         public List<TypeSpec> types = new ArrayList<>();
+        public boolean i18nTag;
     }
     public static final class TypeSpec {
         public String id;                        // enum / int / double / string / regex / minecraft:item / click:block

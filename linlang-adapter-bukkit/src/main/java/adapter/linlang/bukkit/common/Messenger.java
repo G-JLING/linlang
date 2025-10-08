@@ -12,10 +12,12 @@ import core.linlang.file.text.ColorCodes;
 import core.linlang.file.text.Placeholders;
 import net.md_5.bungee.api.ChatMessageType;
 import net.md_5.bungee.api.chat.TextComponent;
+import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
 
 import java.util.Map;
 import java.util.function.Function;
+import java.util.function.Supplier;
 
 /**
  * 面向 Bukkit 的消息发送门面。
@@ -31,6 +33,9 @@ import java.util.function.Function;
 public final class Messenger {
     private final Function<String, String> translator; // key -> template
     private final boolean hexColor; // 1.16+ -> true
+
+    // Optional prefix (e.g., plugin prefix). Defaults to empty.
+    private Supplier<String> prefixSupplier = () -> "";
 
     /**
      * 使用 {@link LangService} 作为翻译源的构造器。
@@ -52,6 +57,22 @@ public final class Messenger {
         this.hexColor = isAtLeast116();
     }
 
+    /**
+     * Set a fixed text prefix for chat/console messages (not applied to Title/ActionBar).
+     */
+    public Messenger withPrefix(String prefix) {
+        this.prefixSupplier = () -> (prefix == null ? "" : prefix);
+        return this;
+    }
+
+    /**
+     * Set a dynamic prefix provider (e.g., depends on runtime state).
+     */
+    public Messenger withPrefixProvider(Supplier<String> supplier) {
+        this.prefixSupplier = (supplier == null ? () -> "" : supplier);
+        return this;
+    }
+
     /* 四个基本方法 */
 
     /**
@@ -63,7 +84,14 @@ public final class Messenger {
      * @param kv       以 {@code key, value, key, value...} 形式给定的占位符参数
      */
     public void sendText(Player player, String template, Object... kv) {
-        sendText(player, template, Vars.of(kv));
+        sendText((CommandSender) player, template, kv);
+    }
+
+    /**
+     * 1a) 直接发送可显示文本到任意 CommandSender（占位符：可变参数）。
+     */
+    public void sendText(CommandSender sender, String template, Object... kv) {
+        sendText(sender, template, Vars.of(kv));
     }
 
     /**
@@ -74,7 +102,15 @@ public final class Messenger {
      * @param vars       占位符参数映射，{@code key -> value}
      */
     public void sendText(Player player, String template, Map<String, ?> vars) {
-        player.sendMessage(color(apply(template, vars)));
+        sendText((CommandSender) player, template, vars);
+    }
+
+    /**
+     * 2a) 直接发送可显示文本到任意 CommandSender（占位符：Map）。
+     */
+    public void sendText(CommandSender sender, String template, Map<String, ?> vars) {
+        String msg = prefix() + color(apply(template, vars));
+        sender.sendMessage(msg);
     }
 
     /**
@@ -86,7 +122,14 @@ public final class Messenger {
      * @param kv     以 {@code key, value, ...} 形式给定的占位符参数
      */
     public void sendKey(Player player, String key, Object... kv) {
-        sendKey(player, key, Vars.of(kv));
+        sendKey((CommandSender) player, key, kv);
+    }
+
+    /**
+     * 3a) 通过消息键发送到任意 CommandSender（占位符：可变参数）。
+     */
+    public void sendKey(CommandSender sender, String key, Object... kv) {
+        sendKey(sender, key, Vars.of(kv));
     }
 
     /**
@@ -98,8 +141,16 @@ public final class Messenger {
      * @param vars      占位符参数映射，{@code key -> value}
      */
     public void sendKey(Player player, String key, Map<String, ?> vars) {
+        sendKey((CommandSender) player, key, vars);
+    }
+
+    /**
+     * 4a) 通过消息键发送到任意 CommandSender（占位符：Map）。
+     */
+    public void sendKey(CommandSender sender, String key, Map<String, ?> vars) {
         String tmpl = translator.apply(key);
-        player.sendMessage(color(apply(tmpl, vars)));
+        String msg = prefix() + color(apply(tmpl, vars));
+        sender.sendMessage(msg);
     }
 
     // ─────────────────────────────── 附：Title / ActionBar ───────────────────────────────
@@ -131,7 +182,18 @@ public final class Messenger {
      * @param vars     占位符参数映射
      */
     public void sendTitleText(Player player, String title, String subtitle, int fadeIn, int stay, int fadeOut, Map<String, ?> vars) {
-        player.sendTitle(color(apply(title, vars)), color(apply(subtitle, vars)), fadeIn, stay, fadeOut);
+        sendTitleText((CommandSender) player, title, subtitle, fadeIn, stay, fadeOut, vars);
+    }
+
+    /**
+     * 以「模板文本」发送 Title 到任意 CommandSender；若非玩家则回退为一条合并的聊天行。
+     */
+    public void sendTitleText(CommandSender sender, String title, String subtitle, int fadeIn, int stay, int fadeOut, Map<String, ?> vars) {
+        if (sender instanceof Player p) {
+            p.sendTitle(color(apply(title, vars)), color(apply(subtitle, vars)), fadeIn, stay, fadeOut);
+        } else {
+            sender.sendMessage(prefix() + color(apply(title + " | " + subtitle, vars)));
+        }
     }
 
     /**
@@ -161,9 +223,20 @@ public final class Messenger {
      * @param vars     占位符参数映射
      */
     public void sendTitleKey(Player player, String titleKey, String subKey, int fadeIn, int stay, int fadeOut, Map<String, ?> vars) {
+        sendTitleKey((CommandSender) player, titleKey, subKey, fadeIn, stay, fadeOut, vars);
+    }
+
+    /**
+     * 以「消息键」发送 Title 到任意 CommandSender；若非玩家则回退为一条合并的聊天行。
+     */
+    public void sendTitleKey(CommandSender sender, String titleKey, String subKey, int fadeIn, int stay, int fadeOut, Map<String, ?> vars) {
         String t = translator.apply(titleKey);
         String s = translator.apply(subKey);
-        player.sendTitle(color(apply(t, vars)), color(apply(s, vars)), fadeIn, stay, fadeOut);
+        if (sender instanceof Player p) {
+            p.sendTitle(color(apply(t, vars)), color(apply(s, vars)), fadeIn, stay, fadeOut);
+        } else {
+            sender.sendMessage(prefix() + color(apply(t + " | " + s, vars)));
+        }
     }
 
     /**
@@ -185,8 +258,19 @@ public final class Messenger {
      * @param vars     占位符参数映射
      */
     public void sendActionBarText(Player player, String template, Map<String, ?> vars) {
+        sendActionBarText((CommandSender) player, template, vars);
+    }
+
+    /**
+     * 以「模板文本」发送 ActionBar 到任意 CommandSender；若非玩家则回退为聊天行。
+     */
+    public void sendActionBarText(CommandSender sender, String template, Map<String, ?> vars) {
         String msg = color(apply(template, vars));
-        player.spigot().sendMessage(ChatMessageType.ACTION_BAR, new TextComponent(msg));
+        if (sender instanceof Player p) {
+            p.spigot().sendMessage(ChatMessageType.ACTION_BAR, new TextComponent(msg));
+        } else {
+            sender.sendMessage(prefix() + msg);
+        }
     }
 
     /**
@@ -208,8 +292,19 @@ public final class Messenger {
      * @param vars      占位符参数映射
      */
     public void sendActionBarKey(Player player, String key, Map<String, ?> vars) {
+        sendActionBarKey((CommandSender) player, key, vars);
+    }
+
+    /**
+     * 以「消息键」发送 ActionBar 到任意 CommandSender；若非玩家则回退为聊天行。
+     */
+    public void sendActionBarKey(CommandSender sender, String key, Map<String, ?> vars) {
         String msg = color(apply(translator.apply(key), vars));
-        player.spigot().sendMessage(ChatMessageType.ACTION_BAR, new TextComponent(msg));
+        if (sender instanceof Player p) {
+            p.spigot().sendMessage(ChatMessageType.ACTION_BAR, new TextComponent(msg));
+        } else {
+            sender.sendMessage(prefix() + msg);
+        }
     }
 
     // ───────────────────────────────── 实用工具 ─────────────────────────────────
@@ -230,6 +325,10 @@ public final class Messenger {
         } catch (Exception e) {
             return true;
         }
+    }
+
+    private String prefix() {
+        try { return prefixSupplier.get(); } catch (Throwable ignored) { return ""; }
     }
 
     /**

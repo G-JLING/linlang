@@ -1,5 +1,5 @@
 // called.linlang.annotations.file.LocaleProvider
-package api.linlang.file.annotations;
+package api.linlang.file.implement;
 
 public interface LocaleProvider<T> {
     String locale();                 // "zh_CN", "en_US"
