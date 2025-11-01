@@ -1,5 +1,9 @@
 package core.linlang.file.impl;
 
+import api.linlang.audit.common.LinMsg;
+import api.linlang.audit.common.LinlangInternalMessageKeys;
+import api.linlang.file.annotations.NoEmit;
+
 // linlang-core/src/main/java/io/linlang/file/impl/LangServiceImpl.java
 
 import api.linlang.audit.called.LinLog;
@@ -49,11 +53,13 @@ public final class LangServiceImpl implements LangService {
         Object holder;
         Path file;
         FileType fmt;
+        boolean emit;
 
-        BoundMeta(Object h, Path f, FileType fm) {
+        BoundMeta(Object h, Path f, FileType fm, boolean em) {
             this.holder = h;
             this.file = f;
             this.fmt = fm;
+            this.emit = em;
         }
     }
 
@@ -72,7 +78,21 @@ public final class LangServiceImpl implements LangService {
     // —— 对象模式：单一键结构类 + 多语言提供者 —— //
     @Override
     public <T> T bind(Class<T> keysClass, String locale,
+                      List<? extends LocaleProvider<T>> providers,
+                      boolean emit) {
+        // existing bind logic moved here (see below)
+        return bindInternal(keysClass, locale, providers, emit);
+    }
+
+    @Override
+    public <T> T bind(Class<T> keysClass, String locale,
                       List<? extends LocaleProvider<T>> providers) {
+        return bindInternal(keysClass, locale, providers, true);
+    }
+
+    private <T> T bindInternal(Class<T> keysClass, String locale,
+                               List<? extends LocaleProvider<T>> providers,
+                               boolean emitFlag) {
         // 1) 选择 provider
         LocaleProvider<T> prov = null;
         for (LocaleProvider<T> p : providers) {
@@ -96,7 +116,6 @@ public final class LangServiceImpl implements LangService {
                 : new LinkedHashMap<>();
         java.util.Set<String> missing = new java.util.LinkedHashSet<>();
         mergeDefaultsCollect(defDoc, doc, "", missing);
-        // 在合并默认值后确保所有带注释的路径都存在，避免键级注释丢失
 
         // extract comments once for the requested locale (only meaningful for YAML)
         Map<String, java.util.List<String>> comments =
@@ -105,23 +124,26 @@ public final class LangServiceImpl implements LangService {
         if (comments != null) for (var k: comments.keySet()) LinLog.debug("[linlang-debug] [LangService] comment-key", "path", k);
         // NOTE: per-field @I18nComment requires the key to exist in the doc; ensureCommentAnchors() below guarantees anchors.
 
-        ensureCommentAnchors(doc, comments);
-        LinLog.debug("[linlang-debug] [LangService] ensured anchors for comments");
+        // a) Determine whether to actually emit:
+        boolean annotatedNoEmit = keysClass.isAnnotationPresent(NoEmit.class)
+                || (providers != null && providers.stream().anyMatch(p -> p != null && p.getClass().isAnnotationPresent(NoEmit.class)));
+        boolean shouldEmit = emitFlag && !annotatedNoEmit;
 
         if (!exists) {
-            // first write with comments if YAML
-            ensureCommentAnchors(doc, comments);
-            LinLog.debug("[linlang-debug] [LangService] ensured anchors for comments");
-            persist(file, pp.fmt(), doc, comments);
+            if (shouldEmit) {
+                ensureCommentAnchors(doc, comments);
+                LinLog.debug("[linlang-debug] [LangService] ensured anchors for comments");
+                persist(file, pp.fmt(), doc, comments);
+            }
         } else {
-            if (!missing.isEmpty()) {
-                LinLog.warn("[linlang] " + file + " 缺失键 " + missing.size() + " 个。想要了解详情，请见 " + file.getFileName() + "-diffrent 文件");
+            if (shouldEmit && !missing.isEmpty()) {
                 writeDiff(file, pp.fmt(), doc, missing);
             }
-            // subsequent writes also keep comments (header/field notes)
-            ensureCommentAnchors(doc, comments);
-            LinLog.debug("[linlang-debug] [LangService] ensured anchors for comments");
-            persist(file, pp.fmt(), doc, comments);
+            if (shouldEmit) {
+                ensureCommentAnchors(doc, comments);
+                LinLog.debug("[linlang-debug] [LangService] ensured anchors for comments");
+                persist(file, pp.fmt(), doc, comments);
+            }
         }
 
         // 4) 回填到已有 holder（若之前绑定过），否则创建新实例
@@ -133,10 +155,11 @@ public final class LangServiceImpl implements LangService {
             TreeMapper.populate(holder, doc);
             bm.file = file;
             bm.fmt = pp.fmt();
+            bm.emit = shouldEmit;
         } else {
             holder = newInstance(keysClass);
             TreeMapper.populate(holder, doc);
-            bound.put(bk, new BoundMeta(holder, file, pp.fmt()));
+            bound.put(bk, new BoundMeta(holder, file, pp.fmt(), shouldEmit));
         }
 
         // 5) 缓存扁平化：合并到该 locale 的总键表（避免多次 bind 覆盖之前的键）
@@ -146,17 +169,14 @@ public final class LangServiceImpl implements LangService {
         return holder;
     }
 
-    @Override
-    public <T> void save(Class<T> keysClass, String locale) {
+    public <T> void save(Class<T> keysClass, String locale, boolean emit) {
         BoundKey bk = new BoundKey(keysClass, locale);
         BoundMeta bm = bound.get(bk);
-        if (bm == null || bm.holder == null) return; // 未绑定，忽略
+        if (bm == null || bm.holder == null) return;
         @SuppressWarnings("unchecked")
         T holder = (T) bm.holder;
-        // 导出当前对象
         Map<String, Object> out = new LinkedHashMap<>();
         TreeMapper.export(holder, out);
-        // 与磁盘合并：保留未知键，已知键用对象值覆盖
         var pp = resolvePackPath(keysClass, locale);
         Path f = bm.file != null ? bm.file : file(pp.path(), pp.name(), pp.fmt());
         Map<String, Object> curr = IOs.exists(f)
@@ -165,15 +185,20 @@ public final class LangServiceImpl implements LangService {
         mergeOverwrite(curr, out);
         Map<String, java.util.List<String>> comments =
                 (pp.fmt() == FileType.YAML) ? extractCommentsByLocale(keysClass, locale) : java.util.Collections.emptyMap();
-        LinLog.debug("[linlang-debug] [LangService] comments.size", "n", (comments==null?0:comments.size()));
-        if (comments != null) for (var k: comments.keySet()) LinLog.debug("[linlang-debug] [LangService] comment-key", "path", k);
         ensureCommentAnchors(curr, comments);
-        LinLog.debug("[linlang-debug] [LangService] ensured anchors for comments");
-        persist(f, pp.fmt(), curr, comments);
-        {
-            Map<String, String> flat = flatten(curr);
-            cache.computeIfAbsent(locale, k -> new LinkedHashMap<>()).putAll(flat);
+        if (emit) {
+            persist(f, pp.fmt(), curr, comments);
         }
+        Map<String, String> flat = flatten(curr);
+        cache.computeIfAbsent(locale, k -> new LinkedHashMap<>()).putAll(flat);
+    }
+
+    @Override
+    public <T> void save(Class<T> keysClass, String locale) {
+        BoundKey bk = new BoundKey(keysClass, locale);
+        BoundMeta bm = bound.get(bk);
+        boolean emit = bm != null ? bm.emit : true;
+        save(keysClass, locale, emit);
     }
 
     @Override
@@ -418,10 +443,21 @@ public final class LangServiceImpl implements LangService {
     private void writeDiff(Path f, FileType fmt, Map<String, Object> fullDoc, java.util.Set<String> missing) {
         if (missing.isEmpty()) return;
         try {
-            Path diff = f.getParent().resolve(stripExt(f.getFileName().toString()) + "-diffrent" + extOf(fmt));
+            Path diff = f.getParent().resolve(stripExt(f.getFileName().toString()) + "-diff" + extOf(fmt));
             if (fmt == FileType.YAML) {
-                String base = YamlCodec.dump(fullDoc);
-                String marked = insertYamlMissingMarkers(base, missing);
+                // Build a map of missing path -> default value (from merged fullDoc)
+                Map<String, Object> missingVals = new LinkedHashMap<>();
+                for (String path : missing) {
+                    Object v = readPath(fullDoc, path);
+                    missingVals.put(path, v);
+                }
+                // Remove missing keys from a pruned copy so we don't duplicate keys, then insert with comments+values
+                Map<String, Object> pruned = deepCopyMap(fullDoc);
+                for (String path : missing) {
+                    deletePath(pruned, path);
+                }
+                String base = YamlCodec.dump(pruned);
+                String marked = insertYamlMissingMarkers(base, missingVals);
                 IOs.writeString(diff, marked);
             } else {
                 Map<String, Object> wrapper = new LinkedHashMap<>();
@@ -429,7 +465,8 @@ public final class LangServiceImpl implements LangService {
                 wrapper.put("_file", fullDoc);
                 IOs.writeString(diff, JsonCodec.dump(wrapper));
             }
-            LinLog.warn("[linlang] " + diff + " generated with " + missing.size() + " missing keys.");
+            LinLog.warn(LinMsg.k("linFile.file.fileMissingKeys", "file", f, "diff", missing.size()));
+
         } catch (Exception e) { /* swallow */ }
     }
 
@@ -442,51 +479,138 @@ public final class LangServiceImpl implements LangService {
         return fmt == FileType.YAML ? ".yml" : ".json";
     }
 
-    private static String insertYamlMissingMarkers(String yaml, java.util.Set<String> missing) {
-        java.util.List<String> lines = new java.util.ArrayList<>(java.util.Arrays.asList(yaml.split("\n", -1)));
-        java.util.List<String> paths = new java.util.ArrayList<>(missing);
-        java.util.Collections.sort(paths);
+    private static String insertYamlMissingMarkers(String yaml, Map<String, Object> missingWithValues) {
+        List<String> lines = new ArrayList<>(Arrays.asList(yaml.split("\n", -1)));
+        List<String> paths = new ArrayList<>(missingWithValues.keySet());
+        Collections.sort(paths);
+
         for (String path : paths) {
-            String[] ps = path.split("\\.");
-            String last = ps[ps.length - 1];
-            int indent = (ps.length - 1) * 2;
-            String plain = " ".repeat(indent) + last + ":";               // foo:
-            String squoted = " ".repeat(indent) + "'" + last + "'" + ":"; // 'foo':
-            String dquoted = " ".repeat(indent) + "\"" + last + "\":";    // "foo":
+            String[] segs = path.split("\\.");
+            if (segs.length == 0) continue;
+            String last = segs[segs.length - 1];
+            int parentDepth = Math.max(0, segs.length - 1);
+            int parentIndent = parentDepth * 2;
+            int childIndent  = parentIndent + 2;
 
-            // 1) Try to find an existing line for the key (rare for "missing", but keep previous behavior)
-            int idx = findLineIndex(lines, plain, squoted, dquoted);
-            if (idx >= 0) {
-                lines.add(idx, " ".repeat(indent) + "# + missing");
-                continue;
-            }
+            // If the key already exists at the expected indent, skip
+            if (findKeyAtIndent(lines, last, childIndent) >= 0) continue;
 
-            // 2) If not found, insert immediately under its parent, beside a synthesized placeholder of the target key
-            if (ps.length > 1) {
-                String parent = ps[ps.length - 2];
-                int pIndent = (ps.length - 2) * 2;
-                String p1 = " ".repeat(pIndent) + parent + ":";
-                String p2 = " ".repeat(pIndent) + "'" + parent + "'" + ":";
-                String p3 = " ".repeat(pIndent) + "\"" + parent + "\"" + ":";
+            int parentStart = ensureParentBlock(lines, segs, segs.length - 1);
+            int insertAt = findBlockEnd(lines, parentStart);
 
-                int pIdx = findLineIndex(lines, p1, p2, p3);
-                if (pIdx >= 0) {
-                    // Insert just after the parent line so the marker is "beside" the intended key
-                    int insertAt = Math.min(pIdx + 1, lines.size());
-                    String ind = " ".repeat(indent);
-
-                    // Marker comment line
-                    lines.add(insertAt, ind + "# + missing key");
-                    // Synthesized placeholder of the missing key (so it's next to where it should be)
-                    lines.add(insertAt + 1, ind + last + ":");
-                    continue;
-                }
-            }
-
-            // 3) Fallback: append to the end with full dotted path (last resort)
-            lines.add("# + missing " + path);
+            String ci = " ".repeat(childIndent);
+            String rendered = renderYamlScalar(missingWithValues.get(path));
+            lines.add(insertAt,     ci + LinMsg.ks("linFile.file.missingKeys"));
+            lines.add(insertAt + 1, ci + last + ": " + rendered);
         }
         return String.join("\n", lines);
+    }
+
+    /** Render a simple YAML scalar (string/number/boolean). Strings are single-quoted with single quotes doubled. Null/complex values render as empty. */
+    private static String renderYamlScalar(Object v) {
+        if (v == null) return "";
+        if (v instanceof Number || v instanceof Boolean) return String.valueOf(v);
+        if (v instanceof CharSequence) {
+            String s = v.toString();
+            s = s.replace("'", "''");
+            return "'" + s + "'";
+        }
+        // For lists/maps or other complex objects, leave empty to avoid malformed YAML
+        return "";
+    }
+
+    /**
+     * Ensure the parent chain (all segments except the last) exists in the YAML text.
+     * Returns the line index where the parent key starts.
+     * If the parent already exists, returns its starting line index.
+     * If not, creates the necessary hierarchy at a sensible position (end of the nearest existing ancestor block).
+     */
+    private static int ensureParentBlock(java.util.List<String> lines, String[] segs, int depthExclusive) {
+        if (depthExclusive <= 0) {
+            // root-level; no parent segment
+            return ensureTopLevel(lines, segs[0], 0);
+        }
+        // Walk from top-most to the immediate parent, creating along the way if needed
+        int startIdx = -1;
+        int levelIndent = 0;
+        for (int i = 0; i < depthExclusive; i++) {
+            String key = segs[i];
+            levelIndent = i * 2;
+            int found = findKeyAtIndent(lines, key, levelIndent);
+            if (found < 0) {
+                // Need to create under the previous parent block (or root if i==0)
+                int anchor = (startIdx >= 0) ? findBlockEnd(lines, startIdx) : findDocumentEnd(lines);
+                String ind = " ".repeat(levelIndent);
+                lines.add(anchor, ind + key + ":");
+                startIdx = anchor; // new block starts here
+            } else {
+                startIdx = found;
+            }
+        }
+        return startIdx;
+    }
+
+    /** Find the line index of a key at the given indent, supporting plain and quoted styles. */
+    private static int findKeyAtIndent(List<String> lines, String key, int indent) {
+        String plain   = " ".repeat(indent) + key + ":";
+        String squoted = " ".repeat(indent) + "'" + key + "'" + ":";
+        String dquoted = " ".repeat(indent) + "\"" + key + "\":";
+        for (int i = 0; i < lines.size(); i++) {
+            String line = lines.get(i);
+            if (line.startsWith(plain) || line.startsWith(squoted) || line.startsWith(dquoted)) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    /** Return the index just after the end of the block that starts at startIdx. */
+    private static int findBlockEnd(List<String> lines, int startIdx) {
+        if (startIdx < 0 || startIdx >= lines.size()) return lines.size();
+        int parentIndent = leadingSpaces(lines.get(startIdx));
+        for (int i = startIdx + 1; i < lines.size(); i++) {
+            String ln = lines.get(i);
+            String t = ln.stripLeading();
+            if (t.isEmpty() || t.startsWith("#")) continue; // 注释/空行不结束块
+            int ind = leadingSpaces(ln);
+            if (ind <= parentIndent && t.endsWith(":")) {
+                return i;
+            }
+        }
+        return lines.size();
+    }
+
+    /** Find the insertion anchor at end of current document (after header comments if any). */
+    private static int findDocumentEnd(java.util.List<String> lines) {
+        // Place after any initial header comments (lines starting with '#')
+        int i = 0;
+        while (i < lines.size() && (lines.get(i).isBlank() || lines.get(i).trim().startsWith("#"))) i++;
+        // then after all top-level content
+        return lines.size();
+    }
+
+    private static int leadingSpaces(String s) {
+        int i = 0;
+        while (i < s.length() && s.charAt(i) == ' ') i++;
+        return i;
+    }
+
+    private static boolean isKeyLikeLine(String s) {
+        String t = s.stripLeading();
+        // treat comments and blanks as non-terminators
+        if (t.isEmpty() || t.startsWith("#")) return false;
+        // it's a terminator when it looks like a YAML key (ends with ':' at top of token)
+        return t.contains(":");
+    }
+
+    // Helper for root-level
+    private static int ensureTopLevel(java.util.List<String> lines, String key, int indent) {
+        int found = findKeyAtIndent(lines, key, indent);
+        if (found >= 0) return found;
+        int anchor = findDocumentEnd(lines);
+        String ind = " ".repeat(indent);
+        lines.add(anchor, ind + key + ":");
+        return anchor;
     }
 
     private static int findLineIndex(java.util.List<String> lines, String... patterns) {
@@ -532,6 +656,36 @@ public final class LangServiceImpl implements LangService {
             curr.put(leaf, "");
         }
     }
+
+    @SuppressWarnings("unchecked")
+    private static Map<String, Object> deepCopyMap(Map<String, Object> src) {
+        Map<String, Object> out = new LinkedHashMap<>();
+        for (var e : src.entrySet()) {
+            Object v = e.getValue();
+            if (v instanceof Map<?,?> m) {
+                out.put(e.getKey(), deepCopyMap((Map<String,Object>)(Map<?,?>)m));
+            } else if (v instanceof List<?> l) {
+                out.put(e.getKey(), new ArrayList<>(l));
+            } else {
+                out.put(e.getKey(), v);
+            }
+        }
+        return out;
+    }
+
+    @SuppressWarnings("unchecked")
+    private static void deletePath(Map<String, Object> root, String dottedPath) {
+        if (dottedPath == null || dottedPath.isBlank()) return;
+        String[] ps = dottedPath.split("\\.");
+        Map<String, Object> curr = root;
+        for (int i = 0; i < ps.length - 1; i++) {
+            Object n = curr.get(ps[i]);
+            if (!(n instanceof Map)) return; // 不存在则无需处理
+            curr = (Map<String, Object>) n;
+        }
+        curr.remove(ps[ps.length - 1]);
+    }
+
 
     /**
      * 构建与 YamlCodec 兼容的注释表：

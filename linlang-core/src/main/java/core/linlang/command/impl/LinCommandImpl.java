@@ -289,7 +289,7 @@ public final class LinCommandImpl implements LinCommand {
                     n.exec.fn.run(ctx);
                 } catch (Exception ex) {
                     LinLog.warn("cmd.exec.exception", ex);
-                    bridge.msg(sender, prefix + " " + messages.get("error.exception"));
+                    bridge.msg(sender, prefix + messages.get("error.exception"));
                     return true;
                 }
                 return true;
@@ -302,7 +302,7 @@ public final class LinCommandImpl implements LinCommand {
                 // 参数阶段出错
                 if (!(e instanceof IllegalArgumentException)) {
                     // 明确的运行，类型异常：直接提示异常消息，并在控制台打印
-                    bridge.msg(sender, prefix + " " + messages.get("error.exception"));
+                    bridge.msg(sender, prefix + messages.get("error.exception"));
                     LinLog.warn("LinCommand IllegalArgumentException", e);
                     return true;
                 }
@@ -313,24 +313,24 @@ public final class LinCommandImpl implements LinCommand {
 
         // 匹配失败原因
         if (!anyLiteralMatched || (!anySecondLiteralExact && args.length >= 1)) {
-            bridge.msg(sender, prefix + " " + messages.get("error.unknown-command"));
+            bridge.msg(sender, prefix + messages.get("error.unknown-command"));
             return false;
         }
         if (anyPermDenied) {
-            bridge.msg(sender, prefix + " " + messages.get("error.no-perm"));
+            bridge.msg(sender, prefix + messages.get("error.no-perm"));
             return true;
         }
         if (anyTargetDenied) {
-            bridge.msg(sender, prefix + " " + messages.get("error.exec-target"));
+            bridge.msg(sender, prefix + messages.get("error.exec-target"));
             return true;
         }
         if (bestUsage != null) {
-            bridge.msg(sender, prefix + " " + messages.get("error.bad-arg"));
+            bridge.msg(sender, prefix + messages.get("error.bad-arg"));
             bridge.msg(sender, messages.get("help.usage") + "§f" + bestUsage);
             return true;
         }
         // 理论上不会走到这里，但如果真的到了，这个兜底
-        bridge.msg(sender, prefix + " " + messages.get("error.unknown-command"));
+        bridge.msg(sender, prefix + messages.get("error.unknown-command"));
         return false;
     }
 
@@ -547,7 +547,7 @@ public final class LinCommandImpl implements LinCommand {
     // 内置 help 实现
     private void renderHelp(Object sender, PlatformBridge bridge, int page) {
         // Header
-        bridge.msg(sender, prefix + " " + messages.get("help.header"));
+        bridge.msg(sender, prefix + messages.get("help.header"));
         bridge.msg(sender, messages.get("help.legend"));
 
         // Pagination

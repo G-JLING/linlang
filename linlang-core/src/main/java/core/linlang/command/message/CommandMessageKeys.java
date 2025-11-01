@@ -88,6 +88,10 @@ public class CommandMessageKeys {
         @I18nComment(locale = "zh_CN", lines = "输入的内容不是此参数规则允许的内容")
         @I18nComment(locale = "en_GB", lines = "Input does not match the allowed pattern")
         public String stringRegex;
+
+        @I18nComment(locale = "zh_CN", lines = "发生了内部错误，请联系 JLING(magicpowered@icloud.com)")
+        @I18nComment(locale = "en_GB", lines = "An internal error has occurred. Please contact JLING(magicpowered@icloud.com)")
+        public String exception;
     }
     public static class Help {
         @I18nComment(locale = "zh_CN", lines = "帮助")

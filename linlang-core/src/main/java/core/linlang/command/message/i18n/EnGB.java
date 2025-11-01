@@ -7,7 +7,7 @@ import api.linlang.file.annotations.NamingStyle;
 import api.linlang.file.types.FileType;
 
 @NamingStyle(NamingStyle.Style.KEBAB)
-@LangPack(locale = "en_GB", format = FileType.YAML, path = "linlang/lincommand/lang")
+@LangPack(locale = "en_GB", format = FileType.YAML, path = "linlang/lincommand/message")
 public final class EnGB implements LocaleProvider<CommandMessageKeys> {
 
     @Override public String locale() { return "en_GB"; }
@@ -28,6 +28,7 @@ public final class EnGB implements LocaleProvider<CommandMessageKeys> {
         k.error.noPerm          = "§cError! §fYou do not have permission to execute this command";
         k.error.unknownCommand  = "§cError! §fThe command you entered does not exist";
         k.error.execTarget      = "§cError! §fThis command cannot be executed from your current context";
+        k.error.exception       = "§cError! An internal error has occurred. Please contact JLING(magicpowered@icloud.com)";
         k.error.typeNoResolver  = "§fUnknown parameter resolver";
         k.error.enumNotFount    = "§fThe value entered is not a valid enum option";
         k.error.intRange        = "§fThe value entered is not an integer, or is out of range for int";

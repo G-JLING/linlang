@@ -12,7 +12,7 @@ import java.io.IOException;
 
 /*
  * 用于把 Watcher 回调切回主线程，并按文件夹粗粒度触发 reload。
- * 按需选择监听 config / addons / lang。
+ * 按需选择监听 config / addons / message。
  */
 public final class BukkitFsHotReloader implements AutoCloseable {
     private final Plugin plugin;

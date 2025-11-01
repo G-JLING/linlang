@@ -23,7 +23,6 @@ public final class YamlCodec {
         synchronized (YamlCodec.class) {
             if (YAML != null) return YAML;
             try {
-                LinLog.debug("YamlCodec initializing");
                 Class<?> dumperClz = Class.forName("org.yaml.snakeyaml.DumperOptions");
                 Object opt = dumperClz.getConstructor().newInstance();
                 Object flowEnum = Class.forName("org.yaml.snakeyaml.DumperOptions$FlowStyle")
@@ -46,7 +45,6 @@ public final class YamlCodec {
                 } catch (Throwable ignore) {
                     ver = "unknown";
                 }
-                LinLog.debug("YamlCodec ready", "impl", yamlClz.getName(), "version", ver);
                 return YAML;
             } catch (Throwable t) {
                 LinLog.error("YamlCodec init failed", t);

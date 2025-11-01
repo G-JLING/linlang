@@ -21,7 +21,10 @@ public interface LangService {
      * <p>文件存在则优先用文件值，缺失键用提供者的默认值回填，并生成差异提示。</p>
      */
     <T> T bind(Class<T> keysClass, String locale,
-                     List<? extends LocaleProvider<T>> providers);
+                     List<? extends LocaleProvider<T>> providers, boolean emit);
+
+    <T> T bind(Class<T> keysClass, String locale,
+               List<? extends LocaleProvider<T>> providers);
     /** 保存指定语言对象到文件。 */
     <T> void save(Class<T> keysClass, String locale);
 
@@ -40,4 +43,5 @@ public interface LangService {
      * @param args 可选参数，交由实现处理（占位替换等）
      */
     String tr(String key, Object... args);
+
 }

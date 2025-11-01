@@ -4,6 +4,7 @@ package core.linlang.file.impl;
 
 import api.linlang.audit.called.LinLog;
 import api.linlang.file.annotations.ConfigVersion;
+import api.linlang.file.annotations.NoEmit;
 import api.linlang.file.implement.Migrator;
 import api.linlang.file.doc.MutableDocument;
 import api.linlang.file.types.FileType;
@@ -24,6 +25,8 @@ public final class ConfigServiceImpl implements ConfigService {
     private final List<Migrator> migrators;
     // Keep track of bound config instances so we can flush them all with saveAll()
     private final java.util.Map<Class<?>, Object> liveConfigs = new java.util.LinkedHashMap<>();
+    // 记录每个配置类是否需要落盘（bind/save 可覆盖；@NoEmit 会强制不落盘）
+    private final java.util.Map<Class<?>, Boolean> emitFlags = new java.util.LinkedHashMap<>();
 
     public ConfigServiceImpl(PathResolver paths, List<Migrator> migrators) {
         this.paths = paths;
@@ -32,13 +35,20 @@ public final class ConfigServiceImpl implements ConfigService {
 
     @Override
     public <T> T bind(Class<T> type) {
-        Binder.BoundConfig meta = Binder.configOf(type).orElseThrow(() -> new IllegalArgumentException("[linlang] missing @ConfigFile on " + type));
+        return bind(type, true);
+    }
+
+    @Override
+    public <T> T bind(Class<T> type, boolean emit) {
+        Binder.BoundConfig meta = Binder.configOf(type)
+                .orElseThrow(() -> new IllegalArgumentException("[linlang] missing @ConfigFile on " + type));
         Path file = toFile(meta.path(), meta.name(), meta.fmt());
         boolean exists = IOs.exists(file);
+
         Map<String, Object> doc = loadOrInit(file, type, meta);
-        // 版本迁移
         applyMigrations(type, doc);
-        // 合并默认值并收集缺失键（仅当文件已存在）
+
+        // 生成默认值并合并、收集缺失键
         Map<String, Object> defaults = new LinkedHashMap<>();
         try {
             Object defInst = type.getDeclaredConstructor().newInstance();
@@ -47,33 +57,30 @@ public final class ConfigServiceImpl implements ConfigService {
             throw new RuntimeException(e);
         }
         java.util.Set<String> missing = new java.util.LinkedHashSet<>();
-        if (exists) {
-            mergeDefaultsCollect(defaults, doc, "", missing);
-        } else {
-            // 首次生成已在 loadOrInit 完成，这里不标记缺失
-        }
+        if (exists) mergeDefaultsCollect(defaults, doc, "", missing);
+
+        // 实例化并填充
         T inst = newInstance(type);
         populate(inst, meta.keyMap(), doc);
+
+        // 生成 diff（缺失键旁插入注释+默认值）
         if (!missing.isEmpty()) {
-            LinLog.warn("[linlang] " + file + " 缺失键 " + missing.size() + " 个。想要了解详情，请见 " + file.getFileName() + "-diffrent 文件");
             writeDiff(file, meta.fmt(), doc, missing);
         }
-        // 提取注释：仅包含普通 @Comment
-        Map<String, List<String>> comments = new LinkedHashMap<>();
-        try {
-            // 普通注释
-            Map<String, List<String>> baseComments = TreeMapper.extractComments(type);
-            if (baseComments != null) comments.putAll(baseComments);
-        } catch (Throwable t) {
-            LinLog.warn("[linlang] failed to extract comments: " + t.getMessage());
+
+        // 写回文件（是否落盘受 emit 和 @NoEmit 控制）
+        Map<String, List<String>> comments = TreeMapper.extractComments(type);
+        boolean annotatedNoEmit = type.isAnnotationPresent(NoEmit.class);
+        boolean shouldEmit = emit && !annotatedNoEmit;
+        if (shouldEmit) {
+            persist(file, meta.fmt(), doc, comments);
         }
-        persist(file, meta.fmt(), doc, comments);
-        // Remember the bound instance for future saveAll()
-         synchronized (liveConfigs) { liveConfigs.put(type, inst); }
-         return inst;
+
+        // 记录实例与落盘偏好
+        synchronized (liveConfigs) { liveConfigs.put(type, inst); }
+        synchronized (emitFlags)   { emitFlags.put(type, shouldEmit); }
+        return inst;
     }
-
-
 
     @Override
     public <T> void save(Class<T> type, T config) {
@@ -83,21 +90,37 @@ public final class ConfigServiceImpl implements ConfigService {
                 .orElseThrow(() -> new IllegalArgumentException("[linlang] missing @ConfigFile on " + type));
         Path file = toFile(meta.path(), meta.name(), meta.fmt());
 
-        // Snapshot current object fields into a flat doc
         Map<String, Object> doc = new LinkedHashMap<>();
         export(config, meta.keyMap(), doc);
 
-        // 提取注释：仅包含普通 @Comment
-        Map<String, List<String>> comments = new LinkedHashMap<>();
-        try {
-            // 普通注释
-            Map<String, List<String>> baseComments = TreeMapper.extractComments(type);
-            if (baseComments != null) comments.putAll(baseComments);
-        } catch (Throwable t) {
-            LinLog.warn("[linlang] failed to extract comments: " + t.getMessage());
+        Map<String, List<String>> comments = TreeMapper.extractComments(type);
+
+        boolean annotatedNoEmit = type.isAnnotationPresent(NoEmit.class);
+        boolean shouldEmit;
+        synchronized (emitFlags) {
+            Boolean flag = emitFlags.get(type);
+            shouldEmit = (flag != null ? flag : true) && !annotatedNoEmit;
         }
-        // Write with comments if available
-        persist(file, meta.fmt(), doc, comments);
+        if (shouldEmit) persist(file, meta.fmt(), doc, comments);
+    }
+
+    public <T> void save(Class<T> type, T config, boolean emit) {
+        if (config == null) throw new IllegalArgumentException("config is null");
+
+        Binder.BoundConfig meta = Binder.configOf(type)
+                .orElseThrow(() -> new IllegalArgumentException("[linlang] missing @ConfigFile on " + type));
+        Path file = toFile(meta.path(), meta.name(), meta.fmt());
+
+        Map<String, Object> doc = new LinkedHashMap<>();
+        export(config, meta.keyMap(), doc);
+
+        Map<String, List<String>> comments = TreeMapper.extractComments(type);
+
+        boolean annotatedNoEmit = type.isAnnotationPresent(NoEmit.class);
+        boolean shouldEmit = emit && !annotatedNoEmit;
+        synchronized (emitFlags) { emitFlags.put(type, shouldEmit); }
+
+        if (shouldEmit) persist(file, meta.fmt(), doc, comments);
     }
 
     public void saveAll() {
@@ -108,26 +131,23 @@ public final class ConfigServiceImpl implements ConfigService {
         for (var e : snapshot) {
             Class<?> type = e.getKey();
             Object config = e.getValue();
+
+            boolean annotatedNoEmit = type.isAnnotationPresent(NoEmit.class);
+            boolean shouldEmit;
+            synchronized (emitFlags) {
+                Boolean flag = emitFlags.get(type);
+                shouldEmit = (flag != null ? flag : true) && !annotatedNoEmit;
+            }
             try {
                 Binder.BoundConfig meta = Binder.configOf(type)
                         .orElseThrow(() -> new IllegalArgumentException("[linlang] missing @ConfigFile on " + type));
                 Path file = toFile(meta.path(), meta.name(), meta.fmt());
 
-                // Export current in-memory values
                 Map<String, Object> doc = new LinkedHashMap<>();
                 export(config, meta.keyMap(), doc);
 
-                // 提取注释：仅包含普通 @Comment
-                Map<String, List<String>> comments = new LinkedHashMap<>();
-                try {
-                    // 普通注释
-                    Map<String, List<String>> baseComments = TreeMapper.extractComments(type);
-                    if (baseComments != null) comments.putAll(baseComments);
-                } catch (Throwable t) {
-                    LinLog.warn("[linlang] failed to extract comments: " + t.getMessage());
-                }
-                // Attach comments if any and persist
-                persist(file, meta.fmt(), doc, comments);
+                Map<String, List<String>> comments = TreeMapper.extractComments(type);
+                if (shouldEmit) persist(file, meta.fmt(), doc, comments);
             } catch (Exception ex) {
                 LinLog.warn("[linlang] saveAll failed for " + type + ": " + ex);
             }
@@ -259,10 +279,21 @@ public final class ConfigServiceImpl implements ConfigService {
     private void writeDiff(Path f, FileType fmt, Map<String, Object> fullDoc, java.util.Set<String> missing) {
         if (missing.isEmpty()) return;
         try {
-            Path diff = f.getParent().resolve(stripExt(f.getFileName().toString()) + "-diffrent" + extOf(fmt));
+            Path diff = f.getParent().resolve(stripExt(f.getFileName().toString()) + "-diff" + extOf(fmt));
             if (fmt == FileType.YAML) {
-                String base = YamlCodec.dump(fullDoc);
-                String marked = insertYamlMissingMarkers(base, missing);
+                // 计算每个缺失路径的默认值
+                Map<String, Object> missingVals = new LinkedHashMap<>();
+                for (String path : missing) {
+                    Object v = readPath(fullDoc, path);
+                    missingVals.put(path, v);
+                }
+                // 先删掉缺失键，避免重复，再插回去并附注释与默认值
+                Map<String, Object> pruned = deepCopyMap(fullDoc);
+                for (String path : missing) {
+                    deletePath(pruned, path);
+                }
+                String base = YamlCodec.dump(pruned);
+                String marked = insertYamlMissingMarkers(base, missingVals);
                 IOs.writeString(diff, marked);
             } else {
                 Map<String, Object> wrapper = new LinkedHashMap<>();
@@ -301,6 +332,142 @@ public final class ConfigServiceImpl implements ConfigService {
 
     private static String extOf(FileType fmt) {
         return fmt == FileType.YAML ? ".yml" : ".json";
+    }
+
+    private static String insertYamlMissingMarkers(String yaml, Map<String, Object> missingWithValues) {
+        List<String> lines = new ArrayList<>(Arrays.asList(yaml.split("\n", -1)));
+        List<String> paths = new ArrayList<>(missingWithValues.keySet());
+        Collections.sort(paths);
+
+        for (String path : paths) {
+            String[] segs = path.split("\\.");
+            if (segs.length == 0) continue;
+            String last = segs[segs.length - 1];
+            int parentDepth = Math.max(0, segs.length - 1);
+            int parentIndent = parentDepth * 2;
+            int childIndent  = parentIndent + 2;
+
+            if (findKeyAtIndent(lines, last, childIndent) >= 0) continue;
+
+            int parentStart = ensureParentBlock(lines, segs, segs.length - 1);
+            int insertAt = findBlockEnd(lines, parentStart);
+
+            String ci = " ".repeat(childIndent);
+            String rendered = renderYamlScalar(missingWithValues.get(path));
+            lines.add(insertAt,     ci + "# + missing key");
+            lines.add(insertAt + 1, ci + last + ": " + rendered);
+        }
+        return String.join("\n", lines);
+    }
+
+    private static String renderYamlScalar(Object v) {
+        if (v == null) return "";
+        if (v instanceof Number || v instanceof Boolean) return String.valueOf(v);
+        if (v instanceof CharSequence) {
+            String s = v.toString().replace("'", "''");
+            return "'" + s + "'";
+        }
+        return "";
+    }
+
+    private static int ensureParentBlock(java.util.List<String> lines, String[] segs, int depthExclusive) {
+        if (depthExclusive <= 0) {
+            return ensureTopLevel(lines, segs[0], 0);
+        }
+        int startIdx = -1;
+        int levelIndent = 0;
+        for (int i = 0; i < depthExclusive; i++) {
+            String key = segs[i];
+            levelIndent = i * 2;
+            int found = findKeyAtIndent(lines, key, levelIndent);
+            if (found < 0) {
+                int anchor = (startIdx >= 0) ? findBlockEnd(lines, startIdx) : findDocumentEnd(lines);
+                String ind = " ".repeat(levelIndent);
+                lines.add(anchor, ind + key + ":");
+                startIdx = anchor;
+            } else {
+                startIdx = found;
+            }
+        }
+        return startIdx;
+    }
+
+    private static int findKeyAtIndent(List<String> lines, String key, int indent) {
+        String plain   = " ".repeat(indent) + key + ":";
+        String squoted = " ".repeat(indent) + "'" + key + "'" + ":";
+        String dquoted = " ".repeat(indent) + "\"" + key + "\":";
+        for (int i = 0; i < lines.size(); i++) {
+            String line = lines.get(i);
+            if (line.startsWith(plain) || line.startsWith(squoted) || line.startsWith(dquoted)) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    private static int findBlockEnd(List<String> lines, int startIdx) {
+        if (startIdx < 0 || startIdx >= lines.size()) return lines.size();
+        int parentIndent = leadingSpaces(lines.get(startIdx));
+        for (int i = startIdx + 1; i < lines.size(); i++) {
+            String ln = lines.get(i);
+            String t = ln.stripLeading();
+            if (t.isEmpty() || t.startsWith("#")) continue;
+            int ind = leadingSpaces(ln);
+            if (ind <= parentIndent && t.endsWith(":")) {
+                return i;
+            }
+        }
+        return lines.size();
+    }
+
+    private static int findDocumentEnd(java.util.List<String> lines) {
+        int i = 0;
+        while (i < lines.size() && (lines.get(i).isBlank() || lines.get(i).trim().startsWith("#"))) i++;
+        return lines.size();
+    }
+
+    private static int ensureTopLevel(java.util.List<String> lines, String key, int indent) {
+        int found = findKeyAtIndent(lines, key, indent);
+        if (found >= 0) return found;
+        int anchor = findDocumentEnd(lines);
+        String ind = " ".repeat(indent);
+        lines.add(anchor, ind + key + ":");
+        return anchor;
+    }
+
+    private static int leadingSpaces(String s) {
+        int i = 0;
+        while (i < s.length() && s.charAt(i) == ' ') i++;
+        return i;
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Map<String, Object> deepCopyMap(Map<String, Object> src) {
+        Map<String, Object> out = new LinkedHashMap<>();
+        for (var e : src.entrySet()) {
+            Object v = e.getValue();
+            if (v instanceof Map<?,?> m) {
+                out.put(e.getKey(), deepCopyMap((Map<String,Object>)(Map<?,?>)m));
+            } else if (v instanceof List<?> l) {
+                out.put(e.getKey(), new ArrayList<>(l));
+            } else {
+                out.put(e.getKey(), v);
+            }
+        }
+        return out;
+    }
+
+    @SuppressWarnings("unchecked")
+    private static void deletePath(Map<String, Object> root, String dottedPath) {
+        if (dottedPath == null || dottedPath.isBlank()) return;
+        String[] ps = dottedPath.split("\\.");
+        Map<String, Object> curr = root;
+        for (int i = 0; i < ps.length - 1; i++) {
+            Object n = curr.get(ps[i]);
+            if (!(n instanceof Map)) return;
+            curr = (Map<String, Object>) n;
+        }
+        curr.remove(ps[ps.length - 1]);
     }
 
 }

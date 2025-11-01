@@ -24,6 +24,7 @@ final class DefaultCommandMessage implements CommandMessages {
             case "error.exec-target"            -> "§c错误! §f此命令不可以在当前位置执行";
             case "error.no-perm"                -> "§c错误! §f您没有执行此命令的权限";
             case "error.unknown-command"        -> "§c错误! §f您输入了一个不存在的命令";
+            case "error.exception"              -> "§c错误! 发生了一个内部错误，请联系 JLING(magicpowered@icloud.com)";
             case "error.type.no-resolver"       -> "§f未知的参数解析器";
             case "error.enum.notfound"          -> "§f输入的内容不是有效的枚举参数";
             case "error.int.range"              -> "§f输入的内容不是整数类型，或超出了 int 类型允许的界限";

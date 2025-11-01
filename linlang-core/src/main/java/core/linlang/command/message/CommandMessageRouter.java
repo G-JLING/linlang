@@ -22,6 +22,7 @@ public final class CommandMessageRouter implements CommandMessages {
             case "error.type.no-resolver"   -> keys.error.typeNoResolver;
             case "error.exec-target"        -> keys.error.execTarget;
             case "error.unknown-command"    -> keys.error.unknownCommand;
+            case "error.exception"          -> keys.error.exception;
             case "help.header"              -> keys.help.header;
             case "help.legend"              -> keys.help.legend;
             case "help.usage"               -> keys.help.usage;

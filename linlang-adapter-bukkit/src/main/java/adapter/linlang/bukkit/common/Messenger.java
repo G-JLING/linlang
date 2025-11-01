@@ -39,7 +39,7 @@ public final class Messenger {
 
     /**
      * 使用 {@link LangService} 作为翻译源的构造器。
-     * <p>等价于传入 {@code translator = lang::tr}。</p>
+     * <p>等价于传入 {@code translator = message::tr}。</p>
      *
      * @param lang 语言服务实例，用于根据消息键解析模板；不可为 {@code null}
      */

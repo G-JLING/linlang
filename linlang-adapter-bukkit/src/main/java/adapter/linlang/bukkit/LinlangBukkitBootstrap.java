@@ -5,6 +5,8 @@ package adapter.linlang.bukkit;
 import adapter.linlang.bukkit.file.common.file.BukkitFsHotReloader;
 import adapter.linlang.bukkit.file.common.file.BukkitPathResolver;
 import adapter.linlang.bukkit.runtime.LinlangBootstrapRuntime;
+import api.linlang.audit.common.LinMsg;
+import api.linlang.audit.common.LinlangInternalMessageKeys;
 import api.linlang.file.service.ConfigService;
 import api.linlang.database.services.DataService;
 import api.linlang.file.service.LangService;
@@ -17,6 +19,7 @@ import core.linlang.database.impl.DataServiceImpl;
 import core.linlang.file.impl.LangServiceImpl;
 import core.linlang.file.runtime.PathResolver;
 import api.linlang.database.types.DbType;
+import lombok.Getter;
 import org.bukkit.plugin.java.JavaPlugin;
 
 import java.util.List;
@@ -30,8 +33,11 @@ public final class LinlangBukkitBootstrap implements AutoCloseable {
         return new LinlangBukkitBootstrap(plugin);
     }
 
+    @Getter
     public final ConfigServiceImpl config;
+    @Getter
     public final LangServiceImpl lang;
+    @Getter
     public final DataServiceImpl data;
 
     public LinlangBukkitCommand commands;
@@ -46,6 +52,7 @@ public final class LinlangBukkitBootstrap implements AutoCloseable {
     // 装配方法
     public LinlangBukkitBootstrap(JavaPlugin plugin) {
         this.plugin = plugin;
+
 
         // 1) 核心路径解析与服务初始化
         this.resolver = new BukkitPathResolver(plugin);
@@ -62,7 +69,9 @@ public final class LinlangBukkitBootstrap implements AutoCloseable {
         });
 
         // 3) 使用运行期辅助类初始化审计和命令
-        this.runtime = new LinlangBootstrapRuntime(plugin, this.lang);
+        this.runtime = new LinlangBootstrapRuntime(plugin, this);
+
+        this.runtime.installLinMsg();
         this.runtime.installAudit(false);
         this.runtime.initCommands();
         this.commands = this.runtime.getCommands();

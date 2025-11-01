@@ -7,7 +7,7 @@ import api.linlang.file.annotations.NamingStyle;
 import api.linlang.file.types.FileType;
 
 @NamingStyle(NamingStyle.Style.KEBAB)
-@LangPack(locale = "zh_CN", format = FileType.YAML, path = "linlang/lincommand/lang")
+@LangPack(locale = "zh_CN", format = FileType.YAML, path = "linlang/lincommand/message")
 public final class ZhCN implements LocaleProvider<CommandMessageKeys> {
 
     @Override public String locale() { return "zh_CN"; }
@@ -28,6 +28,7 @@ public final class ZhCN implements LocaleProvider<CommandMessageKeys> {
         k.error.noPerm          = "§c错误! §f您没有执行此命令的权限";
         k.error.unknownCommand  = "§c错误! §f您输入了一个不存在的命令";
         k.error.execTarget      = "§c错误! §f此命令不可以在当前位置执行";
+        k.error.exception       = "§c错误! 发生了一个内部错误，请联系 JLING(magicpowered@icloud.com)";
         k.error.typeNoResolver  = "§f未知的参数解析器";
         k.error.enumNotFount    = "§f输入的内容不是有效的枚举参数";
         k.error.intRange        = "§f输入的内容不是整数类型，或超出了 int 类型允许的界限";

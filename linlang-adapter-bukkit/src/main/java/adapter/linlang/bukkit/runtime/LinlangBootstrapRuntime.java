@@ -3,6 +3,8 @@ package adapter.linlang.bukkit.runtime;
 import adapter.linlang.bukkit.LinlangBukkitBootstrap;
 import adapter.linlang.bukkit.audit.common.BukkitAuditProvider;
 import adapter.linlang.bukkit.command.LinlangBukkitCommand;
+import api.linlang.audit.common.LinMsg;
+import api.linlang.audit.common.LinlangInternalMessageKeys;
 import core.linlang.command.message.CommandMessageKeys;
 import core.linlang.command.message.CommandMessageRouter;
 import core.linlang.command.message.i18n.EnGB;
@@ -36,10 +38,19 @@ public final class LinlangBootstrapRuntime implements AutoCloseable {
     private Function<JavaPlugin, String> prefixFn =
             p -> "§f[§d" + p.getDescription().getName() + "§f]";
 
-    public LinlangBootstrapRuntime(JavaPlugin plugin, LangServiceImpl lang) {
+    public LinlangBootstrapRuntime(JavaPlugin plugin, LinlangBukkitBootstrap bootstrap) {
         this.plugin = plugin;
-        this.lang = lang;
+        this.lang = bootstrap.getLang();
         this.preferredLocaleTag = String.valueOf(lang.getCurrent());
+    }
+
+    public void installLinMsg() {
+        var keysInstance = lang.bind(LinlangInternalMessageKeys.class,
+                lang.getCurrent().toString(),
+                List.of(new api.linlang.audit.common.i18n.ZhCN(), new api.linlang.audit.common.i18n.EnGB()));
+
+        LinMsg.installKeys(() -> keysInstance);
+        LinMsg.install(lang::tr);
     }
 
     // 安装/替换 Bukkit 审计（可选：使用 Plugin.getLogger()）
