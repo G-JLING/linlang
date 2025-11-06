@@ -1,7 +1,6 @@
 package core.linlang.file.impl;
 
 import api.linlang.audit.common.LinMsg;
-import api.linlang.audit.common.LinlangInternalMessageKeys;
 import api.linlang.file.annotations.NoEmit;
 
 // linlang-core/src/main/java/io/linlang/file/impl/LangServiceImpl.java
@@ -10,7 +9,7 @@ import api.linlang.audit.called.LinLog;
 import api.linlang.file.annotations.LangPack;
 import api.linlang.file.implement.LocaleProvider;
 import api.linlang.file.types.FileType;
-import core.linlang.file.runtime.PathResolver;
+import api.linlang.file.PathResolver;
 import core.linlang.file.runtime.TreeMapper;
 import api.linlang.file.service.LangService;
 import core.linlang.file.runtime.LocaleTag;
@@ -93,9 +92,16 @@ public final class LangServiceImpl implements LangService {
     private <T> T bindInternal(Class<T> keysClass, String locale,
                                List<? extends LocaleProvider<T>> providers,
                                boolean emitFlag) {
+        // Normalize locale and debug entry
+        locale = ensureLocale(locale, this.current);
+        LinLog.debug("[linlang-debug] [LangService] bindInternal.enter", "keys", keysClass.getName(), "locale", locale);
+
+        // Defensive providers null check, use provList for further usage
+        List<? extends LocaleProvider<T>> provList = providers == null ? Collections.emptyList() : providers;
+
         // 1) 选择 provider
         LocaleProvider<T> prov = null;
-        for (LocaleProvider<T> p : providers) {
+        for (LocaleProvider<T> p : provList) {
             if (p != null && p.locale().equalsIgnoreCase(locale)) {
                 prov = p;
                 break;
@@ -117,16 +123,14 @@ public final class LangServiceImpl implements LangService {
         java.util.Set<String> missing = new java.util.LinkedHashSet<>();
         mergeDefaultsCollect(defDoc, doc, "", missing);
 
-        // extract comments once for the requested locale (only meaningful for YAML)
         Map<String, java.util.List<String>> comments =
                 (pp.fmt() == FileType.YAML) ? extractCommentsByLocale(keysClass, locale) : java.util.Collections.emptyMap();
-        LinLog.debug("[linlang-debug] [LangService] comments.size", "n", (comments==null?0:comments.size()));
-        if (comments != null) for (var k: comments.keySet()) LinLog.debug("[linlang-debug] [LangService] comment-key", "path", k);
-        // NOTE: per-field @I18nComment requires the key to exist in the doc; ensureCommentAnchors() below guarantees anchors.
+        LinLog.debug("[linlang-debug] [LangService] comments.size", "n", (comments == null ? 0 : comments.size()));
+        if (comments != null)
+            for (var k : comments.keySet()) LinLog.debug("[linlang-debug] [LangService] comment-key", "path", k);
 
-        // a) Determine whether to actually emit:
         boolean annotatedNoEmit = keysClass.isAnnotationPresent(NoEmit.class)
-                || (providers != null && providers.stream().anyMatch(p -> p != null && p.getClass().isAnnotationPresent(NoEmit.class)));
+                || (!provList.isEmpty() && provList.stream().anyMatch(p -> p != null && p.getClass().isAnnotationPresent(NoEmit.class)));
         boolean shouldEmit = emitFlag && !annotatedNoEmit;
 
         if (!exists) {
@@ -134,6 +138,7 @@ public final class LangServiceImpl implements LangService {
                 ensureCommentAnchors(doc, comments);
                 LinLog.debug("[linlang-debug] [LangService] ensured anchors for comments");
                 persist(file, pp.fmt(), doc, comments);
+                LinLog.info(LinMsg.k("linFile.file.langChangeLocale"), "locale", locale, "file", file);
             }
         } else {
             if (shouldEmit && !missing.isEmpty()) {
@@ -143,6 +148,7 @@ public final class LangServiceImpl implements LangService {
                 ensureCommentAnchors(doc, comments);
                 LinLog.debug("[linlang-debug] [LangService] ensured anchors for comments");
                 persist(file, pp.fmt(), doc, comments);
+                LinLog.info(LinMsg.k("linFile.file.langChangeLocale"), "locale", locale, "file", file);
             }
         }
 
@@ -164,7 +170,13 @@ public final class LangServiceImpl implements LangService {
 
         // 5) 缓存扁平化：合并到该 locale 的总键表（避免多次 bind 覆盖之前的键）
         Map<String, String> flat = flatten(doc);
-        cache.computeIfAbsent(locale, k -> new LinkedHashMap<>()).putAll(flat);
+        LinLog.debug("[linlang-debug] [LangService] cache.merge", "locale", locale, "keys", flat.size());
+        Map<String, String> bucket = cache.get(locale);
+        if (bucket == null) {
+            bucket = new LinkedHashMap<>();
+            cache.put(locale, bucket);
+        }
+        bucket.putAll(flat);
         setLocale(locale);
         return holder;
     }
@@ -179,18 +191,22 @@ public final class LangServiceImpl implements LangService {
         TreeMapper.export(holder, out);
         var pp = resolvePackPath(keysClass, locale);
         Path f = bm.file != null ? bm.file : file(pp.path(), pp.name(), pp.fmt());
-        Map<String, Object> curr = IOs.exists(f)
-                ? (pp.fmt() == FileType.YAML ? YamlCodec.load(IOs.readString(f)) : JsonCodec.load(IOs.readString(f)))
-                : new LinkedHashMap<>();
-        mergeOverwrite(curr, out);
-        Map<String, java.util.List<String>> comments =
-                (pp.fmt() == FileType.YAML) ? extractCommentsByLocale(keysClass, locale) : java.util.Collections.emptyMap();
-        ensureCommentAnchors(curr, comments);
-        if (emit) {
-            persist(f, pp.fmt(), curr, comments);
+        try {
+            Map<String, Object> curr = IOs.exists(f)
+                    ? (pp.fmt() == FileType.YAML ? YamlCodec.load(IOs.readString(f)) : JsonCodec.load(IOs.readString(f)))
+                    : new LinkedHashMap<>();
+            mergeOverwrite(curr, out);
+            Map<String, java.util.List<String>> comments =
+                    (pp.fmt() == FileType.YAML) ? extractCommentsByLocale(keysClass, locale) : java.util.Collections.emptyMap();
+            ensureCommentAnchors(curr, comments);
+            if (emit) {
+                persist(f, pp.fmt(), curr, comments);
+            }
+            Map<String, String> flat = flatten(curr);
+            cache.computeIfAbsent(locale, k -> new LinkedHashMap<>()).putAll(flat);
+        } catch (Exception e) {
+            LinLog.warn(LinMsg.k("linFile.file.fileSaveConfigFailed"), "file", f, "reason", e.getMessage());
         }
-        Map<String, String> flat = flatten(curr);
-        cache.computeIfAbsent(locale, k -> new LinkedHashMap<>()).putAll(flat);
     }
 
     @Override
@@ -209,26 +225,22 @@ public final class LangServiceImpl implements LangService {
         }
     }
 
-
-
     @Override
     public void setLocale(String locale) {
-        this.current = LocaleTag.parse(locale);
+        String normalized = ensureLocale(locale, this.current);
+        LinLog.info(LinMsg.k("linCommand.commandLanguageSwitched"), "locale", normalized);
+        this.current = LocaleTag.parse(normalized);
     }
 
     @Override
     public String tr(String key, Object... args) {
-        // 读取当前语言；回退 en_US；最后回退为 key 本身
-        String v = val(current, key);
-        if (v == null) v = val(LocaleTag.parse("en_US"), key);
+        LocaleTag cur = this.current != null ? this.current : LocaleTag.parse("en_GB");
+        String v = val(cur, key);
+        if (v == null) v = val(LocaleTag.parse("en_GB"), key);
         if (v == null) v = key;
 
-        // 支持两种格式化：
-        // 1) KV 形式：("name", "Alice", "count", 5) → 替换 {name}、{count}
-        // 2) 位置形式：MessageFormat 兼容 → {0},{1}...
         try {
             if (args != null && args.length > 0) {
-                // KV 模式：参数个数为偶数且第一个为字符串键时启用
                 if ((args.length & 1) == 0 && args[0] instanceof String) {
                     for (int i = 0; i < args.length; i += 2) {
                         String k = String.valueOf(args[i]);
@@ -270,14 +282,26 @@ public final class LangServiceImpl implements LangService {
     }
 
     private void persist(Path f, FileType fmt, Map<String, Object> doc) {
-        IOs.writeString(f, fmt == FileType.YAML ? YamlCodec.dump(doc) : JsonCodec.dump(doc));
+        try {
+            IOs.writeString(f, fmt == FileType.YAML ? YamlCodec.dump(doc) : JsonCodec.dump(doc));
+            LinLog.info(LinMsg.k("linFile.file.fileSavedConfig"), "file", f);
+        } catch (Exception e) {
+            LinLog.warn(LinMsg.k("linFile.file.fileSaveConfigFailed"), "file", f, "reason", e.getMessage());
+            throw new RuntimeException(e);
+        }
     }
 
-    private void persist(Path file, FileType fmt, Map<String,Object> doc, Map<String,java.util.List<String>> comments) {
+    private void persist(Path file, FileType fmt, Map<String, Object> doc, Map<String, java.util.List<String>> comments) {
         String out = (fmt == FileType.YAML)
-                ? YamlCodec.dumpWithComments(doc, comments)   // ← 改这里
+                ? YamlCodec.dumpWithComments(doc, comments)
                 : JsonCodec.dump(doc);
-        IOs.writeString(file, out);
+        try {
+            IOs.writeString(file, out);
+            LinLog.info(LinMsg.k("linFile.file.fileSavedConfig"), "file", file);
+        } catch (Exception e) {
+            LinLog.warn(LinMsg.k("linFile.file.fileSaveConfigFailed"), "file", file, "reason", e.getMessage());
+            throw new RuntimeException(e);
+        }
     }
 
     private static <T> T newInstance(Class<T> t) {
@@ -346,6 +370,7 @@ public final class LangServiceImpl implements LangService {
     }
 
     private String val(LocaleTag tag, String key) {
+        if (tag == null) return null;
         Map<String, String> m = cache.get(tag.tag());
         return m == null ? null : m.get(key);
     }
@@ -459,14 +484,15 @@ public final class LangServiceImpl implements LangService {
                 String base = YamlCodec.dump(pruned);
                 String marked = insertYamlMissingMarkers(base, missingVals);
                 IOs.writeString(diff, marked);
+                LinLog.info(LinMsg.k("linFile.file.fileGeneratedDifferent"), "diff", diff);
             } else {
                 Map<String, Object> wrapper = new LinkedHashMap<>();
                 wrapper.put("_missing", new java.util.ArrayList<>(missing));
                 wrapper.put("_file", fullDoc);
                 IOs.writeString(diff, JsonCodec.dump(wrapper));
+                LinLog.info(LinMsg.k("linFile.file.fileGeneratedDifferent"), "diff", diff);
             }
-            LinLog.warn(LinMsg.k("linFile.file.fileMissingKeys", "file", f, "diff", missing.size()));
-
+            LinLog.warn(LinMsg.k("linFile.file.fileMissingKeys"), "file", f, "count", missing.size(), "diff", diff);
         } catch (Exception e) { /* swallow */ }
     }
 
@@ -490,9 +516,8 @@ public final class LangServiceImpl implements LangService {
             String last = segs[segs.length - 1];
             int parentDepth = Math.max(0, segs.length - 1);
             int parentIndent = parentDepth * 2;
-            int childIndent  = parentIndent + 2;
+            int childIndent = parentIndent + 2;
 
-            // If the key already exists at the expected indent, skip
             if (findKeyAtIndent(lines, last, childIndent) >= 0) continue;
 
             int parentStart = ensureParentBlock(lines, segs, segs.length - 1);
@@ -500,13 +525,12 @@ public final class LangServiceImpl implements LangService {
 
             String ci = " ".repeat(childIndent);
             String rendered = renderYamlScalar(missingWithValues.get(path));
-            lines.add(insertAt,     ci + LinMsg.ks("linFile.file.missingKeys"));
+            lines.add(insertAt, ci + LinMsg.ks("linFile.file.missingKeys"));
             lines.add(insertAt + 1, ci + last + ": " + rendered);
         }
         return String.join("\n", lines);
     }
 
-    /** Render a simple YAML scalar (string/number/boolean). Strings are single-quoted with single quotes doubled. Null/complex values render as empty. */
     private static String renderYamlScalar(Object v) {
         if (v == null) return "";
         if (v instanceof Number || v instanceof Boolean) return String.valueOf(v);
@@ -515,22 +539,14 @@ public final class LangServiceImpl implements LangService {
             s = s.replace("'", "''");
             return "'" + s + "'";
         }
-        // For lists/maps or other complex objects, leave empty to avoid malformed YAML
         return "";
     }
 
-    /**
-     * Ensure the parent chain (all segments except the last) exists in the YAML text.
-     * Returns the line index where the parent key starts.
-     * If the parent already exists, returns its starting line index.
-     * If not, creates the necessary hierarchy at a sensible position (end of the nearest existing ancestor block).
-     */
     private static int ensureParentBlock(java.util.List<String> lines, String[] segs, int depthExclusive) {
         if (depthExclusive <= 0) {
-            // root-level; no parent segment
             return ensureTopLevel(lines, segs[0], 0);
         }
-        // Walk from top-most to the immediate parent, creating along the way if needed
+
         int startIdx = -1;
         int levelIndent = 0;
         for (int i = 0; i < depthExclusive; i++) {
@@ -538,11 +554,10 @@ public final class LangServiceImpl implements LangService {
             levelIndent = i * 2;
             int found = findKeyAtIndent(lines, key, levelIndent);
             if (found < 0) {
-                // Need to create under the previous parent block (or root if i==0)
                 int anchor = (startIdx >= 0) ? findBlockEnd(lines, startIdx) : findDocumentEnd(lines);
                 String ind = " ".repeat(levelIndent);
                 lines.add(anchor, ind + key + ":");
-                startIdx = anchor; // new block starts here
+                startIdx = anchor;
             } else {
                 startIdx = found;
             }
@@ -550,9 +565,8 @@ public final class LangServiceImpl implements LangService {
         return startIdx;
     }
 
-    /** Find the line index of a key at the given indent, supporting plain and quoted styles. */
     private static int findKeyAtIndent(List<String> lines, String key, int indent) {
-        String plain   = " ".repeat(indent) + key + ":";
+        String plain = " ".repeat(indent) + key + ":";
         String squoted = " ".repeat(indent) + "'" + key + "'" + ":";
         String dquoted = " ".repeat(indent) + "\"" + key + "\":";
         for (int i = 0; i < lines.size(); i++) {
@@ -564,14 +578,13 @@ public final class LangServiceImpl implements LangService {
         return -1;
     }
 
-    /** Return the index just after the end of the block that starts at startIdx. */
     private static int findBlockEnd(List<String> lines, int startIdx) {
         if (startIdx < 0 || startIdx >= lines.size()) return lines.size();
         int parentIndent = leadingSpaces(lines.get(startIdx));
         for (int i = startIdx + 1; i < lines.size(); i++) {
             String ln = lines.get(i);
             String t = ln.stripLeading();
-            if (t.isEmpty() || t.startsWith("#")) continue; // 注释/空行不结束块
+            if (t.isEmpty() || t.startsWith("#")) continue; // 注释或空行不结束块
             int ind = leadingSpaces(ln);
             if (ind <= parentIndent && t.endsWith(":")) {
                 return i;
@@ -580,12 +593,10 @@ public final class LangServiceImpl implements LangService {
         return lines.size();
     }
 
-    /** Find the insertion anchor at end of current document (after header comments if any). */
     private static int findDocumentEnd(java.util.List<String> lines) {
-        // Place after any initial header comments (lines starting with '#')
         int i = 0;
         while (i < lines.size() && (lines.get(i).isBlank() || lines.get(i).trim().startsWith("#"))) i++;
-        // then after all top-level content
+
         return lines.size();
     }
 
@@ -597,13 +608,10 @@ public final class LangServiceImpl implements LangService {
 
     private static boolean isKeyLikeLine(String s) {
         String t = s.stripLeading();
-        // treat comments and blanks as non-terminators
         if (t.isEmpty() || t.startsWith("#")) return false;
-        // it's a terminator when it looks like a YAML key (ends with ':' at top of token)
         return t.contains(":");
     }
 
-    // Helper for root-level
     private static int ensureTopLevel(java.util.List<String> lines, String key, int indent) {
         int found = findKeyAtIndent(lines, key, indent);
         if (found >= 0) return found;
@@ -662,8 +670,8 @@ public final class LangServiceImpl implements LangService {
         Map<String, Object> out = new LinkedHashMap<>();
         for (var e : src.entrySet()) {
             Object v = e.getValue();
-            if (v instanceof Map<?,?> m) {
-                out.put(e.getKey(), deepCopyMap((Map<String,Object>)(Map<?,?>)m));
+            if (v instanceof Map<?, ?> m) {
+                out.put(e.getKey(), deepCopyMap((Map<String, Object>) (Map<?, ?>) m));
             } else if (v instanceof List<?> l) {
                 out.put(e.getKey(), new ArrayList<>(l));
             } else {
@@ -680,17 +688,12 @@ public final class LangServiceImpl implements LangService {
         Map<String, Object> curr = root;
         for (int i = 0; i < ps.length - 1; i++) {
             Object n = curr.get(ps[i]);
-            if (!(n instanceof Map)) return; // 不存在则无需处理
+            if (!(n instanceof Map)) return;
             curr = (Map<String, Object>) n;
         }
         curr.remove(ps[ps.length - 1]);
     }
 
-
-    /**
-     * 构建与 YamlCodec 兼容的注释表：
-     * 直接递归调用 TreeMapper.extractI18nComments(clz, locale)，并合并到 extractComments(clz) 的形状。
-     */
     private static Map<String, java.util.List<String>> extractCommentsByLocale(Class<?> clz, String locale) {
         Map<String, java.util.List<String>> base = TreeMapper.extractComments(clz);
         if (base == null) base = new java.util.LinkedHashMap<>();
@@ -702,4 +705,12 @@ public final class LangServiceImpl implements LangService {
         }
         return base;
     }
+
+    private static String ensureLocale(String locale, LocaleTag current) {
+        if (locale == null || locale.isBlank()) {
+            return current != null ? current.tag() : "zh_CN";
+        }
+        return locale;
+    }
+
 }

@@ -44,7 +44,16 @@ public final class LinMsg {
         if (root != null && path != null && !path.isBlank()) {
             try {
                 String val = getFieldStringValue(root, path);
-                if (val != null) return fmt(val, kv);
+                if (val != null) {
+                    String formatted = fmt(val, kv);
+                    if (!formatted.equals(val)) return formatted; // placeholders replaced
+                    // no placeholder replaced → append key=value pairs
+                    StringBuilder sb = new StringBuilder(formatted);
+                    for (int i = 0; i + 1 < kv.length; i += 2) {
+                        sb.append(" ").append(kv[i]).append("=").append(kv[i + 1]);
+                    }
+                    return sb.toString();
+                }
             } catch (Throwable ignore) { /* fallthrough to backend */ }
         }
         return f(path, kv);
@@ -62,7 +71,16 @@ public final class LinMsg {
         if (root != null && path != null && !path.isBlank()) {
             try {
                 String val = getFieldStringValue(root, path);
-                if (val != null) return fmt(val, kv);
+                if (val != null) {
+                    String formatted = fmt(val, kv);
+                    if (!formatted.equals(val)) return formatted; // placeholders replaced
+                    // no placeholder replaced → append key=value pairs
+                    StringBuilder sb = new StringBuilder(formatted);
+                    for (int i = 0; i + 1 < kv.length; i += 2) {
+                        sb.append(" ").append(kv[i]).append("=").append(kv[i + 1]);
+                    }
+                    return sb.toString();
+                }
             } catch (Throwable ignore) { }
         }
         return "# " + f(path, kv);

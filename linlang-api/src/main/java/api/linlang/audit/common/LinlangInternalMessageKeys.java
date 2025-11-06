@@ -27,6 +27,8 @@ public class LinlangInternalMessageKeys {
     @I18nComment(locale = "en_GB", lines = "LinFile related")
     public LinFile linFile = new LinFile();
 
+    public LinData linData = new LinData();
+
     @I18nComment(locale = "zh_CN", lines = "命令系统相关")
     @I18nComment(locale = "en_GB", lines = "LinCommand related")
     public LinCommand linCommand = new LinCommand();
@@ -93,6 +95,25 @@ public class LinlangInternalMessageKeys {
                     "热重载失败，请联系 " + ME + "。原因：{reason}";
 
         }
+    }
+
+    public static class LinData {
+
+        @I18nComment(locale = "zh_CN", lines = "初始化数据库")
+        @I18nComment(locale = "en_GB", lines = "Initialize database")
+        public String dbInit = "已初始化数据库：{type} {url}";
+
+        @I18nComment(locale = "zh_CN", lines = "确保表")
+        @I18nComment(locale = "en_GB", lines = "ensure table")
+        public String ensureTable = "已确保表：{table}";
+
+        @I18nComment(locale = "zh_CN", lines = "成功落盘")
+        @I18nComment(locale = "en_GB", lines = "persistence successful")
+        public String flushOk = "已落盘：{data}";
+
+        @I18nComment(locale = "zh_CN", lines = "落盘失败")
+        @I18nComment(locale = "en_GB", lines = "persistence failed")
+        public String flushFailed = "落盘失败：{data}，原因：{reason}";
     }
 
     public static class LinCommand {

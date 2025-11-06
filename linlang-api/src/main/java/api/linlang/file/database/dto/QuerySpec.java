@@ -1,4 +1,4 @@
-package api.linlang.database.dto;
+package api.linlang.file.database.dto;
 
 // linlang-called/src/main/java/io/linlang/file/QuerySpec.java
 

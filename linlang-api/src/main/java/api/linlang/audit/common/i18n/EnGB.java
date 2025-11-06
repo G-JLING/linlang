@@ -13,9 +13,13 @@ public class EnGB extends LinlangInternalMessageKeys implements LocaleProvider<L
 
     private static final String ME = LinlangInternalMessageKeys.ME;
 
-    @Override public String locale() { return "en_GB"; }
+    @Override
+    public String locale() {
+        return "en_GB";
+    }
 
-    @Override public void define(LinlangInternalMessageKeys k) {
+    @Override
+    public void define(LinlangInternalMessageKeys k) {
         // —— LinFile.File —— //
         this.linFile.file.missingKeys =
                 " + This key is missing in old file!";
@@ -37,6 +41,16 @@ public class EnGB extends LinlangInternalMessageKeys implements LocaleProvider<L
                 "Detected change: {file}";
         this.linFile.watcher.reloadFailed =
                 "Hot reload failed. Please contact " + ME + ". Reason: {reason}";
+
+        // —— LinData —— //
+        this.linData.dbInit =
+                "Initialize database: {type} {url}";
+        this.linData.ensureTable =
+                "Table: {table} has been ensured";
+        this.linData.flushOk =
+                "The database {data} has been stored on the disk";
+        this.linData.flushFailed =
+                "Database {data} failed to stored, reason: {reason}";
 
         // —— LinCommand —— //
         this.linCommand.commandSetPrefix =

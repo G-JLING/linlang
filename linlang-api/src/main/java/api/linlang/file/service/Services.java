@@ -1,6 +1,6 @@
 package api.linlang.file.service;
 
-import api.linlang.database.services.DataService;
+import api.linlang.file.database.services.DataService;
 
 /**
  *

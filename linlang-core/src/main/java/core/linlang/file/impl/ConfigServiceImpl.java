@@ -3,6 +3,7 @@ package core.linlang.file.impl;
 // linlang-core/src/main/java/io/linlang/file/impl/ConfigServiceImpl.java
 
 import api.linlang.audit.called.LinLog;
+import api.linlang.audit.common.LinMsg;
 import api.linlang.file.annotations.ConfigVersion;
 import api.linlang.file.annotations.NoEmit;
 import api.linlang.file.implement.Migrator;
@@ -11,7 +12,7 @@ import api.linlang.file.types.FileType;
 import core.linlang.file.runtime.TreeMapper;
 import core.linlang.json.JsonCodec;
 import core.linlang.file.runtime.Binder;
-import core.linlang.file.runtime.PathResolver;
+import api.linlang.file.PathResolver;
 import api.linlang.file.service.ConfigService;
 import core.linlang.file.util.IOs;
 import core.linlang.yaml.YamlCodec;
@@ -23,9 +24,7 @@ import java.util.*;
 public final class ConfigServiceImpl implements ConfigService {
     private final PathResolver paths;
     private final List<Migrator> migrators;
-    // Keep track of bound config instances so we can flush them all with saveAll()
     private final java.util.Map<Class<?>, Object> liveConfigs = new java.util.LinkedHashMap<>();
-    // 记录每个配置类是否需要落盘（bind/save 可覆盖；@NoEmit 会强制不落盘）
     private final java.util.Map<Class<?>, Boolean> emitFlags = new java.util.LinkedHashMap<>();
 
     public ConfigServiceImpl(PathResolver paths, List<Migrator> migrators) {
@@ -48,7 +47,6 @@ public final class ConfigServiceImpl implements ConfigService {
         Map<String, Object> doc = loadOrInit(file, type, meta);
         applyMigrations(type, doc);
 
-        // 生成默认值并合并、收集缺失键
         Map<String, Object> defaults = new LinkedHashMap<>();
         try {
             Object defInst = type.getDeclaredConstructor().newInstance();
@@ -149,7 +147,7 @@ public final class ConfigServiceImpl implements ConfigService {
                 Map<String, List<String>> comments = TreeMapper.extractComments(type);
                 if (shouldEmit) persist(file, meta.fmt(), doc, comments);
             } catch (Exception ex) {
-                LinLog.warn("[linlang] saveAll failed for " + type + ": " + ex);
+                LinLog.warn(LinMsg.k("linFile.file.fileSaveConfigFailed"), "file", type, "reason", ex.getMessage());
             }
         }
     }
@@ -183,7 +181,13 @@ public final class ConfigServiceImpl implements ConfigService {
         String out = (fmt == FileType.YAML)
                 ? YamlCodec.dumpWithComments(doc, comments)
                 : JsonCodec.dump(doc);
-        IOs.writeString(file, out);
+        try {
+            IOs.writeString(file, out);
+            LinLog.info(LinMsg.k("linFile.file.fileSavedConfig"), "file", file);
+        } catch (Exception e) {
+            LinLog.warn(LinMsg.k("linFile.file.fileSaveConfigFailed"), "file", file, "reason", e.getMessage());
+            throw new RuntimeException(e);
+        }
     }
     private void applyMigrations(Class<?> type, Map<String, Object> doc) {
         ConfigVersion ver = type.getAnnotation(ConfigVersion.class);
@@ -295,13 +299,15 @@ public final class ConfigServiceImpl implements ConfigService {
                 String base = YamlCodec.dump(pruned);
                 String marked = insertYamlMissingMarkers(base, missingVals);
                 IOs.writeString(diff, marked);
+                LinLog.info(LinMsg.k("linFile.file.fileGeneratedDifferent"), "diff", diff);
             } else {
                 Map<String, Object> wrapper = new LinkedHashMap<>();
                 wrapper.put("_missing", new java.util.ArrayList<>(missing));
                 wrapper.put("_file", fullDoc);
                 IOs.writeString(diff, JsonCodec.dump(wrapper));
+                LinLog.info(LinMsg.k("linFile.file.fileGeneratedDifferent"), "diff", diff);
             }
-            LinLog.warn("[linlang] ConfigService generated a " + diff + " file, because there are " + missing.size() + " keys differences/missing");
+            LinLog.warn(LinMsg.k("linFile.file.fileMissingKeys"), "file", f, "count", missing.size(), "diff", diff);
         } catch (Exception ignore) {
         }
     }
@@ -354,7 +360,7 @@ public final class ConfigServiceImpl implements ConfigService {
 
             String ci = " ".repeat(childIndent);
             String rendered = renderYamlScalar(missingWithValues.get(path));
-            lines.add(insertAt,     ci + "# + missing key");
+            lines.add(insertAt,     ci + LinMsg.ks("linFile.file.missingKeys"));
             lines.add(insertAt + 1, ci + last + ": " + rendered);
         }
         return String.join("\n", lines);

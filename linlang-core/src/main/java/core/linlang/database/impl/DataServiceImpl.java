@@ -1,37 +1,38 @@
 package core.linlang.database.impl;
 
-import api.linlang.database.config.DbConfig;
-import api.linlang.database.dto.Page;
-import api.linlang.database.dto.QuerySpec;
-import api.linlang.database.annotations.Entity;
-import api.linlang.database.annotations.Transient;
-import api.linlang.database.annotations.Column;
-import api.linlang.database.annotations.Id;
-import api.linlang.database.annotations.NotNull;
+import api.linlang.audit.called.LinLog;
+import api.linlang.audit.common.LinMsg;
+import api.linlang.file.database.config.DbConfig;
+import api.linlang.file.database.annotations.Entity;
+import api.linlang.file.database.annotations.Transient;
+import api.linlang.file.database.annotations.Column;
+import api.linlang.file.database.annotations.Id;
+import api.linlang.file.database.annotations.NotNull;
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
-import api.linlang.database.repo.Repository;
+import api.linlang.file.database.repo.Repository;
 import core.linlang.file.runtime.Binder;
-import core.linlang.file.runtime.PathResolver;
-import api.linlang.database.services.DataService;
-import api.linlang.database.types.DbType;
-import core.linlang.file.runtime.TreeMapper;
+import api.linlang.file.PathResolver;
+import api.linlang.file.database.services.DataService;
+import api.linlang.file.database.types.DbType;
 import core.linlang.yaml.YamlCodec;
 import core.linlang.json.JsonCodec;
 
-import javax.sql.DataSource;
 import java.lang.reflect.Field;
 import java.nio.file.Path;
 import java.nio.file.Files;
 import java.sql.*;
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 
-public final class DataServiceImpl implements DataService {
+public final class DataServiceImpl implements DataService, DataService.Provider {
     private final Path dataDocRoot;
     private DbType mode = DbType.H2;
     private HikariDataSource ds;
     private final java.util.Set<Class<?>> registeredEntities = new java.util.LinkedHashSet<>();
+    private final Map<Class<?>, Repository<?, ?>> openRepos = new ConcurrentHashMap<>();
+
 
     public DataServiceImpl() {
         this(() -> java.nio.file.Paths.get("./data"));
@@ -63,6 +64,10 @@ public final class DataServiceImpl implements DataService {
                 this.ds = null;
             }
         }
+        // log init
+        try {
+            LinLog.info(LinMsg.k("linData.dbInit"), "type", type, "url", cfg.url());
+        } catch (Throwable ignore) {}
     }
 
     @Override
@@ -94,15 +99,22 @@ public final class DataServiceImpl implements DataService {
     }
 
     @Override
-    public <T> Repository<T, ?> repo(Class<T> entityType) {
+    public <T, ID> Repository<T, ID> repo(Class<T> entityType) {
         Binder.BoundTable t = Binder.tableOf(entityType)
                 .orElseThrow(() -> new IllegalArgumentException("@Table missing on " + entityType));
+        @SuppressWarnings("unchecked")
+        Repository<T, ID> existing = (Repository<T, ID>) openRepos.get(entityType);
+        if (existing != null) return existing;
         registeredEntities.add(entityType);
+        final Repository<T, ID> repo;
         if (mode == DbType.YAML || mode == DbType.JSON) {
-            return new DocRepository<>(dataDocRoot, t.name(), mode, entityType);
+            repo = new DocRepositoryImpl<>(dataDocRoot, t.name(), mode, entityType);
+        } else {
+            ensureTable(entityType, t.name());
+            repo = new SqlRepositoryImpl<>(ds, entityType, t.name());
         }
-        ensureTable(entityType, t.name());
-        return new RepositoryImpl<>(ds, entityType, t.name());
+        openRepos.put(entityType, repo);
+        return repo;
     }
 
     private <T> void ensureTable(Class<T> type, String table) {
@@ -173,55 +185,57 @@ public final class DataServiceImpl implements DataService {
     }
 
 
-
-
-    // —— 简单可读数据存取（YAML/JSON） —— //
-    public Map<String, Object> loadYamlDoc(String relative) {
-        Path f = resolveDoc(relative, ".yml");
-        if (!Files.exists(f)) return new LinkedHashMap<>();
-        try {
-            return YamlCodec.load(Files.readString(f));
-        } catch (Exception e) {
-            throw new RuntimeException(e);
+    @Override
+    public void flushAll() {
+        for (Repository<?, ?> r : openRepos.values()) {
+            try {
+                r.flush();
+                LinLog.info(LinMsg.k(mode == DbType.YAML || mode == DbType.JSON ? "linData.flushDoc" : "linData.flushOk"), "data", r);
+            } catch (Throwable e) {
+                LinLog.warn(LinMsg.k("linData.flushFailed"), "data", r, "reason", String.valueOf(e.getMessage()));
+            }
         }
     }
 
-    public void saveYamlDoc(String relative, Map<String, Object> doc) {
-        Path f = resolveDoc(relative, ".yml");
-        try {
-            Files.createDirectories(f.getParent());
-            Files.writeString(f, YamlCodec.dump(doc));
-        } catch (Exception e) {
-            throw new RuntimeException(e);
+    @Override
+    public <T> void flushOf(Class<T> entityType) {
+        Repository<?, ?> r = openRepos.get(entityType);
+        if (r != null) {
+            try {
+                r.flush();
+                LinLog.info(LinMsg.k(mode == DbType.YAML || mode == DbType.JSON ? "linData.flushDoc" : "linData.flushOk"), "data", r);
+            } catch (Throwable e) {
+                LinLog.warn(LinMsg.k("linData.flushFailed"), "data", r, "reason", String.valueOf(e.getMessage()));
+            }
         }
     }
 
-    public Map<String, Object> loadJsonDoc(String relative) {
-        Path f = resolveDoc(relative, ".json");
-        if (!Files.exists(f)) return new LinkedHashMap<>();
-        try {
-            return JsonCodec.load(Files.readString(f));
-        } catch (Exception e) {
-            throw new RuntimeException(e);
+    @Override
+    public void close() {
+        flushAll();
+        try { LinLog.info(LinMsg.k("linData.flushOk"), "data", "close()"); } catch (Throwable ignore) {}
+        for (Repository<?, ?> r : openRepos.values()) {
+            try {
+                r.close();
+            } catch (Throwable ignore) {
+            }
         }
+        openRepos.clear();
     }
 
-    public void saveJsonDoc(String relative, Map<String, Object> doc) {
-        Path f = resolveDoc(relative, ".json");
-        try {
-            Files.createDirectories(f.getParent());
-            Files.writeString(f, JsonCodec.dump(doc));
-        } catch (Exception e) {
-            throw new RuntimeException(e);
-        }
+
+    @Override
+    public String id() {
+        return "core";
     }
 
-    private Path resolveDoc(String relative, String ext) {
-        String rel = relative;
-        if (rel.endsWith(".yml") || rel.endsWith(".yaml") || rel.endsWith(".json")) {
-            // 保持用户给的扩展名
-            return dataDocRoot.resolve(rel);
-        }
-        return dataDocRoot.resolve(rel + ext);
+    @Override
+    public int priority() {
+        return 100;
+    }
+
+    @Override
+    public DataService create(PathResolver resolver) {
+        return new DataServiceImpl(resolver);
     }
 }

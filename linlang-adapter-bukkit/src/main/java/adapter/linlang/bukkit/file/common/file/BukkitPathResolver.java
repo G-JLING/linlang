@@ -1,6 +1,6 @@
 package adapter.linlang.bukkit.file.common.file;
 
-import core.linlang.file.runtime.PathResolver;
+import api.linlang.file.PathResolver;
 import org.bukkit.plugin.java.JavaPlugin;
 
 import java.nio.file.Path;

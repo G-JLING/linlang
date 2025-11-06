@@ -1,10 +1,12 @@
 package core.linlang.database.impl;
 
-import api.linlang.database.annotations.Id;
-import api.linlang.database.dto.Page;
-import api.linlang.database.dto.QuerySpec;
-import api.linlang.database.repo.Repository;
-import api.linlang.database.types.DbType;
+import api.linlang.audit.called.LinLog;
+import api.linlang.audit.common.LinMsg;
+import api.linlang.file.database.annotations.Id;
+import api.linlang.file.database.dto.Page;
+import api.linlang.file.database.dto.QuerySpec;
+import api.linlang.file.database.repo.Repository;
+import api.linlang.file.database.types.DbType;
 import core.linlang.file.runtime.TreeMapper;
 import core.linlang.json.JsonCodec;
 import core.linlang.yaml.YamlCodec;
@@ -13,16 +15,19 @@ import java.lang.reflect.Field;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.*;
+import java.util.function.Predicate;
+import java.util.Collection;
+import java.util.stream.Stream;
 
-// —— 文档仓库（YAML/JSON） —— //
-public final class DocRepository<T, ID> implements Repository<T, ID> {
+// 文档型数据库的 Repo 实现
+public final class DocRepositoryImpl<T, ID> implements Repository<T, ID> {
     private final Path root;
     private final String table;
     private final DbType mode;
     private final Class<T> type;
     private final Field idField;
 
-    DocRepository(Path root, String table, DbType mode, Class<T> type) {
+    DocRepositoryImpl(Path root, String table, DbType mode, Class<T> type) {
         this.root = root;
         this.table = table;
         this.mode = mode;
@@ -62,7 +67,9 @@ public final class DocRepository<T, ID> implements Repository<T, ID> {
             Files.createDirectories(f.getParent());
             String out = (mode == DbType.YAML ? YamlCodec.dump(m) : JsonCodec.dump(m));
             Files.writeString(f, out);
+            try { LinLog.info(LinMsg.k("linData.flushDoc"), "data", f); } catch (Throwable ignore) {}
         } catch (Exception e) {
+            try { LinLog.warn(LinMsg.k("linData.flushFailed"), "data", f, "reason", String.valueOf(e.getMessage())); } catch (Throwable ignore) {}
             throw new RuntimeException(e);
         }
     }
@@ -83,7 +90,6 @@ public final class DocRepository<T, ID> implements Repository<T, ID> {
             }
             String key = String.valueOf(id);
             Map<String, Object> row = new LinkedHashMap<>();
-            // 利用 TreeMapper 做对象<->Map 映射
             TreeMapper.export(e, row);
             doc.put(key, row);
             writeAll(doc);
@@ -122,6 +128,77 @@ public final class DocRepository<T, ID> implements Repository<T, ID> {
             }
         }
         return out;
+    }
+
+    /** Count all rows in the document store. */
+    public long count() {
+        return readAll().size();
+    }
+
+    /** Check existence by id without materializing the entity. */
+    public boolean existsById(ID id) {
+        return readAll().containsKey(String.valueOf(id));
+    }
+
+    /** Find the first entity that matches the predicate, if any. */
+
+    public Optional<T> findOneWhere(Predicate<T> filter) {
+        Objects.requireNonNull(filter, "filter");
+        for (T e : findAll()) {
+            if (filter.test(e)) return Optional.of(e);
+        }
+        return Optional.empty();
+    }
+
+
+    /** Find all entities that match the predicate. */
+    public List<T> findAllWhere(Predicate<T> filter) {
+        Objects.requireNonNull(filter, "filter");
+        List<T> all = findAll();
+        if (all.isEmpty()) return all;
+        List<T> out = new ArrayList<>(all.size());
+        for (T e : all) if (filter.test(e)) out.add(e);
+        return out;
+    }
+
+    /** Delete all rows (truncate file content). */
+    public void deleteAll() {
+        writeAll(new LinkedHashMap<>());
+    }
+
+    /** Save a collection of entities in a single write for better I/O efficiency. */
+    public void saveAll(Collection<T> entities) {
+        Objects.requireNonNull(entities, "entities");
+        if (entities.isEmpty()) return;
+        Map<String, Object> doc = readAll();
+        List<T> out = new ArrayList<>(entities.size());
+        for (T e : entities) {
+            try {
+                Object id = idField.get(e);
+                if (id == null || (id instanceof Number && ((Number) id).longValue() == 0L) || String.valueOf(id).isBlank()) {
+                    id = nextId(doc.keySet());
+                    if (idField.getType() == Long.class || idField.getType() == long.class)
+                        idField.set(e, ((Number) id).longValue());
+                    else if (idField.getType() == Integer.class || idField.getType() == int.class)
+                        idField.set(e, ((Number) id).intValue());
+                    else if (idField.getType() == String.class)
+                        idField.set(e, String.valueOf(id));
+                }
+                String key = String.valueOf(id);
+                Map<String, Object> row = new LinkedHashMap<>();
+                TreeMapper.export(e, row);
+                doc.put(key, row);
+                out.add(e);
+            } catch (Exception ex) {
+                throw new RuntimeException(ex);
+            }
+        }
+        writeAll(doc);
+    }
+
+    /** Stream all entities. Note: loads all into memory first. */
+    public Stream<T> streamAll() {
+        return findAll().stream();
     }
 
     @Override

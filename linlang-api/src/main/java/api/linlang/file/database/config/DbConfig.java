@@ -1,9 +1,9 @@
-package api.linlang.database.config;
+package api.linlang.file.database.config;
 
 // linlang-called/src/main/java/io/linlang/file/DbConfig.java
 
 /** 数据源配置。用在 DataService.init(...)。 */
-public final class DbConfig {
+public class DbConfig {
     private final String url;
     private final String user;
     private final String pass;

@@ -12,9 +12,13 @@ public class ZhCN extends LinlangInternalMessageKeys implements LocaleProvider<L
 
     private static final String ME = LinlangInternalMessageKeys.ME;
 
-    @Override public String locale() { return "zh_CN"; }
+    @Override
+    public String locale() {
+        return "zh_CN";
+    }
 
-    @Override public void define(LinlangInternalMessageKeys k) {
+    @Override
+    public void define(LinlangInternalMessageKeys k) {
         // —— LinFile.File —— //
         this.linFile.file.missingKeys =
                 " + 此键在旧文件中缺失!";
@@ -36,6 +40,16 @@ public class ZhCN extends LinlangInternalMessageKeys implements LocaleProvider<L
                 "检测到改动：{file}";
         this.linFile.watcher.reloadFailed =
                 "热重载失败，请联系 " + ME + "。原因：{reason}";
+
+        // —— LinData —— //
+        this.linData.dbInit =
+                "已初始化数据库：{type} {url}";
+        this.linData.ensureTable =
+                "已确保表：{table}";
+        this.linData.flushOk =
+                "数据库 {data} 已落盘";
+        this.linData.flushFailed =
+                "数据库 {data} 落盘失败，原因：{reason}";
 
         // —— LinCommand —— //
         this.linCommand.commandSetPrefix =

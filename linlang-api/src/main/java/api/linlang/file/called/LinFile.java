@@ -1,7 +1,7 @@
 package api.linlang.file.called;
 
 import api.linlang.file.service.ConfigService;
-import api.linlang.database.services.DataService;
+import api.linlang.file.database.services.DataService;
 import api.linlang.file.service.LangService;
 import api.linlang.file.service.Services;
 
@@ -11,7 +11,7 @@ import api.linlang.file.service.Services;
  * <p>在插件启动时调用 {@code LinlangBukkitBootstrap.install(JavaPlugin)} 以装载；</p>
  * <p>业务侧在任意位置通过 {@link #services()} 取得 {@link Services} 并进一步获取</p>
  * {@link api.linlang.file.service.ConfigService}、{@link api.linlang.file.service.LangService}、
- * {@link api.linlang.database.services.DataService}。
+ * {@link DataService}。
  *
  */
 public final class LinFile {
