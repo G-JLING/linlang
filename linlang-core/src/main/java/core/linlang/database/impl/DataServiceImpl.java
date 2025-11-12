@@ -15,8 +15,6 @@ import core.linlang.file.runtime.Binder;
 import api.linlang.file.PathResolver;
 import api.linlang.file.database.services.DataService;
 import api.linlang.file.database.types.DbType;
-import core.linlang.yaml.YamlCodec;
-import core.linlang.json.JsonCodec;
 
 import java.lang.reflect.Field;
 import java.nio.file.Path;
@@ -26,7 +24,7 @@ import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 
-public final class DataServiceImpl implements DataService, DataService.Provider {
+public final class DataServiceImpl implements DataService {
     private final Path dataDocRoot;
     private DbType mode = DbType.H2;
     private HikariDataSource ds;
@@ -48,22 +46,19 @@ public final class DataServiceImpl implements DataService, DataService.Provider 
 
     @Override
     public void init(DbType type, DbConfig cfg) {
-        {
-            this.mode = type;
-            if (type == DbType.H2 || type == DbType.MYSQL) {
-                HikariConfig hc = new HikariConfig();
-                hc.setJdbcUrl(cfg.url());
-                hc.setUsername(cfg.user());
-                hc.setPassword(cfg.pass());
-                hc.setDriverClassName(type == DbType.H2 ? "org.h2.Driver" : "com.mysql.cj.jdbc.Driver");
-                hc.setMaximumPoolSize(Math.max(4, cfg.poolSize()));
-                hc.setMinimumIdle(Math.min(2, cfg.poolSize()));
-                this.ds = new HikariDataSource(hc);
-            } else {
-                // 文档模式（YAML/JSON）不需要数据源
-                this.ds = null;
-            }
+        if (type != DbType.H2 && type != DbType.MYSQL) {
+            throw new IllegalArgumentException("Unsupported DbType: " + type);
         }
+        this.mode = type;
+        HikariConfig hc = new HikariConfig();
+        hc.setJdbcUrl(cfg.url());
+        hc.setUsername(cfg.user());
+        hc.setPassword(cfg.pass());
+        hc.setDriverClassName(type == DbType.H2 ? "org.h2.Driver" : "com.mysql.cj.jdbc.Driver");
+        hc.setMaximumPoolSize(Math.max(4, cfg.poolSize()));
+        hc.setMinimumIdle(Math.min(2, cfg.poolSize()));
+        this.ds = new HikariDataSource(hc);
+
         // log init
         try {
             LinLog.info(LinMsg.k("linData.dbInit"), "type", type, "url", cfg.url());
@@ -72,7 +67,6 @@ public final class DataServiceImpl implements DataService, DataService.Provider 
 
     @Override
     public void migrate() {
-        if (mode == DbType.YAML || mode == DbType.JSON) return; // 文档模式无 DDL
         for (Class<?> et : registeredEntities) {
             Binder.BoundTable t = Binder.tableOf(et).orElse(null);
             if (t == null) continue;
@@ -107,18 +101,13 @@ public final class DataServiceImpl implements DataService, DataService.Provider 
         if (existing != null) return existing;
         registeredEntities.add(entityType);
         final Repository<T, ID> repo;
-        if (mode == DbType.YAML || mode == DbType.JSON) {
-            repo = new DocRepositoryImpl<>(dataDocRoot, t.name(), mode, entityType);
-        } else {
-            ensureTable(entityType, t.name());
-            repo = new SqlRepositoryImpl<>(ds, entityType, t.name());
-        }
+        ensureTable(entityType, t.name());
+        repo = new RepositoryImpl<>(ds, entityType, t.name());
         openRepos.put(entityType, repo);
         return repo;
     }
 
     private <T> void ensureTable(Class<T> type, String table) {
-        if (mode == DbType.YAML || mode == DbType.JSON) return; // 文档模式不建表
         List<Col> cols = columns(type);
         String pk = cols.stream().filter(c -> c.id).map(c -> c.name).findFirst().orElse(null);
         String colDefs = cols.stream().map(Col::ddl).collect(Collectors.joining(", "));
@@ -190,7 +179,7 @@ public final class DataServiceImpl implements DataService, DataService.Provider 
         for (Repository<?, ?> r : openRepos.values()) {
             try {
                 r.flush();
-                LinLog.info(LinMsg.k(mode == DbType.YAML || mode == DbType.JSON ? "linData.flushDoc" : "linData.flushOk"), "data", r);
+                LinLog.info(LinMsg.k("linData.flushOk"), "data", r);
             } catch (Throwable e) {
                 LinLog.warn(LinMsg.k("linData.flushFailed"), "data", r, "reason", String.valueOf(e.getMessage()));
             }
@@ -203,7 +192,7 @@ public final class DataServiceImpl implements DataService, DataService.Provider 
         if (r != null) {
             try {
                 r.flush();
-                LinLog.info(LinMsg.k(mode == DbType.YAML || mode == DbType.JSON ? "linData.flushDoc" : "linData.flushOk"), "data", r);
+                LinLog.info(LinMsg.k("linData.flushOk"), "data", r);
             } catch (Throwable e) {
                 LinLog.warn(LinMsg.k("linData.flushFailed"), "data", r, "reason", String.valueOf(e.getMessage()));
             }
@@ -221,21 +210,5 @@ public final class DataServiceImpl implements DataService, DataService.Provider 
             }
         }
         openRepos.clear();
-    }
-
-
-    @Override
-    public String id() {
-        return "core";
-    }
-
-    @Override
-    public int priority() {
-        return 100;
-    }
-
-    @Override
-    public DataService create(PathResolver resolver) {
-        return new DataServiceImpl(resolver);
     }
 }

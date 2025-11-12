@@ -16,16 +16,15 @@ import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import java.util.stream.StreamSupport;
 
-// Sql 数据库的 Repo 实现
-public final class SqlRepositoryImpl<T, ID> implements Repository<T, ID> {
+public final class RepositoryImpl<T, ID> implements Repository<T, ID> {
     private final DataSource ds;
     private final Class<T> type;
     private final String table;
-    private final List<Field> fields;
+    private final List<Field> fields;      // 可持久化字段
     private final Field idField;
     private final Map<Field, String> colName;
 
-    SqlRepositoryImpl(DataSource ds, Class<T> type, String table) {
+    RepositoryImpl(DataSource ds, Class<T> type, String table) {
         this.ds = ds;
         this.type = type;
         this.table = table;

@@ -100,11 +100,19 @@ public final class LinMsg {
      */
     public static String fmt(String template, Object... kv) {
         if (template == null) return "null";
+        if (kv == null || kv.length == 0) return template;
         String out = template;
         for (int i = 0; i + 1 < kv.length; i += 2) {
             String k = String.valueOf(kv[i]);
+            if (k == null) continue;
+            k = k.trim();
+            // allow callers to pass keys like "{locale}" or " locale "
+            if (k.startsWith("{") && k.endsWith("}") && k.length() >= 2) {
+                k = k.substring(1, k.length() - 1).trim();
+            }
             Object v = kv[i + 1];
-            out = out.replace("{" + k + "}", String.valueOf(v));
+            String rep = String.valueOf(v);
+            out = out.replace("{" + k + "}", rep);
         }
         return out;
     }
@@ -121,12 +129,12 @@ public final class LinMsg {
         String[] parts = dottedPath.split("\\.");
         Object cur = root;
         for (String p : parts) {
+            if (cur == null) return null;
             Class<?> c = cur.getClass();
             java.lang.reflect.Field f = null;
             try {
                 f = c.getField(p);
-            } catch (NoSuchFieldException ignored) {
-            }
+            } catch (NoSuchFieldException ignored) {}
             if (f == null) {
                 for (java.lang.reflect.Field cand : c.getDeclaredFields()) {
                     if (cand.getName().equalsIgnoreCase(p) ||
@@ -137,6 +145,7 @@ public final class LinMsg {
                     }
                 }
             }
+            if (f == null) return null; // path segment not found
             f.setAccessible(true);
             cur = f.get(cur);
         }
