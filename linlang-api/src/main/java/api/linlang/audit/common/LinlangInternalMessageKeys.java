@@ -24,7 +24,7 @@ public class LinlangInternalMessageKeys {
     protected static final String ME = "JLING(magicpowered@icloud.com)";
 
     @I18nComment(locale = "zh_CN", lines = "文件系统相关")
-    @I18nComment(locale = "en_GB", lines = "LinFile related")
+    @I18nComment(locale = "en_GB", lines = "Linlang related")
     public LinFile linFile = new LinFile();
 
     public LinData linData = new LinData();

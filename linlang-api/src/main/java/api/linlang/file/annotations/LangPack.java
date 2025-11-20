@@ -9,7 +9,7 @@ import static java.lang.annotation.ElementType.TYPE;
 import static java.lang.annotation.RetentionPolicy.RUNTIME;
 
 /**
- * 声明当前类为 LinFile 语言文件服务中提供语言的类
+ * 声明当前类为 Linlang 语言文件服务中提供语言的类
  * <p>注意，声明语言文件字段的文件不应该添加此注解</p>
  *
  * <p>此注解应用于 {@code implements LocalProvider<T keys>} 的类</p>

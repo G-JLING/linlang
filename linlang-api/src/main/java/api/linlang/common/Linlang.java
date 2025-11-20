@@ -1,4 +1,4 @@
-package api.linlang.file.called;
+package api.linlang.common;
 
 import api.linlang.file.service.ConfigService;
 import api.linlang.file.database.services.DataService;
@@ -6,7 +6,7 @@ import api.linlang.file.service.LangService;
 import api.linlang.file.service.Services;
 
 /**
- * LinFile：文件与语言、数据服务的全局门面入口。
+ * Linlang：文件与语言、数据服务的全局门面入口。
  *
  * <p>在插件启动时调用 {@code LinlangBukkitBootstrap.install(JavaPlugin)} 以装载；</p>
  * <p>业务侧在任意位置通过 {@link #services()} 取得 {@link Services} 并进一步获取</p>
@@ -14,7 +14,7 @@ import api.linlang.file.service.Services;
  * {@link DataService}。
  *
  */
-public final class LinFile {
+public final class Linlang {
     private static volatile Services S = new Noop();
 
     /**
@@ -49,5 +49,5 @@ public final class LinFile {
         /** @return 永不返回；调用即抛出异常 */
         public DataService data()   { throw E; }
     }
-    private LinFile() {}
+    private Linlang() {}
 }

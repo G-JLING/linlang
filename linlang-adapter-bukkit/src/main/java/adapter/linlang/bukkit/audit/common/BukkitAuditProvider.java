@@ -6,12 +6,11 @@ package adapter.linlang.bukkit.audit.common;
  */
 
 import api.linlang.audit.called.LinLog;
-import api.linlang.file.called.LinFile;
+import api.linlang.common.Linlang;
 import audit.linlang.audit.AuditConfig;
 import org.bukkit.Bukkit;
 import org.bukkit.plugin.java.JavaPlugin;
 
-import java.io.FileWriter;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -20,9 +19,7 @@ import java.util.logging.Logger;
 import java.util.Locale;
 import java.util.logging.Level;
 import java.nio.file.StandardCopyOption;
-import java.time.LocalDateTime;
-import java.time.format.DateTimeFormatter;
-import org.bukkit.command.CommandSender;
+
 import org.bukkit.entity.Player;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
@@ -55,7 +52,7 @@ public final class BukkitAuditProvider implements LinLog.Provider {
 
     public void bindConfigFromLinFile() {
         try {
-            this.config = LinFile.services().config().bind(AuditConfig.class);
+            this.config = Linlang.services().config().bind(AuditConfig.class);
         } catch (Throwable t) {
 
             this.jul.fine("[linlang] Audit config not bound yet: " + t.getClass().getSimpleName());

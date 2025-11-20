@@ -9,7 +9,7 @@ import api.linlang.file.service.ConfigService;
 import api.linlang.file.database.services.DataService;
 import api.linlang.file.service.LangService;
 import api.linlang.file.database.config.DbConfig;
-import api.linlang.file.called.LinFile;
+import api.linlang.common.Linlang;
 import api.linlang.file.service.Services;
 import api.linlang.file.database.repo.Repository;
 import core.linlang.file.impl.ConfigServiceImpl;
@@ -59,8 +59,8 @@ public final class LinlangBukkitBootstrap implements AutoCloseable {
         this.data = new DataServiceImpl(resolver);
         this.hot = new BukkitFsHotReloader(plugin);
 
-        // 2) 注入 LinFile API 门面
-        LinFile.install(new Services() {
+        // 2) 注入 Linlang API 门面
+        Linlang.install(new Services() {
             public ConfigService config() { return config; }
             public LangService lang() { return lang; }
             public DataService data() { return data; }

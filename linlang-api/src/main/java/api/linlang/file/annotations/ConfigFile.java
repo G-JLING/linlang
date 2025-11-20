@@ -9,7 +9,7 @@ import static java.lang.annotation.ElementType.TYPE;
 import static java.lang.annotation.RetentionPolicy.RUNTIME;
 
 /**
- * 声明当前类为 LinFile 配置文件服务中定义配置文件的类
+ * 声明当前类为 Linlang 配置文件服务中定义配置文件的类
  *
  * <p>此注解应用于类。</p>
  *

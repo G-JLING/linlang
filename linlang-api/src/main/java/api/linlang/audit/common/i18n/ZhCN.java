@@ -19,7 +19,7 @@ public class ZhCN extends LinlangInternalMessageKeys implements LocaleProvider<L
 
     @Override
     public void define(LinlangInternalMessageKeys k) {
-        // —— LinFile.File —— //
+        // —— Linlang.File —— //
         this.linFile.file.missingKeys =
                 " + 此键在旧文件中缺失!";
         this.linFile.file.fileMissingKeys =
@@ -33,7 +33,7 @@ public class ZhCN extends LinlangInternalMessageKeys implements LocaleProvider<L
         this.linFile.file.langChangeLocale =
                 "语言已变更 {locale} -> {file}。重新启动服务器以使更改生效。";
 
-        // —— LinFile.Watcher —— //
+        // —— Linlang.Watcher —— //
         this.linFile.watcher.reloadWatchingStart =
                 "正在监听目录：{path}";
         this.linFile.watcher.reloadFileChanged =

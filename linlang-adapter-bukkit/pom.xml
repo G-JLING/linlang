@@ -43,4 +43,52 @@
         </dependency>
     </dependencies>
 
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-shade-plugin</artifactId>
+                <version>3.5.0</version>
+                <executions>
+                    <execution>
+                        <phase>package</phase>
+                        <goals>
+                            <goal>shade</goal>
+                        </goals>
+                        <configuration>
+                            <!-- 不生成 dependency-reduced-pom  -->
+                            <createDependencyReducedPom>false</createDependencyReducedPom>
+
+                            <relocations>
+                                <!-- HikariCP 连接池 -->
+                                <relocation>
+                                    <pattern>com.zaxxer.hikari</pattern>
+                                    <shadedPattern>me.jling.shaded.hikari</shadedPattern>
+                                </relocation>
+
+                                <!-- H2 数据库驱动 -->
+                                <relocation>
+                                    <pattern>org.h2</pattern>
+                                    <shadedPattern>me.jling.shaded.h2</shadedPattern>
+                                </relocation>
+
+                                <!-- SnakeYAML -->
+                                <relocation>
+                                    <pattern>org.yaml.snakeyaml</pattern>
+                                    <shadedPattern>me.jling.shaded.snakeyaml</shadedPattern>
+                                </relocation>
+
+                                <!-- Jackson：core + databind + annotations  -->
+                                <relocation>
+                                    <pattern>com.fasterxml.jackson</pattern>
+                                    <shadedPattern>me.jling.shaded.jackson</shadedPattern>
+                                </relocation>
+                            </relocations>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
+
 </project>

@@ -20,7 +20,7 @@ public class EnGB extends LinlangInternalMessageKeys implements LocaleProvider<L
 
     @Override
     public void define(LinlangInternalMessageKeys k) {
-        // —— LinFile.File —— //
+        // —— Linlang.File —— //
         this.linFile.file.missingKeys =
                 " + This key is missing in old file!";
         this.linFile.file.fileMissingKeys =
@@ -34,7 +34,7 @@ public class EnGB extends LinlangInternalMessageKeys implements LocaleProvider<L
         this.linFile.file.langChangeLocale =
                 "Language changed from {locale} to {file}. Please restart the server to apply changes.";
 
-        // —— LinFile.Watcher —— //
+        // —— Linlang.Watcher —— //
         this.linFile.watcher.reloadWatchingStart =
                 "Now watching directory: {path}";
         this.linFile.watcher.reloadFileChanged =
