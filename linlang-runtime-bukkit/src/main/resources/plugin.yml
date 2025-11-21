@@ -1,0 +1,8 @@
+name: LinlangRuntimeBukkit
+main: me.jling.bukkit.LinlangRuntimeBukkit
+version: ${project.version}
+api-version: '1.13'
+load: STARTUP
+authors: [JLING]
+website: https://jling.me
+description: Linlang runtime for Bukkit/Paper. Provides Linlang services to other plugins.

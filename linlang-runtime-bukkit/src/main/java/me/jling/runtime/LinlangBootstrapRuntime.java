@@ -1,6 +1,5 @@
-package adapter.linlang.bukkit.runtime;
+package me.jling.runtime;
 
-import adapter.linlang.bukkit.LinlangBukkitBootstrap;
 import adapter.linlang.bukkit.audit.common.BukkitAuditProvider;
 import adapter.linlang.bukkit.command.LinlangBukkitCommand;
 import api.linlang.audit.common.LinMsg;
@@ -12,21 +11,22 @@ import core.linlang.command.message.i18n.ZhCN;
 import core.linlang.file.impl.LangServiceImpl;
 import api.linlang.audit.called.LinLog;
 import api.linlang.command.CommandMessages;
+import me.jling.LinlangBukkitBootstrap;
 import org.bukkit.plugin.java.JavaPlugin;
 
 import java.util.List;
 import java.util.function.Function;
 
 /**
- * 运行期辅助：审计安装/切换、命令初始化与重建、语言切换、前缀治理、重载。
- * 让 {@link LinlangBukkitBootstrap} 专注于“装配”，将可变行为下放到本类。
+ * 运行期辅助：审计、命令初始化与重建、语言切换、前缀、重载。
+ * 使 {@link LinlangBukkitBootstrap} 扁平化，将可变行为下放到本类。
  */
 public final class LinlangBootstrapRuntime implements AutoCloseable {
 
     private final JavaPlugin plugin;
     private final LangServiceImpl lang;
 
-    // 命令 & 文案
+    // 命令
     private LinlangBukkitCommand commands;
     private CommandMessages messages = CommandMessages.defaults();
     private String preferredLocaleTag = "zh_CN";
@@ -41,19 +41,19 @@ public final class LinlangBootstrapRuntime implements AutoCloseable {
     public LinlangBootstrapRuntime(JavaPlugin plugin, LinlangBukkitBootstrap bootstrap) {
         this.plugin = plugin;
         this.lang = bootstrap.getLang();
-        this.preferredLocaleTag = String.valueOf(lang.getCurrent());
+        this.preferredLocaleTag = String.valueOf(lang.currentLocale());
     }
 
     public void installLinMsg() {
         var keysInstance = lang.bind(LinlangInternalMessageKeys.class,
-                lang.getCurrent().toString(),
+                lang.currentLocale().toString(),
                 List.of(new api.linlang.audit.common.i18n.ZhCN(), new api.linlang.audit.common.i18n.EnGB()));
 
         LinMsg.installKeys(() -> keysInstance);
         LinMsg.install(lang::tr);
     }
 
-    // 安装/替换 Bukkit 审计（可选：使用 Plugin.getLogger()）
+    // 安装/替换 Bukkit 审计
     public LinlangBootstrapRuntime installAudit(boolean usePluginLogger) {
         this.audit = new BukkitAuditProvider(this.plugin, usePluginLogger);
         LinLog.install(this.audit);
@@ -109,7 +109,7 @@ public final class LinlangBootstrapRuntime implements AutoCloseable {
     // 仅重载 I18N（命令消息 + 审计配置）
     public LinlangBootstrapRuntime reloadI18n() {
         final String locale = (this.preferredLocaleTag == null || this.preferredLocaleTag.isBlank())
-                ? String.valueOf(this.lang.getCurrent())
+                ? String.valueOf(this.lang.currentLocale())
                 : this.preferredLocaleTag;
         try { this.lang.setLocale(locale); } catch (Throwable ignore) {}
         bindCommandMessages(locale);

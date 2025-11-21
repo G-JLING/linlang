@@ -20,7 +20,7 @@
         <dependency>
             <groupId>me.jling</groupId>
             <artifactId>linlang-api</artifactId>
-            <version>${project.version}</version>
+            <scope>compile</scope>
         </dependency>
         <dependency>
             <groupId>me.jling</groupId>
