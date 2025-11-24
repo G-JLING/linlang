@@ -11,6 +11,7 @@ import core.linlang.command.message.i18n.ZhCN;
 import core.linlang.file.impl.LangServiceImpl;
 import api.linlang.audit.called.LinLog;
 import api.linlang.command.CommandMessages;
+import lombok.Getter;
 import me.jling.LinlangBukkitBootstrap;
 import org.bukkit.plugin.java.JavaPlugin;
 
@@ -27,6 +28,7 @@ public final class LinlangBootstrapRuntime implements AutoCloseable {
     private final LangServiceImpl lang;
 
     // 命令
+    @Getter
     private LinlangBukkitCommand commands;
     private CommandMessages messages = CommandMessages.defaults();
     private String preferredLocaleTag = "zh_CN";
@@ -40,7 +42,7 @@ public final class LinlangBootstrapRuntime implements AutoCloseable {
 
     public LinlangBootstrapRuntime(JavaPlugin plugin, LinlangBukkitBootstrap bootstrap) {
         this.plugin = plugin;
-        this.lang = bootstrap.getLang();
+        this.lang = bootstrap.getLanguage();
         this.preferredLocaleTag = String.valueOf(lang.currentLocale());
     }
 
@@ -58,7 +60,14 @@ public final class LinlangBootstrapRuntime implements AutoCloseable {
         this.audit = new BukkitAuditProvider(this.plugin, usePluginLogger);
         LinLog.install(this.audit);
         LinLog.init("Audit Init");
-        try { this.audit.bindConfigFromLinFile(); } catch (Throwable ignore) {}
+
+        // 绑定审计配置（托管于 LinFile）
+        try {
+            this.audit.bindConfigFromLinFile();
+            LinLog.info(LinMsg.k("linLog.auditConfigLoaded"));
+        } catch (Throwable t) {
+            LinLog.warn("Failed to bind audit config from LinFile: " + t.getMessage());
+        }
         return this;
     }
 
@@ -100,7 +109,10 @@ public final class LinlangBootstrapRuntime implements AutoCloseable {
     public LinlangBootstrapRuntime withInitialLanguage(String locale) {
         if (locale == null || locale.isBlank()) return this;
         this.preferredLocaleTag = locale;
-        try { this.lang.setLocale(locale); } catch (Throwable ignore) {}
+        try {
+            this.lang.setLocale(locale);
+        } catch (Throwable ignore) {
+        }
         bindCommandMessages(locale);
         rebuildCommands();
         return this;
@@ -114,22 +126,34 @@ public final class LinlangBootstrapRuntime implements AutoCloseable {
         try { this.lang.setLocale(locale); } catch (Throwable ignore) {}
         bindCommandMessages(locale);
         rebuildCommands();
-        try { if (this.audit != null) this.audit.bindConfigFromLinFile(); } catch (Throwable ignore) {}
+
+        try {
+            if (this.audit != null) {
+                this.audit.bindConfigFromLinFile();
+                LinLog.info(LinMsg.k("linLog.auditConfigReloaded"));
+            }
+        } catch (Throwable t) {
+            LinLog.warn("Failed to reload audit config from LinFile: " + t.getMessage());
+        }
         return this;
     }
 
-    public LinlangBukkitCommand getCommands() { return commands; }
-
     @Override
     public void close() {
-        try { if (commands != null) commands.close(); } catch (Exception ignore) {}
+        try {
+            if (commands != null) commands.close();
+        } catch (Exception ignore) {
+        }
     }
 
     // —— 私有 —— //
 
     private void rebuildCommands() {
         String newPrefix = this.prefixFn.apply(this.plugin);
-        try { if (this.commands != null) this.commands.close(); } catch (Exception ignore) {}
+        try {
+            if (this.commands != null) this.commands.close();
+        } catch (Exception ignore) {
+        }
         this.commands = new LinlangBukkitCommand()
                 .install(newPrefix, this.plugin, this.messages)
                 .withDefaultResolvers()

@@ -6,6 +6,7 @@ package adapter.linlang.bukkit.audit.common;
  */
 
 import api.linlang.audit.called.LinLog;
+import api.linlang.common.Lin;
 import api.linlang.common.Linlang;
 import audit.linlang.audit.AuditConfig;
 import org.bukkit.Bukkit;
@@ -21,6 +22,7 @@ import java.util.logging.Level;
 import java.nio.file.StandardCopyOption;
 
 import org.bukkit.entity.Player;
+
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
@@ -34,8 +36,8 @@ public final class BukkitAuditProvider implements LinLog.Provider {
     private static final Deque<String> pendingOp = new ArrayDeque<>();
     private static final Deque<String> pendingStartup = new ArrayDeque<>();
 
-    private static void enqueueBounded(Deque<String> q, String line){
-        synchronized (q){
+    private static void enqueueBounded(Deque<String> q, String line) {
+        synchronized (q) {
             while (q.size() >= MAX_PENDING) q.pollFirst();
             q.addLast(line);
         }
@@ -47,14 +49,16 @@ public final class BukkitAuditProvider implements LinLog.Provider {
         } else {
             this.jul = Bukkit.getLogger();
         }
-        try { this.jul.setLevel(Level.ALL); } catch (Throwable ignore) {}
+        try {
+            this.jul.setLevel(Level.ALL);
+        } catch (Throwable ignore) {
+        }
     }
 
     public void bindConfigFromLinFile() {
         try {
-            this.config = Linlang.services().config().bind(AuditConfig.class);
+            this.config = Lin.find().linFile().config().bind(AuditConfig.class);
         } catch (Throwable t) {
-
             this.jul.fine("[linlang] Audit config not bound yet: " + t.getClass().getSimpleName());
         }
     }
@@ -120,20 +124,20 @@ public final class BukkitAuditProvider implements LinLog.Provider {
         return out.json != null ? out.json : (config != null && config.json);
     }
 
-    private void deliverOp(String line){
+    private void deliverOp(String line) {
         boolean any = false;
-        for (Player p : Bukkit.getOnlinePlayers()){
-            if (p.isOp()){
+        for (Player p : Bukkit.getOnlinePlayers()) {
+            if (p.isOp()) {
                 any = true;
                 p.sendMessage(line);
             }
         }
-        if (!any){
+        if (!any) {
             enqueueBounded(pendingOp, line);
         }
     }
 
-    private void deliverStartup(String line){
+    private void deliverStartup(String line) {
         // Keep for later; flushed by flushStartupToConsole()/broadcast
         enqueueBounded(pendingStartup, line);
     }
@@ -242,36 +246,40 @@ public final class BukkitAuditProvider implements LinLog.Provider {
 
     // --- Public flush helpers ---
 
-    /** Flush queued OP notices to any currently online operators. */
-    public static void flushOpToOnlineOps(){
+    /**
+     * Flush queued OP notices to any currently online operators.
+     */
+    public static void flushOpToOnlineOps() {
         List<String> batch;
-        synchronized (pendingOp){
+        synchronized (pendingOp) {
             if (pendingOp.isEmpty()) return;
             batch = new ArrayList<>(pendingOp);
             pendingOp.clear();
         }
-        for (Player p : Bukkit.getOnlinePlayers()){
+        for (Player p : Bukkit.getOnlinePlayers()) {
             if (!p.isOp()) continue;
             for (String s : batch) p.sendMessage(s);
         }
         // If still no OP online, push back to queue (keep most recent)
         boolean anyOpOnline = Bukkit.getOnlinePlayers().stream().anyMatch(Player::isOp);
-        if (!anyOpOnline){
+        if (!anyOpOnline) {
             for (String s : batch) enqueueBounded(pendingOp, s);
         }
     }
 
-    /** Flush queued STARTUP notices to console (or broadcast to all players if some are online). */
-    public static void flushStartupToConsole(){
+    /**
+     * Flush queued STARTUP notices to console (or broadcast to all players if some are online).
+     */
+    public static void flushStartupToConsole() {
         List<String> batch;
-        synchronized (pendingStartup){
+        synchronized (pendingStartup) {
             if (pendingStartup.isEmpty()) return;
             batch = new ArrayList<>(pendingStartup);
             pendingStartup.clear();
         }
         Logger lg = Bukkit.getLogger();
         boolean hasPlayers = !Bukkit.getOnlinePlayers().isEmpty();
-        for (String s : batch){
+        for (String s : batch) {
             if (hasPlayers) {
                 Bukkit.broadcastMessage(s);
             } else {
@@ -280,11 +288,13 @@ public final class BukkitAuditProvider implements LinLog.Provider {
         }
     }
 
-    /** Convenience: call when an OP player joins to deliver any queued OP notices to them. */
-    public static void flushOpTo(Player op){
+    /**
+     * Convenience: call when an OP player joins to deliver any queued OP notices to them.
+     */
+    public static void flushOpTo(Player op) {
         if (op == null || !op.isOp()) return;
         List<String> batch;
-        synchronized (pendingOp){
+        synchronized (pendingOp) {
             if (pendingOp.isEmpty()) return;
             batch = new ArrayList<>(pendingOp);
             pendingOp.clear();

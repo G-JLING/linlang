@@ -1,10 +1,12 @@
 package me.jling;
 
+import adapter.linlang.bukkit.common.MessengerImpl;
 import adapter.linlang.bukkit.file.common.file.BukkitFsHotReloader;
 import adapter.linlang.bukkit.file.common.file.BukkitPathResolver;
 import adapter.linlang.bukkit.command.LinlangBukkitCommand;
 
-import api.linlang.init.Linlang;
+import api.linlang.command.LinCommand;
+import api.linlang.common.Linlang;
 import api.linlang.file.PathResolver;
 import api.linlang.file.database.config.DbConfig;
 import api.linlang.file.database.repo.Repository;
@@ -12,8 +14,9 @@ import api.linlang.file.database.services.DataService;
 import api.linlang.file.database.types.DbType;
 import api.linlang.file.service.ConfigService;
 import api.linlang.file.service.LangService;
-import api.linlang.file.service.Services;
 
+import api.linlang.file.service.LinFile;
+import api.linlang.message.Messenger;
 import core.linlang.database.impl.DataServiceImpl;
 import core.linlang.file.impl.ConfigServiceImpl;
 import core.linlang.file.impl.LangServiceImpl;
@@ -25,7 +28,7 @@ import org.bukkit.plugin.java.JavaPlugin;
 import java.util.List;
 import java.util.function.Function;
 
-public final class LinlangBukkitBootstrap implements AutoCloseable, Linlang {
+public final class LinlangBukkitBootstrap implements AutoCloseable, Linlang, Linlang.Configurable {
 
     public static LinlangBukkitBootstrap install(JavaPlugin plugin) {
         return new LinlangBukkitBootstrap(plugin);
@@ -34,11 +37,12 @@ public final class LinlangBukkitBootstrap implements AutoCloseable, Linlang {
     @Getter
     public final ConfigServiceImpl config;
     @Getter
-    public final LangServiceImpl lang;
+    public final LangServiceImpl language;
     @Getter
-    public final DataServiceImpl data;
+    public final DataServiceImpl database;
 
-    public LinlangBukkitCommand commands;
+    public LinlangBukkitCommand command;
+    public Messenger messenger;
 
     private final BukkitFsHotReloader hot;
     private final PathResolver resolver;
@@ -48,7 +52,7 @@ public final class LinlangBukkitBootstrap implements AutoCloseable, Linlang {
     private LinlangBootstrapRuntime runtime;
 
     /** 提供给 API 的服务门面（由本实现返回） */
-    private Services services;
+    private LinFile linFile;
 
     // 装配方法
     public LinlangBukkitBootstrap(JavaPlugin plugin) {
@@ -57,15 +61,15 @@ public final class LinlangBukkitBootstrap implements AutoCloseable, Linlang {
         // 1 核心路径解析与服务初始化
         this.resolver = new BukkitPathResolver(plugin);
         this.config = new ConfigServiceImpl(resolver, List.of());
-        this.lang   = new LangServiceImpl(resolver, "zh_CN");
-        this.data   = new DataServiceImpl(resolver);
+        this.language = new LangServiceImpl(resolver, "zh_CN");
+        this.database = new DataServiceImpl(resolver);
         this.hot    = new BukkitFsHotReloader(plugin);
 
         // 2 提供 Services 实例（供 API 实现返回）
-        this.services = new Services() {
+        this.linFile = new LinFile() {
             public ConfigService config() { return config; }
-            public LangService   lang()   { return lang; }
-            public DataService   data()   { return data; }
+            public LangService   language()   { return language; }
+            public DataService   database()   { return database; }
         };
 
         // 3 使用运行期辅助类初始化审计和命令
@@ -73,7 +77,8 @@ public final class LinlangBukkitBootstrap implements AutoCloseable, Linlang {
         this.runtime.installLinMsg();
         this.runtime.installAudit(false);
         this.runtime.initCommands();
-        this.commands = this.runtime.getCommands();
+        this.command = this.runtime.getCommands();
+        this.messenger = new MessengerImpl(this.language);
     }
 
     /* ================= Linlang 接口实现 ================= */
@@ -88,21 +93,21 @@ public final class LinlangBukkitBootstrap implements AutoCloseable, Linlang {
     }
 
     @Override
-    public Linlang withPlatformContext(Object platformContext) {
+    public LinlangBukkitBootstrap withPlatformContext(Object platformContext) {
         return this;
     }
 
     @Override
     public LinlangBukkitBootstrap withCommandPrefix(String prefix) {
         this.runtime.withCommandPrefix(prefix);
-        this.commands = this.runtime.getCommands();
+        this.command = this.runtime.getCommands();
         return this;
     }
 
     @Override
-    public Linlang withCommandPrefixProvider(Function<Object, String> provider) {
+    public LinlangBukkitBootstrap withCommandPrefixProvider(Function<Object, String> provider) {
         this.runtime.withCommandPrefix(p -> provider.apply(p));
-        this.commands = this.runtime.getCommands();
+        this.command = this.runtime.getCommands();
         return this;
     }
 
@@ -115,30 +120,39 @@ public final class LinlangBukkitBootstrap implements AutoCloseable, Linlang {
     @Override
     public LinlangBukkitBootstrap withInitialLanguage(String locale) {
         this.runtime.withInitialLanguage(locale);
-        this.commands = this.runtime.getCommands();
+        this.command = this.runtime.getCommands();
         return this;
     }
 
     @Override
-    public LinlangBukkitBootstrap reload() {
+    public void reload() {
         this.runtime.reloadI18n();
-        this.commands = this.runtime.getCommands();
-        return this;
+        this.command = this.runtime.getCommands();
     }
 
     @Override
     public void initDb(DbType type, DbConfig cfg) {
-        data.init(type, cfg);
+        database.init(type, cfg);
     }
 
     @Override
     public <T> Repository<T, ?> repo(Class<T> entity) {
-        return data.repo(entity);
+        return database.repo(entity);
     }
 
     @Override
-    public Services services() {
-        return this.services;
+    public LinFile linFile() {
+        return this.linFile;
+    }
+
+    @Override
+    public LinCommand linCommand() {
+        return this.command;
+    }
+
+    @Override
+    public Messenger messenger() {
+        return this.messenger;
     }
 
     /* ================= 资源释放 ================= */
