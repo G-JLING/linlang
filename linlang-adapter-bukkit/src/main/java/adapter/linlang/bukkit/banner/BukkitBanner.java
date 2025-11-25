@@ -7,12 +7,12 @@ import org.bukkit.plugin.java.JavaPlugin;
 
 import java.util.List;
 
-public final class BukkitBanner {
+public final class BukkitBanner{
 
     private static final AsciiFont asciiFont;
 
     static {
-        asciiFont = BannerFontLoader.loadFromResource("banner/font.yml");
+        asciiFont = BannerFontLoader.font("banner/font.yml");
     }
 
     private BukkitBanner() {} // 工具类不允许实例化

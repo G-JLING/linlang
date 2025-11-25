@@ -16,7 +16,7 @@ import api.linlang.file.service.ConfigService;
 import api.linlang.file.service.LangService;
 
 import api.linlang.file.service.LinFile;
-import api.linlang.message.Messenger;
+import api.linlang.message.LinMessenger;
 import core.linlang.database.impl.DataServiceImpl;
 import core.linlang.file.impl.ConfigServiceImpl;
 import core.linlang.file.impl.LangServiceImpl;
@@ -42,7 +42,7 @@ public final class LinlangBukkitBootstrap implements AutoCloseable, Linlang, Lin
     public final DataServiceImpl database;
 
     public LinlangBukkitCommand command;
-    public Messenger messenger;
+    public LinMessenger messenger;
 
     private final BukkitFsHotReloader hot;
     private final PathResolver resolver;
@@ -128,6 +128,7 @@ public final class LinlangBukkitBootstrap implements AutoCloseable, Linlang, Lin
     public void reload() {
         this.runtime.reloadI18n();
         this.command = this.runtime.getCommands();
+        this.messenger = new MessengerImpl(this.language);
     }
 
     @Override
@@ -151,7 +152,7 @@ public final class LinlangBukkitBootstrap implements AutoCloseable, Linlang, Lin
     }
 
     @Override
-    public Messenger messenger() {
+    public LinMessenger linMessenger() {
         return this.messenger;
     }
 

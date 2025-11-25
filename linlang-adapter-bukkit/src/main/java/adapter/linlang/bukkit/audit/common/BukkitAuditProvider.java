@@ -249,7 +249,7 @@ public final class BukkitAuditProvider implements LinLog.Provider {
     /**
      * Flush queued OP notices to any currently online operators.
      */
-    public static void flushOpToOnlineOps() {
+    public void flushOpToOnlineOps() {
         List<String> batch;
         synchronized (pendingOp) {
             if (pendingOp.isEmpty()) return;
@@ -270,7 +270,7 @@ public final class BukkitAuditProvider implements LinLog.Provider {
     /**
      * Flush queued STARTUP notices to console (or broadcast to all players if some are online).
      */
-    public static void flushStartupToConsole() {
+    public void flushStartupToConsole() {
         List<String> batch;
         synchronized (pendingStartup) {
             if (pendingStartup.isEmpty()) return;
@@ -291,15 +291,16 @@ public final class BukkitAuditProvider implements LinLog.Provider {
     /**
      * Convenience: call when an OP player joins to deliver any queued OP notices to them.
      */
-    public static void flushOpTo(Player op) {
-        if (op == null || !op.isOp()) return;
+    public void flushOpTo(Object op) {
+        if (!(op instanceof Player p)) return;
+        if (!p.isOp()) return;
         List<String> batch;
         synchronized (pendingOp) {
             if (pendingOp.isEmpty()) return;
             batch = new ArrayList<>(pendingOp);
             pendingOp.clear();
         }
-        for (String s : batch) op.sendMessage(s);
+        for (String s : batch) p.sendMessage(s);
     }
 
 }

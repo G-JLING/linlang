@@ -8,7 +8,7 @@ package adapter.linlang.bukkit.common;
 
 import adapter.linlang.bukkit.file.common.file.VersionDetector;
 import api.linlang.file.service.LangService;
-import api.linlang.message.Messenger;
+import api.linlang.message.LinMessenger;
 import core.linlang.file.text.ColorCodes;
 import core.linlang.file.text.Placeholders;
 import net.md_5.bungee.api.ChatMessageType;
@@ -31,7 +31,7 @@ import java.util.function.Supplier;
  *   <li>提供 Chat、Title、ActionBar 三种输出通道。</li>
  * </ul>
  */
-public final class MessengerImpl implements Messenger {
+public final class MessengerImpl implements LinMessenger {
 
     private final Function<String, String> translator; // key -> template
     private final boolean hexColor; // 1.16+ -> true
