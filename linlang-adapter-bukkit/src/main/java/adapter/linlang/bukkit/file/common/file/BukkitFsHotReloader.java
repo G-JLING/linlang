@@ -1,6 +1,6 @@
 package adapter.linlang.bukkit.file.common.file;
 
-import api.linlang.audit.called.LinLog;
+import api.linlang.audit.LinLog;
 import core.linlang.file.impl.LangServiceImpl;
 import core.linlang.file.runtime.Watcher;
 import org.bukkit.plugin.Plugin;

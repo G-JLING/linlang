@@ -6,9 +6,9 @@ package core.linlang.command.impl;
  * 又接受执行的命令，处理后回复
  * */
 
-import api.linlang.audit.called.LinLog;
+import api.linlang.audit.LinLog;
 import api.linlang.command.LinCommand;
-import api.linlang.command.CommandMessages;
+import api.linlang.command.message.CommandMessages;
 import core.linlang.file.runtime.LocaleTag;
 import core.linlang.command.model.Model;
 import core.linlang.command.model.Registration;

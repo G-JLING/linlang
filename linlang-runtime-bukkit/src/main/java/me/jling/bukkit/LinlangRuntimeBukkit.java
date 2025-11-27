@@ -1,8 +1,8 @@
 package me.jling.bukkit;
 
-import api.linlang.audit.called.LinLog;
-import api.linlang.common.Lin;
-import api.linlang.common.Linlang;
+import api.linlang.audit.LinLog;
+import api.linlang.runtime.Lin;
+import api.linlang.runtime.Linlang;
 import org.bukkit.plugin.java.JavaPlugin;
 
 import me.jling.LinlangBukkitBootstrap;

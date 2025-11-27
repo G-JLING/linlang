@@ -4,7 +4,7 @@ package core.linlang.yaml;
  * YAML 写文件器
  * */
 
-import api.linlang.audit.called.LinLog;
+import api.linlang.audit.LinLog;
 
 import java.util.*;
 

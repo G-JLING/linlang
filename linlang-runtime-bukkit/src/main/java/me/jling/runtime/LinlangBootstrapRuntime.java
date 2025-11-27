@@ -1,16 +1,16 @@
 package me.jling.runtime;
 
 import adapter.linlang.bukkit.audit.common.BukkitAuditProvider;
+import core.linlang.audit.message.LinMsg;
+import core.linlang.audit.message.LinlangInternalMessageKeys;
 import adapter.linlang.bukkit.command.LinlangBukkitCommand;
-import api.linlang.audit.common.LinMsg;
-import api.linlang.audit.common.LinlangInternalMessageKeys;
+import api.linlang.audit.LinLog;
+import api.linlang.command.message.CommandMessages;
 import core.linlang.command.message.CommandMessageKeys;
 import core.linlang.command.message.CommandMessageRouter;
 import core.linlang.command.message.i18n.EnGB;
 import core.linlang.command.message.i18n.ZhCN;
 import core.linlang.file.impl.LangServiceImpl;
-import api.linlang.audit.called.LinLog;
-import api.linlang.command.CommandMessages;
 import lombok.Getter;
 import me.jling.LinlangBukkitBootstrap;
 import org.bukkit.plugin.java.JavaPlugin;
@@ -48,8 +48,8 @@ public final class LinlangBootstrapRuntime implements AutoCloseable {
 
     public void installLinMsg() {
         var keysInstance = lang.bind(LinlangInternalMessageKeys.class,
-                lang.currentLocale().toString(),
-                List.of(new api.linlang.audit.common.i18n.ZhCN(), new api.linlang.audit.common.i18n.EnGB()));
+                lang.currentLocale(),
+                List.of(new core.linlang.audit.message.i18n.ZhCN(), new core.linlang.audit.message.i18n.EnGB()));
 
         LinMsg.installKeys(() -> keysInstance);
         LinMsg.install(lang::tr);

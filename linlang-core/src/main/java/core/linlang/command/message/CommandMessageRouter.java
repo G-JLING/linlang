@@ -1,6 +1,7 @@
 package core.linlang.command.message;
 
-import api.linlang.command.CommandMessages;
+
+import api.linlang.command.message.CommandMessages;
 
 /** 使用 CommandMessageKeys 的消息提供器实现。 */
 public final class CommandMessageRouter implements CommandMessages {

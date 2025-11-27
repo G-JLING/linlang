@@ -1,10 +1,10 @@
 package core.linlang.file.runtime;
 
+import api.linlang.audit.LinLog;
 import api.linlang.file.annotations.Key;
 import api.linlang.file.annotations.NamingStyle;
 import api.linlang.file.annotations.Comment;
 import api.linlang.file.annotations.I18nComment;
-import api.linlang.audit.called.LinLog;
 
 import java.lang.reflect.Field;
 import java.util.*;
@@ -282,7 +282,7 @@ public final class TreeMapper {
     private static void collectI18nComments(Class<?> clz, String prefix, NamingStyle.Style style,
                                             String localeTag, Map<String, List<String>> out){
         LinLog.debug("[TreeMapper] collectI18nComments class=" + (clz==null?"null":clz.getName()) + ", prefix=" + prefix + ", style=" + style + ", locale=" + localeTag);
-        // 类级 I18nComment（支持重复注解）
+        // 类级 I18nComment
         I18nComment[] classComments = clz.getAnnotationsByType(I18nComment.class);
         LinLog.debug("[TreeMapper]  class-level I18nComment count=" + (classComments==null?0:classComments.length));
         List<String> chosen = pickL10nLines(classComments, localeTag);

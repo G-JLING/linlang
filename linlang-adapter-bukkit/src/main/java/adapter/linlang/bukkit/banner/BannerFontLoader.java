@@ -1,7 +1,6 @@
 package adapter.linlang.bukkit.banner;
-
-import api.linlang.banner.AsciiFont;
-import api.linlang.banner.BannerFontProvider;
+import api.linlang.banner.provider.BannerFontProvider;
+import api.linlang.banner.service.AsciiFont;
 import org.yaml.snakeyaml.Yaml;
 
 import java.io.InputStream;

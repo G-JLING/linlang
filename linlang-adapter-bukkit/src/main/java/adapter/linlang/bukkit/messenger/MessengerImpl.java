@@ -1,4 +1,4 @@
-package adapter.linlang.bukkit.common;
+package adapter.linlang.bukkit.messenger;
 
 /*
  * MessengerImpl：统一向玩家发送消息。
@@ -8,7 +8,7 @@ package adapter.linlang.bukkit.common;
 
 import adapter.linlang.bukkit.file.common.file.VersionDetector;
 import api.linlang.file.service.LangService;
-import api.linlang.message.LinMessenger;
+import api.linlang.messenger.LinMessenger;
 import core.linlang.file.text.ColorCodes;
 import core.linlang.file.text.Placeholders;
 import net.md_5.bungee.api.ChatMessageType;

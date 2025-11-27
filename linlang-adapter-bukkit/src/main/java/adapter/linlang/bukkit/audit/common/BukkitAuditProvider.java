@@ -5,9 +5,8 @@ package adapter.linlang.bukkit.audit.common;
  * 是用于装配 audit 审计与日志 的类
  */
 
-import api.linlang.audit.called.LinLog;
-import api.linlang.common.Lin;
-import api.linlang.common.Linlang;
+import api.linlang.audit.LinLog;
+import api.linlang.runtime.Lin;
 import audit.linlang.audit.AuditConfig;
 import org.bukkit.Bukkit;
 import org.bukkit.plugin.java.JavaPlugin;

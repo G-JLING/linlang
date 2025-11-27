@@ -1,22 +1,22 @@
 package me.jling;
 
-import adapter.linlang.bukkit.common.MessengerImpl;
-import adapter.linlang.bukkit.file.common.file.BukkitFsHotReloader;
 import adapter.linlang.bukkit.file.common.file.BukkitPathResolver;
+import adapter.linlang.bukkit.messenger.MessengerImpl;
+import adapter.linlang.bukkit.file.common.file.BukkitFsHotReloader;
 import adapter.linlang.bukkit.command.LinlangBukkitCommand;
 
 import api.linlang.command.LinCommand;
-import api.linlang.common.Linlang;
-import api.linlang.file.PathResolver;
+import api.linlang.file.LinFile;
 import api.linlang.file.database.config.DbConfig;
 import api.linlang.file.database.repo.Repository;
 import api.linlang.file.database.services.DataService;
 import api.linlang.file.database.types.DbType;
+import api.linlang.file.path.PathResolver;
 import api.linlang.file.service.ConfigService;
 import api.linlang.file.service.LangService;
 
-import api.linlang.file.service.LinFile;
-import api.linlang.message.LinMessenger;
+import api.linlang.messenger.LinMessenger;
+import api.linlang.runtime.Linlang;
 import core.linlang.database.impl.DataServiceImpl;
 import core.linlang.file.impl.ConfigServiceImpl;
 import core.linlang.file.impl.LangServiceImpl;

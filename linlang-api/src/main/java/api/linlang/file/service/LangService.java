@@ -12,7 +12,7 @@ import java.util.List;
  *       返回的对象作为读取与修改的入口；</li>
  *   <li>修改内存对象后，调用 {@link #save(Class, String)} 持久化；
  *       或调用 {@link #saveAll()} 持久化所有已绑定对象；</li>
- *   <li>消息发送可通过 {@link #tr(String, Object...)} 按键取模板（供 Messenger 等使用）。</li>
+ *   <li>消息发送可通过 {@link #tr(String, Object...)} 按键取模板（供 messenger 等使用）。</li>
  * </ul>
  */
 public interface LangService {

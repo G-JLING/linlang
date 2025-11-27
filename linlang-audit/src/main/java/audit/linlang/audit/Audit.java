@@ -1,6 +1,7 @@
 package audit.linlang.audit;
 
-import api.linlang.audit.called.LinLog;
+
+import api.linlang.audit.LinLog;
 
 /**
  * Backward-compatible facade. Delegates to API-level Logs.
@@ -9,7 +10,7 @@ import api.linlang.audit.called.LinLog;
 public final class Audit {
     private Audit() {}
 
-    public static void install(api.linlang.audit.called.LinLog.Provider p){ LinLog.install(p); }
+    public static void install(LinLog.Provider p){ LinLog.install(p); }
 
     public static void debug(String m, Object...kv){ LinLog.debug(m, kv); }
     public static void info (String m, Object...kv){ LinLog.info(m, kv); }
