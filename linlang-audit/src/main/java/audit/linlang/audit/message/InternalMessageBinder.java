@@ -1,7 +1,7 @@
 package audit.linlang.audit.message;
 
-import api.linlang.file.implement.LocaleProvider;
-import api.linlang.file.service.LangService;
+import api.linlang.file.file.LangService;
+import api.linlang.file.file.implement.LocaleProvider;
 import core.linlang.audit.message.LinMsg;
 import core.linlang.audit.message.LinlangInternalMessageKeys;
 

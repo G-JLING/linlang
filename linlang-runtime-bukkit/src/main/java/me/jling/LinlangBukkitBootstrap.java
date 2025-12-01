@@ -5,18 +5,18 @@ import adapter.linlang.bukkit.messenger.MessengerImpl;
 import adapter.linlang.bukkit.file.common.file.BukkitFsHotReloader;
 import adapter.linlang.bukkit.command.LinlangBukkitCommand;
 
+import api.linlang.audit.LinLog;
 import api.linlang.command.LinCommand;
 import api.linlang.file.LinFile;
-import api.linlang.file.database.config.DbConfig;
+import api.linlang.file.database.DataService;
 import api.linlang.file.database.repo.Repository;
-import api.linlang.file.database.services.DataService;
-import api.linlang.file.database.types.DbType;
-import api.linlang.file.path.PathResolver;
-import api.linlang.file.service.ConfigService;
-import api.linlang.file.service.LangService;
 
+import api.linlang.file.file.ConfigService;
+import api.linlang.file.file.LangService;
+import api.linlang.file.file.path.PathResolver;
 import api.linlang.messenger.LinMessenger;
 import api.linlang.runtime.Linlang;
+import core.linlang.audit.message.LinlangInternalMessageKeys;
 import core.linlang.database.impl.DataServiceImpl;
 import core.linlang.file.impl.ConfigServiceImpl;
 import core.linlang.file.impl.LangServiceImpl;
@@ -51,6 +51,7 @@ public final class LinlangBukkitBootstrap implements AutoCloseable, Linlang, Lin
 
     private LinlangBootstrapRuntime runtime;
 
+
     /** 提供给 API 的服务门面（由本实现返回） */
     private LinFile linFile;
 
@@ -68,7 +69,7 @@ public final class LinlangBukkitBootstrap implements AutoCloseable, Linlang, Lin
         // 2 提供 Services 实例（供 API 实现返回）
         this.linFile = new LinFile() {
             public ConfigService config() { return config; }
-            public LangService   language()   { return language; }
+            public LangService language()   { return language; }
             public DataService   database()   { return database; }
         };
 
@@ -132,16 +133,6 @@ public final class LinlangBukkitBootstrap implements AutoCloseable, Linlang, Lin
     }
 
     @Override
-    public void initDb(DbType type, DbConfig cfg) {
-        database.init(type, cfg);
-    }
-
-    @Override
-    public <T> Repository<T, ?> repo(Class<T> entity) {
-        return database.repo(entity);
-    }
-
-    @Override
     public LinFile linFile() {
         return this.linFile;
     }
@@ -155,6 +146,7 @@ public final class LinlangBukkitBootstrap implements AutoCloseable, Linlang, Lin
     public LinMessenger linMessenger() {
         return this.messenger;
     }
+
 
     /* ================= 资源释放 ================= */
 

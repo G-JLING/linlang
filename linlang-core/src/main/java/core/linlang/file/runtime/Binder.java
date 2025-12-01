@@ -2,8 +2,11 @@ package core.linlang.file.runtime;
 
 // linlang-core/src/main/java/io/linlang/file/runtime/Binder.java
 
-import api.linlang.file.annotations.*;
-import api.linlang.file.types.FileType;
+import api.linlang.file.database.annotations.Table;
+import api.linlang.file.file.FileType;
+import api.linlang.file.file.annotations.Comment;
+import api.linlang.file.file.annotations.ConfigFile;
+import api.linlang.file.file.annotations.Key;
 
 import java.lang.reflect.Field;
 import java.util.*;

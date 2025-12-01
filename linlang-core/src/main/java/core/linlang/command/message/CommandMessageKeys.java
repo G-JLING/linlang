@@ -1,7 +1,8 @@
 package core.linlang.command.message;
 
-import api.linlang.file.annotations.I18nComment;
-import api.linlang.file.annotations.NamingStyle;
+
+import api.linlang.file.file.annotations.I18nComment;
+import api.linlang.file.file.annotations.NamingStyle;
 
 @NamingStyle(NamingStyle.Style.KEBAB)
 @I18nComment(locale = "zh_CN", lines = "琳琅命令的消息文件。")

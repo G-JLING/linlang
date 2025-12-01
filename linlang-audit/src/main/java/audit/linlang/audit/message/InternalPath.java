@@ -10,7 +10,7 @@ final class InternalPath {
         for (String part : path.split("\\.")) {
             String fieldName = kebabToCamel(part);
             try {
-                Field f = curr.getClass().getField(fieldName); // 只查 public 字段（你模型是 public）
+                Field f = curr.getClass().getField(fieldName);
                 curr = f.get(curr);
                 if (curr == null) return null;
             } catch (NoSuchFieldException e) {

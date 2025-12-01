@@ -1,10 +1,10 @@
 package core.linlang.file.runtime;
 
 import api.linlang.audit.LinLog;
-import api.linlang.file.annotations.Key;
-import api.linlang.file.annotations.NamingStyle;
-import api.linlang.file.annotations.Comment;
-import api.linlang.file.annotations.I18nComment;
+import api.linlang.file.file.annotations.Comment;
+import api.linlang.file.file.annotations.I18nComment;
+import api.linlang.file.file.annotations.Key;
+import api.linlang.file.file.annotations.NamingStyle;
 
 import java.lang.reflect.Field;
 import java.util.*;

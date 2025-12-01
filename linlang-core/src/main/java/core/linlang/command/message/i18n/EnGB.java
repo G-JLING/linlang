@@ -1,10 +1,11 @@
 package core.linlang.command.message.i18n;
 
+import api.linlang.file.file.FileType;
+import api.linlang.file.file.annotations.LangPack;
+import api.linlang.file.file.annotations.NamingStyle;
+import api.linlang.file.file.implement.LocaleProvider;
 import core.linlang.command.message.CommandMessageKeys;
-import api.linlang.file.annotations.LangPack;
-import api.linlang.file.implement.LocaleProvider;
-import api.linlang.file.annotations.NamingStyle;
-import api.linlang.file.types.FileType;
+
 
 @NamingStyle(NamingStyle.Style.KEBAB)
 @LangPack(locale = "en_GB", format = FileType.YAML, path = "linlang/lincommand/message")

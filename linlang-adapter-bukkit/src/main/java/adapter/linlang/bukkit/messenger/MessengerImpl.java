@@ -7,7 +7,7 @@ package adapter.linlang.bukkit.messenger;
  */
 
 import adapter.linlang.bukkit.file.common.file.VersionDetector;
-import api.linlang.file.service.LangService;
+import api.linlang.file.file.LangService;
 import api.linlang.messenger.LinMessenger;
 import core.linlang.file.text.ColorCodes;
 import core.linlang.file.text.Placeholders;

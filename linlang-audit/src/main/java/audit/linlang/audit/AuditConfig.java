@@ -1,10 +1,10 @@
 package audit.linlang.audit;
 
-import api.linlang.file.annotations.Comment;
-import api.linlang.file.annotations.ConfigFile;
-import api.linlang.file.annotations.I18nComment;
-import api.linlang.file.annotations.NamingStyle;
-import api.linlang.file.types.FileType;
+
+import api.linlang.file.file.FileType;
+import api.linlang.file.file.annotations.Comment;
+import api.linlang.file.file.annotations.ConfigFile;
+import api.linlang.file.file.annotations.NamingStyle;
 
 @ConfigFile(name="audit", path="linlang/linlog", format= FileType.YAML)
 @NamingStyle(NamingStyle.Style.KEBAB)

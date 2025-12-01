@@ -36,6 +36,7 @@ public final class LinlangBootstrapRuntime implements AutoCloseable {
     // 日志审计
     private BukkitAuditProvider audit;
 
+
     // 命令前缀提供者（可运行期切换）
     private Function<JavaPlugin, String> prefixFn =
             p -> "§f[§d" + p.getDescription().getName() + "§f]";

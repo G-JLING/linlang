@@ -3,13 +3,13 @@ package core.linlang.file.impl;
 // linlang-core/src/main/java/io/linlang/file/impl/ConfigServiceImpl.java
 
 import api.linlang.audit.LinLog;
-import api.linlang.file.annotations.ConfigVersion;
-import api.linlang.file.annotations.NoEmit;
-import api.linlang.file.implement.Migrator;
-import api.linlang.file.doc.MutableDocument;
-import api.linlang.file.path.PathResolver;
-import api.linlang.file.types.FileType;
-import api.linlang.file.service.ConfigService;
+import api.linlang.file.file.ConfigService;
+import api.linlang.file.file.FileType;
+import api.linlang.file.file.annotations.ConfigVersion;
+import api.linlang.file.file.annotations.NoEmit;
+import api.linlang.file.file.migrator.Migrator;
+import api.linlang.file.file.migrator.MutableDocument;
+import api.linlang.file.file.path.PathResolver;
 import core.linlang.audit.message.LinMsg;
 import core.linlang.file.runtime.TreeMapper;
 import core.linlang.json.JsonCodec;

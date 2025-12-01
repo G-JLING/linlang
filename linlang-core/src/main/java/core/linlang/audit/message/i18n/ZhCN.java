@@ -1,10 +1,11 @@
 package core.linlang.audit.message.i18n;
 
+import api.linlang.file.file.FileType;
+import api.linlang.file.file.annotations.LangPack;
+import api.linlang.file.file.annotations.NoEmit;
+import api.linlang.file.file.implement.LocaleProvider;
 import core.linlang.audit.message.LinlangInternalMessageKeys;
-import api.linlang.file.annotations.NoEmit;
-import api.linlang.file.implement.LocaleProvider;
-import api.linlang.file.annotations.LangPack;
-import api.linlang.file.types.FileType;
+
 
 @NoEmit
 @LangPack(name = "zh_CN", path = "linlang/message", format = FileType.YAML, locale = "zh_CN")

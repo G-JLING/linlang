@@ -4,7 +4,6 @@ package adapter.linlang.bukkit.banner;
 import api.linlang.audit.LinLog;
 import api.linlang.banner.*;
 import api.linlang.banner.service.AsciiFont;
-import api.linlang.banner.service.BannerOptions;
 import api.linlang.banner.service.BannerRenderer;
 import org.bukkit.plugin.java.JavaPlugin;
 

@@ -1,7 +1,8 @@
 package core.linlang.audit.message;
 
-import api.linlang.file.annotations.I18nComment;
-import api.linlang.file.annotations.NamingStyle;
+
+import api.linlang.file.file.annotations.I18nComment;
+import api.linlang.file.file.annotations.NamingStyle;
 
 /**
  * 内建的框架层级消息。
