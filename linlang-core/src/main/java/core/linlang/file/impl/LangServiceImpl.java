@@ -138,7 +138,7 @@ public final class LangServiceImpl implements LangService {
                 ensureCommentAnchors(doc, comments);
                 LinLog.debug("[linlang-debug] [LangService] ensured anchors for comments");
                 persist(file, pp.fmt(), doc, comments);
-                LinLog.info(LinMsg.k("linFile.file.langChangeLocale"), "locale", locale, "file", file);
+                LinLog.debug(LinMsg.k("linFile.file.langChangeLocale"), "locale", locale, "file", file);
             }
         } else {
             if (shouldEmit && !missing.isEmpty()) {
@@ -148,7 +148,7 @@ public final class LangServiceImpl implements LangService {
                 ensureCommentAnchors(doc, comments);
                 LinLog.debug("[linlang-debug] [LangService] ensured anchors for comments");
                 persist(file, pp.fmt(), doc, comments);
-                LinLog.info(LinMsg.k("linFile.file.langChangeLocale"), "locale", locale, "file", file);
+                LinLog.debug(LinMsg.k("linFile.file.langChangeLocale"), "locale", locale, "file", file);
             }
         }
 
@@ -284,7 +284,7 @@ public final class LangServiceImpl implements LangService {
     private void persist(Path f, FileType fmt, Map<String, Object> doc) {
         try {
             IOs.writeString(f, fmt == FileType.YAML ? YamlCodec.dump(doc) : JsonCodec.dump(doc));
-            LinLog.info(LinMsg.k("linFile.file.fileSavedConfig"), "file", f);
+            LinLog.debug(LinMsg.k("linFile.file.fileSavedConfig"), "file", f);
         } catch (Exception e) {
             LinLog.warn(LinMsg.k("linFile.file.fileSaveConfigFailed"), "file", f, "reason", e.getMessage());
             throw new RuntimeException(e);
@@ -297,7 +297,7 @@ public final class LangServiceImpl implements LangService {
                 : JsonCodec.dump(doc);
         try {
             IOs.writeString(file, out);
-            LinLog.info(LinMsg.k("linFile.file.fileSavedConfig"), "file", file);
+            LinLog.debug(LinMsg.k("linFile.file.fileSavedConfig"), "file", file);
         } catch (Exception e) {
             LinLog.warn(LinMsg.k("linFile.file.fileSaveConfigFailed"), "file", file, "reason", e.getMessage());
             throw new RuntimeException(e);
@@ -525,7 +525,7 @@ public final class LangServiceImpl implements LangService {
 
             String ci = " ".repeat(childIndent);
             String rendered = renderYamlScalar(missingWithValues.get(path));
-            lines.add(insertAt, ci + LinMsg.ks("linFile.file.missingKeys"));
+            lines.add(insertAt, ci + LinMsg.kh("linFile.file.missingKeys"));
             lines.add(insertAt + 1, ci + last + ": " + rendered);
         }
         return String.join("\n", lines);

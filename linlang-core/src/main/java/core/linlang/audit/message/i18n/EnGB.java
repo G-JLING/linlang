@@ -7,7 +7,7 @@ import api.linlang.file.file.implement.LocaleProvider;
 import core.linlang.audit.message.LinlangInternalMessageKeys;
 
 @NoEmit
-@LangPack(name = "en_GB", path = "linlang/message", format = FileType.YAML, locale = "en_GB")
+@LangPack(name = "en_GB", path = "linlang", format = FileType.YAML, locale = "en_GB")
 public class EnGB extends LinlangInternalMessageKeys implements LocaleProvider<LinlangInternalMessageKeys> {
 
     private static final String ME = LinlangInternalMessageKeys.ME;

@@ -6,7 +6,6 @@ import audit.linlang.audit.AuditConfig;
 import audit.linlang.audit.Auditor;
 import audit.linlang.audit.Logger;
 
-// linlang-called/src/main/java/io/linlang/called/AuditImpl.java
 public final class AuditImpl implements Auditor, Logger {
     public AuditImpl(PathResolver paths, ConfigService cfgs){
         AuditConfig cfg = cfgs.bind(AuditConfig.class);

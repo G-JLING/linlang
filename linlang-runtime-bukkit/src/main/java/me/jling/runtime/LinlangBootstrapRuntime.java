@@ -1,6 +1,7 @@
 package me.jling.runtime;
 
 import adapter.linlang.bukkit.audit.common.BukkitAuditProvider;
+import audit.linlang.audit.AuditConfig;
 import core.linlang.audit.message.LinMsg;
 import core.linlang.audit.message.LinlangInternalMessageKeys;
 import adapter.linlang.bukkit.command.LinlangBukkitCommand;
@@ -10,6 +11,7 @@ import core.linlang.command.message.CommandMessageKeys;
 import core.linlang.command.message.CommandMessageRouter;
 import core.linlang.command.message.i18n.EnGB;
 import core.linlang.command.message.i18n.ZhCN;
+import core.linlang.file.impl.ConfigServiceImpl;
 import core.linlang.file.impl.LangServiceImpl;
 import lombok.Getter;
 import me.jling.LinlangBukkitBootstrap;
@@ -26,6 +28,7 @@ public final class LinlangBootstrapRuntime implements AutoCloseable {
 
     private final JavaPlugin plugin;
     private final LangServiceImpl lang;
+    private final ConfigServiceImpl config;
 
     // 命令
     @Getter
@@ -45,6 +48,7 @@ public final class LinlangBootstrapRuntime implements AutoCloseable {
         this.plugin = plugin;
         this.lang = bootstrap.getLanguage();
         this.preferredLocaleTag = String.valueOf(lang.currentLocale());
+        this.config = bootstrap.getConfig();
     }
 
     public void installLinMsg() {
@@ -64,8 +68,8 @@ public final class LinlangBootstrapRuntime implements AutoCloseable {
 
         // 绑定审计配置（托管于 LinFile）
         try {
-            this.audit.bindConfigFromLinFile();
-            LinLog.info(LinMsg.k("linLog.auditConfigLoaded"));
+            this.audit.setConfig(this.config.bind(AuditConfig.class));
+            LinLog.debug(LinMsg.k("linLog.auditConfigLoaded"));
         } catch (Throwable t) {
             LinLog.warn("Failed to bind audit config from LinFile: " + t.getMessage());
         }
@@ -130,7 +134,7 @@ public final class LinlangBootstrapRuntime implements AutoCloseable {
 
         try {
             if (this.audit != null) {
-                this.audit.bindConfigFromLinFile();
+                this.audit.setConfig(this.config.bind(AuditConfig.class));
                 LinLog.info(LinMsg.k("linLog.auditConfigReloaded"));
             }
         } catch (Throwable t) {

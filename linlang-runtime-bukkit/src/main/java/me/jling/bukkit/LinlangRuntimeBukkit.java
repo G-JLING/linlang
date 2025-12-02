@@ -22,7 +22,10 @@ public class LinlangRuntimeBukkit extends JavaPlugin {
 
             // 2) 确保服务总线上只保留本次注册（兼容热重载/重复启用）
             var sm = getServer().getServicesManager();
-            try { sm.unregisterAll(this); } catch (Throwable ignored) {}
+            try {
+                sm.unregisterAll(this);
+            } catch (Throwable ignored) {
+            }
             sm.register(Linlang.class, runtime, this, ServicePriority.Highest);
 
             long ms = (System.nanoTime() - t0) / 1_000_000L;
@@ -30,9 +33,17 @@ public class LinlangRuntimeBukkit extends JavaPlugin {
                     + ", Runtime=" + runtime.runtimeVersion()
                     + ", Plugin=" + getDescription().getVersion());
 
+            LinLog.info("[linlang] registered Linlang provider: providerClass={}, providerCL={}",
+                    runtime.getClass().getName(), runtime.getClass().getClassLoader());
+
+            LinLog.info("[linlang] Linlang interface classloader: {}", api.linlang.runtime.Linlang.class.getClassLoader());
+
         } catch (Throwable t) {
             LinLog.error("Failed to enable Linlang runtime: ", t);
-            try { getServer().getServicesManager().unregisterAll(this); } catch (Throwable ignored) {}
+            try {
+                getServer().getServicesManager().unregisterAll(this);
+            } catch (Throwable ignored) {
+            }
             getServer().getPluginManager().disablePlugin(this);
         }
     }
@@ -41,10 +52,14 @@ public class LinlangRuntimeBukkit extends JavaPlugin {
     public void onDisable() {
         try {
             getServer().getServicesManager().unregisterAll(this);
-        } catch (Throwable ignored) {}
+        } catch (Throwable ignored) {
+        }
 
         if (runtime != null) {
-            try { runtime.close(); } catch (Exception ignored) {}
+            try {
+                runtime.close();
+            } catch (Exception ignored) {
+            }
             runtime = null;
         }
         LinLog.info("[linlang] Linlang runtime disabled.");

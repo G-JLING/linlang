@@ -8,7 +8,7 @@ import core.linlang.audit.message.LinlangInternalMessageKeys;
 
 
 @NoEmit
-@LangPack(name = "zh_CN", path = "linlang/message", format = FileType.YAML, locale = "zh_CN")
+@LangPack(name = "zh_CN", path = "linlang", format = FileType.YAML, locale = "zh_CN")
 public class ZhCN extends LinlangInternalMessageKeys implements LocaleProvider<LinlangInternalMessageKeys> {
 
     private static final String ME = LinlangInternalMessageKeys.ME;

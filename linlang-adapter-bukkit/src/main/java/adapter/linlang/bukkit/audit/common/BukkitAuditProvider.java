@@ -8,6 +8,7 @@ package adapter.linlang.bukkit.audit.common;
 import api.linlang.audit.LinLog;
 import api.linlang.runtime.Lin;
 import audit.linlang.audit.AuditConfig;
+import lombok.Setter;
 import org.bukkit.Bukkit;
 import org.bukkit.plugin.java.JavaPlugin;
 
@@ -29,6 +30,8 @@ import java.util.List;
 
 public final class BukkitAuditProvider implements LinLog.Provider {
     private final Logger jul;
+
+    @Setter
     private AuditConfig config;
 
     private static final int MAX_PENDING = 50;
@@ -51,14 +54,6 @@ public final class BukkitAuditProvider implements LinLog.Provider {
         try {
             this.jul.setLevel(Level.ALL);
         } catch (Throwable ignore) {
-        }
-    }
-
-    public void bindConfigFromLinFile() {
-        try {
-            this.config = Lin.find().linFile().config().bind(AuditConfig.class);
-        } catch (Throwable t) {
-            this.jul.fine("[linlang] Audit config not bound yet: " + t.getClass().getSimpleName());
         }
     }
 
@@ -231,15 +226,48 @@ public final class BukkitAuditProvider implements LinLog.Provider {
     }
 
     private static String fmt(String lvl, String msg, Object... kv) {
-        StringBuilder sb;
-        if (lvl.equals("INIT")) {
-            sb = new StringBuilder().append("[linlang-init] ").append(msg);
-        } else {
-            sb = new StringBuilder().append(msg);
+        // Prepare base template (preserve null-safe behavior)
+        String template = msg == null ? "" : msg;
+
+        // Try to perform placeholder replacements of form {key} using kv pairs.
+        boolean replacedAny = false;
+        if (kv != null && kv.length >= 2) {
+            for (int i = 0; i + 1 < kv.length; i += 2) {
+                String rawKey = String.valueOf(kv[i]);
+                if (rawKey == null) continue;
+                String k = rawKey.trim();
+                // accept keys provided either as name or as {name}
+                if (k.startsWith("{") && k.endsWith("}") && k.length() > 2) {
+                    k = k.substring(1, k.length() - 1).trim();
+                }
+                if (k.isEmpty()) continue;
+                String placeholder = "{" + k + "}";
+                if (template.contains(placeholder)) {
+                    String rep = String.valueOf(kv[i + 1]);
+                    template = template.replace(placeholder, rep == null ? "null" : rep);
+                    replacedAny = true;
+                }
+            }
         }
-        for (int i = 0; i + 1 < kv.length; i += 2)
-            sb.append(" ").append(kv[i]).append("=").append(String.valueOf(kv[i + 1]));
-        if ((kv.length & 1) == 1) sb.append(" kv_odd=").append(kv[kv.length - 1]);
+
+        // If this is an INIT level, prefix accordingly
+        StringBuilder sb = new StringBuilder();
+        if ("INIT".equals(lvl)) sb.append("[linlang-init] ");
+
+        if (replacedAny) {
+            // Placeholders were replaced — return the substituted template (with INIT prefix if any)
+            sb.append(template);
+            return sb.toString();
+        }
+
+        // No placeholder replaced: fall back to old behavior of appending key=value pairs
+        sb.append(template);
+        if (kv != null && kv.length > 0) {
+            for (int i = 0; i + 1 < kv.length; i += 2) {
+                sb.append(" ").append(kv[i]).append("=").append(String.valueOf(kv[i + 1]));
+            }
+            if ((kv.length & 1) == 1) sb.append(" kv_odd=").append(kv[kv.length - 1]);
+        }
         return sb.toString();
     }
 

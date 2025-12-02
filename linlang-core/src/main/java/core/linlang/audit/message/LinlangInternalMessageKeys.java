@@ -74,7 +74,7 @@ public class LinlangInternalMessageKeys {
             @I18nComment(locale = "zh_CN", lines = "语言包已生成/更新")
             @I18nComment(locale = "en_GB", lines = "Language pack generated/updated")
             public String langChangeLocale =
-                    "语言已变更 {locale} -> {file}。重新启动服务器以使更改生效。";
+                    "语言已变更 {locale} -> {file}。";
 
         }
 

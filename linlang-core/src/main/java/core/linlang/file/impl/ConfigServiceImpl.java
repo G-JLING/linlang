@@ -183,7 +183,7 @@ public final class ConfigServiceImpl implements ConfigService {
                 : JsonCodec.dump(doc);
         try {
             IOs.writeString(file, out);
-            LinLog.info(LinMsg.k("linFile.file.fileSavedConfig"), "file", file);
+            LinLog.debug(LinMsg.k("linFile.file.fileSavedConfig"), "file", file);
         } catch (Exception e) {
             LinLog.warn(LinMsg.k("linFile.file.fileSaveConfigFailed"), "file", file, "reason", e.getMessage());
             throw new RuntimeException(e);
@@ -360,7 +360,7 @@ public final class ConfigServiceImpl implements ConfigService {
 
             String ci = " ".repeat(childIndent);
             String rendered = renderYamlScalar(missingWithValues.get(path));
-            lines.add(insertAt,     ci + LinMsg.ks("linFile.file.missingKeys"));
+            lines.add(insertAt,     ci + LinMsg.kh("linFile.file.missingKeys"));
             lines.add(insertAt + 1, ci + last + ": " + rendered);
         }
         return String.join("\n", lines);

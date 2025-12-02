@@ -6,7 +6,7 @@ import api.linlang.file.file.annotations.Comment;
 import api.linlang.file.file.annotations.ConfigFile;
 import api.linlang.file.file.annotations.NamingStyle;
 
-@ConfigFile(name="audit", path="linlang/linlog", format= FileType.YAML)
+@ConfigFile(name = "audit", path = "linlang/linlog", format = FileType.YAML)
 @NamingStyle(NamingStyle.Style.KEBAB)
 @Comment({"linlang 日志与审计 主配置文件", "linlang log and audit configauration file"})
 public class AuditConfig {
@@ -40,8 +40,18 @@ public class AuditConfig {
         @Comment({"同时保留的文件数量", "count of retained files"})
         public int retained = 5;
 
-        public Output() {}
-        public Output(boolean e, boolean r) {this.enabled = e;this.json = r;}
-        public Output(String p, boolean e, boolean r){ this.path=p; this.enabled=e; this.json=r; }
+        public Output() {
+        }
+
+        public Output(boolean e, boolean r) {
+            this.enabled = e;
+            this.json = r;
+        }
+
+        public Output(String p, boolean e, boolean r) {
+            this.path = p;
+            this.enabled = e;
+            this.json = r;
+        }
     }
 }

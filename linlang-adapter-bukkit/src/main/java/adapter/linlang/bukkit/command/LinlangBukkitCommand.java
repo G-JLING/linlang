@@ -13,8 +13,10 @@ import core.linlang.command.parser.ArgEngine;
 import core.linlang.command.signal.Interact;
 import org.bukkit.command.*;
 import org.bukkit.entity.Player;
+import org.bukkit.plugin.Plugin;
 import org.bukkit.plugin.java.JavaPlugin;
 
+import java.lang.reflect.Field;
 import java.util.*;
 
 import net.md_5.bungee.api.chat.BaseComponent;
@@ -54,15 +56,38 @@ public final class LinlangBukkitCommand implements LinCommand, CommandExecutor, 
         return this;
     }
 
+
     private void ensureBukkitBinding(String spec){
         if (root != null) return;
         String first = spec.split("\\s+")[0];
         this.root = first;
-        PluginCommand pc = plugin.getCommand(first);
-        if (pc == null) throw new IllegalStateException("Declare command '"+first+"' in plugin.yml");
-        pc.setExecutor(this); pc.setTabCompleter(this);
-    }
 
+        // 1) 试从服务器命令表直接取（会返回声明该命令的 PluginCommand）
+        PluginCommand pc = null;
+        try {
+            pc = (this.plugin != null)
+                    ? this.plugin.getServer().getPluginCommand(first)
+                    : org.bukkit.Bukkit.getServer().getPluginCommand(first);
+        } catch (Throwable ignore) { pc = null; }
+
+        // 2) 兜底：遍历所有已加载插件，尝试从各个插件获取（兼容极端情况）
+        if (pc == null) {
+            var pm = (this.plugin != null) ? this.plugin.getServer().getPluginManager()
+                    : org.bukkit.Bukkit.getPluginManager();
+            for (Plugin p : pm.getPlugins()) {
+                try {
+                    PluginCommand cand = p.getServer().getPluginCommand(first);
+                    if (cand != null) { pc = cand; break; }
+                } catch (Throwable ignored) { }
+            }
+        }
+
+        if (pc == null) {
+            throw new IllegalStateException("应在 plugin.yml 中注册插件命令 '" + first + "'");
+        }
+        pc.setExecutor(this);
+        pc.setTabCompleter(this);
+    }
 
     // 平台桥
     private final LinCommandImpl.PlatformBridge bridge = new LinCommandImpl.PlatformBridge() {

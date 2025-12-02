@@ -1,7 +1,5 @@
 package core.linlang.audit.message;
 
-import java.util.List;
-
 /**
  * Linlang 全局语言访问的静态入口。
  * 作为语言文件的静态门面，使其在激活 LangService 后可通过静态调用使用。
@@ -34,48 +32,46 @@ public final class LinMsg {
      * @param path 要获得的字段
      * @param kv 对，即变量和值
      */
-    @SuppressWarnings("unchecked")
     public static String k(String path, Object... kv) {
         Object root = keys.get();
         if (root != null && path != null && !path.isBlank()) {
             try {
                 String val = getFieldStringValue(root, path);
                 if (val != null) {
-                    String formatted = fmt(val, kv);
-                    if (!formatted.equals(val)) return formatted; // placeholders replaced
+                    ReplacementResult rr = fmtWithFlag(val, kv);
+                    if (rr.replaced) return rr.text; // placeholders replaced
                     // no placeholder replaced → append key=value pairs
-                    StringBuilder sb = new StringBuilder(formatted);
+                    StringBuilder sb = new StringBuilder(rr.text);
                     for (int i = 0; i + 1 < kv.length; i += 2) {
                         sb.append(" ").append(kv[i]).append("=").append(kv[i + 1]);
                     }
                     return sb.toString();
                 }
-            } catch (Throwable ignore) { /* fallthrough to backend */ }
+            } catch (Throwable ignore) { }
         }
         return f(path, kv);
     }
 
     /**
      * 静态门面，与 k 同
-     * 不同的点在于此方法返回的字符串会增加 Sharp 符号
+     * 不同的点在于此方法返回的字符串会增加 hash(#) 符号
      * @param path 要获得的字段
      * @param kv 对，即变量和值
      */
-    @SuppressWarnings("unchecked")
-    public static String ks(String path, Object... kv) {
+    public static String kh(String path, Object... kv) {
         Object root = keys.get();
         if (root != null && path != null && !path.isBlank()) {
             try {
                 String val = getFieldStringValue(root, path);
                 if (val != null) {
-                    String formatted = fmt(val, kv);
-                    if (!formatted.equals(val)) return formatted; // placeholders replaced
+                    ReplacementResult rr = fmtWithFlag(val, kv);
+                    if (rr.replaced) return rr.text; // placeholders replaced
                     // no placeholder replaced → append key=value pairs
-                    StringBuilder sb = new StringBuilder(formatted);
+                    StringBuilder sb = new StringBuilder(rr.text);
                     for (int i = 0; i + 1 < kv.length; i += 2) {
                         sb.append(" ").append(kv[i]).append("=").append(kv[i + 1]);
                     }
-                    return sb.toString();
+                    return "# " + sb.toString();
                 }
             } catch (Throwable ignore) { }
         }
@@ -111,6 +107,38 @@ public final class LinMsg {
             out = out.replace("{" + k + "}", rep);
         }
         return out;
+    }
+
+    // Helper: result of formatting that indicates whether any placeholder was replaced
+    private static final class ReplacementResult {
+        final String text;
+        final boolean replaced;
+        ReplacementResult(String t, boolean r) { this.text = t; this.replaced = r; }
+    }
+
+    /**
+     * Like fmt(...) but also returns whether any replacement actually occurred.
+     */
+    private static ReplacementResult fmtWithFlag(String template, Object... kv) {
+        if (template == null) return new ReplacementResult("null", false);
+        if (kv == null || kv.length == 0) return new ReplacementResult(template, false);
+        String out = template;
+        boolean any = false;
+        for (int i = 0; i + 1 < kv.length; i += 2) {
+            String k = String.valueOf(kv[i]);
+            if (k == null) continue;
+            k = k.trim();
+            if (k.startsWith("{") && k.endsWith("}") && k.length() >= 2) {
+                k = k.substring(1, k.length() - 1).trim();
+            }
+            String placeholder = "{" + k + "}";
+            if (out.contains(placeholder)) {
+                String rep = String.valueOf(kv[i + 1]);
+                out = out.replace(placeholder, rep);
+                any = true;
+            }
+        }
+        return new ReplacementResult(out, any);
     }
 
     /**
