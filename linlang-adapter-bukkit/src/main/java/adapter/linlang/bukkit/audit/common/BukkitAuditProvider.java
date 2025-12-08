@@ -225,14 +225,38 @@ public final class BukkitAuditProvider implements LinLog.Provider {
         }
     }
 
+    private static String prefixFor(String lvl) {
+        String label = "linlang-" + (lvl == null ? "info" : lvl.toLowerCase(Locale.ROOT));
+        // content width inside brackets (pad to fixed width for alignment)
+        int contentWidth = 14; // adjust total visual width if desired
+        String content = padRight(label, contentWidth);
+        return "[" + content + "] ";
+    }
+
+    private static String padRight(String s, int width) {
+        if (s == null) s = "";
+        if (s.length() >= width) return s.substring(0, width);
+        StringBuilder sb = new StringBuilder(s);
+        while (sb.length() < width) sb.append(' ');
+        return sb.toString();
+    }
+
     private static String fmt(String lvl, String msg, Object... kv) {
-        // Prepare base template (preserve null-safe behavior)
         String template = msg == null ? "" : msg;
 
-        // Try to perform placeholder replacements of form {key} using kv pairs.
+        // 1) Sequential "{}" placeholders replacement using kv values in order.
+        int valueIdx = 0;
+        if (kv != null && kv.length > 0) {
+            while (template.contains("{}") && valueIdx < kv.length) {
+                String rep = String.valueOf(kv[valueIdx++]);
+                template = template.replaceFirst("\\\\{\\\\}", rep == null ? "null" : rep);
+            }
+        }
+
+        // 2) Try to perform named placeholder replacements of form {key} using remaining kv pairs.
         boolean replacedAny = false;
-        if (kv != null && kv.length >= 2) {
-            for (int i = 0; i + 1 < kv.length; i += 2) {
+        if (kv != null && kv.length > valueIdx) {
+            for (int i = valueIdx; i + 1 < kv.length; i += 2) {
                 String rawKey = String.valueOf(kv[i]);
                 if (rawKey == null) continue;
                 String k = rawKey.trim();
@@ -250,23 +274,23 @@ public final class BukkitAuditProvider implements LinLog.Provider {
             }
         }
 
-        // If this is an INIT level, prefix accordingly
         StringBuilder sb = new StringBuilder();
-        if ("INIT".equals(lvl)) sb.append("[linlang-init] ");
+        // prefix for level (fixed width)
+        sb.append(prefixFor(lvl == null ? "info" : lvl));
 
         if (replacedAny) {
-            // Placeholders were replaced — return the substituted template (with INIT prefix if any)
             sb.append(template);
             return sb.toString();
         }
 
-        // No placeholder replaced: fall back to old behavior of appending key=value pairs
+        // No named placeholder replaced: fall back to old behavior of appending key=value pairs
         sb.append(template);
-        if (kv != null && kv.length > 0) {
-            for (int i = 0; i + 1 < kv.length; i += 2) {
-                sb.append(" ").append(kv[i]).append("=").append(String.valueOf(kv[i + 1]));
+        if (kv != null && kv.length > valueIdx) {
+            // append remaining kv as key=value pairs
+            for (int i = valueIdx; i + 1 < kv.length; i += 2) {
+                sb.append(' ').append(kv[i]).append('=').append(String.valueOf(kv[i + 1]));
             }
-            if ((kv.length & 1) == 1) sb.append(" kv_odd=").append(kv[kv.length - 1]);
+            if ((kv.length - valueIdx & 1) == 1) sb.append(" kv_odd=").append(kv[kv.length - 1]);
         }
         return sb.toString();
     }

@@ -19,7 +19,7 @@ public final class Linlang {
 
     /**
      * 安装服务集合。
-     * <p>通常在适配层引导（Bootstrap）中调用一次，用于向全局注入实现。</p>
+     * <p>通常在适配层引导（bootstrap）中调用一次，用于向全局注入实现。</p>
      * @param s 服务集合实现，不能为空
      * @throws IllegalArgumentException 当参数为 {@code null} 时抛出
      */

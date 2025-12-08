@@ -31,7 +31,7 @@
 
 在插件主类（继承 JavaPlugin）的 `onEnable()` 方法中
 ```java
-LinlangBukkitBootstrap bootstrap = LinlangBukkitBootstrap.install(this);
+LinlangBootstrapBukkit bootstrap = LinlangBootstrapBukkit.install(this);
 ```
 即可装载 Linlang 服务。
 

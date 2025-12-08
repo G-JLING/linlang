@@ -7,9 +7,8 @@ import org.bukkit.plugin.java.JavaPlugin;
 
 import me.jling.LinlangBukkitBootstrap;
 import org.bukkit.plugin.ServicePriority;
-import org.bukkit.plugin.java.JavaPlugin;
 
-public class LinlangRuntimeBukkit extends JavaPlugin {
+public class BukkitLoader extends JavaPlugin {
 
     private LinlangBukkitBootstrap runtime;
 

@@ -30,7 +30,7 @@ public final class LangServiceImpl implements LangService {
     @Setter
     private LocaleTag current;
 
-    private final Map<String, Map<String, String>> cache = new java.util.concurrent.ConcurrentHashMap<>(); // locale -> (key->msg, merged across binds)
+    private final Map<String, Map<String, String>> cache = new java.util.concurrent.ConcurrentHashMap<>();
 
     // 已绑定对象：用于 reload/saveAll/saveObject 无需外部传参
     private record BoundKey(Class<?> type, String locale) {
@@ -94,7 +94,7 @@ public final class LangServiceImpl implements LangService {
                                boolean emitFlag) {
         // Normalize locale and debug entry
         locale = ensureLocale(locale, this.current);
-        LinLog.debug("[linlang-debug] [LangService] bindInternal.enter", "keys", keysClass.getName(), "locale", locale);
+        LinLog.debug("bindInternal.enter", "keys", keysClass.getName(), "locale", locale);
 
         // Defensive providers null check, use provList for further usage
         List<? extends LocaleProvider<T>> provList = providers == null ? Collections.emptyList() : providers;
@@ -125,9 +125,9 @@ public final class LangServiceImpl implements LangService {
 
         Map<String, java.util.List<String>> comments =
                 (pp.fmt() == FileType.YAML) ? extractCommentsByLocale(keysClass, locale) : java.util.Collections.emptyMap();
-        LinLog.debug("[linlang-debug] [LangService] comments.size", "n", (comments == null ? 0 : comments.size()));
+        LinLog.debug("comments.size", "n", (comments == null ? 0 : comments.size()));
         if (comments != null)
-            for (var k : comments.keySet()) LinLog.debug("[linlang-debug] [LangService] comment-key", "path", k);
+            for (var k : comments.keySet()) LinLog.debug("comment-key", "path", k);
 
         boolean annotatedNoEmit = keysClass.isAnnotationPresent(NoEmit.class)
                 || (!provList.isEmpty() && provList.stream().anyMatch(p -> p != null && p.getClass().isAnnotationPresent(NoEmit.class)));
@@ -136,7 +136,7 @@ public final class LangServiceImpl implements LangService {
         if (!exists) {
             if (shouldEmit) {
                 ensureCommentAnchors(doc, comments);
-                LinLog.debug("[linlang-debug] [LangService] ensured anchors for comments");
+                LinLog.debug("ensured anchors for comments");
                 persist(file, pp.fmt(), doc, comments);
                 LinLog.debug(LinMsg.k("linFile.file.langChangeLocale"), "locale", locale, "file", file);
             }
@@ -146,7 +146,7 @@ public final class LangServiceImpl implements LangService {
             }
             if (shouldEmit) {
                 ensureCommentAnchors(doc, comments);
-                LinLog.debug("[linlang-debug] [LangService] ensured anchors for comments");
+                LinLog.debug("ensured anchors for comments");
                 persist(file, pp.fmt(), doc, comments);
                 LinLog.debug(LinMsg.k("linFile.file.langChangeLocale"), "locale", locale, "file", file);
             }
@@ -170,7 +170,7 @@ public final class LangServiceImpl implements LangService {
 
         // 5) 缓存扁平化：合并到该 locale 的总键表（避免多次 bind 覆盖之前的键）
         Map<String, String> flat = flatten(doc);
-        LinLog.debug("[linlang-debug] [LangService] cache.merge", "locale", locale, "keys", flat.size());
+        LinLog.debug("cache.merge", "locale", locale, "keys", flat.size());
         Map<String, String> bucket = cache.get(locale);
         if (bucket == null) {
             bucket = new LinkedHashMap<>();
@@ -228,7 +228,7 @@ public final class LangServiceImpl implements LangService {
     @Override
     public void setLocale(String locale) {
         String normalized = ensureLocale(locale, this.current);
-        LinLog.info(LinMsg.k("linCommand.commandLanguageSwitched"), "locale", normalized);
+        LinLog.debug(LinMsg.k("linCommand.commandLanguageSwitched"), "locale", normalized);
         this.current = LocaleTag.parse(normalized);
     }
 

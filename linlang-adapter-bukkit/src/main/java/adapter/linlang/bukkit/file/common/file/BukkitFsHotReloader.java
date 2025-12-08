@@ -45,7 +45,7 @@ public final class BukkitFsHotReloader implements AutoCloseable {
 
                 // 忽略一次性自触发（例如我们写回差异文件、或保存配置时）
                 if (skipOnce.remove(name)) {
-                    LinLog.debug("[linlang-debug] hot-reload skipOnce hit for: " + name);
+                    LinLog.debug("hot-reload skipOnce hit for: " + name);
                     return;
                 }
 
@@ -86,11 +86,11 @@ public final class BukkitFsHotReloader implements AutoCloseable {
         watchDir(dir, p -> {
             String n = p.getFileName().toString().toLowerCase();
             if (n.endsWith(".yml") || n.endsWith(".yaml") || n.endsWith(".json")) {
-                LinLog.debug("[linlang-debug] hot-reload event accepted: " + p);
+                LinLog.debug("hot-reload event accepted: " + p);
                 onChange.run();
                 // 写回可能触发新事件，屏蔽一次
                 skipOnce.add(p.getFileName().toString());
-                LinLog.info("[linlang] dynamically hot reloaded config: " + p.getFileName());
+                LinLog.info("dynamically hot reloaded config: " + p.getFileName());
             }
         });
     }
@@ -101,10 +101,10 @@ public final class BukkitFsHotReloader implements AutoCloseable {
         watchDir(dir, p -> {
             String n = p.getFileName().toString().toLowerCase();
             if (n.endsWith(".yml") || n.endsWith(".yaml") || n.endsWith(".json")) {
-                LinLog.debug("[linlang-debug] hot-reload event accepted: " + p);
+                LinLog.debug("hot-reload event accepted: " + p);
                 onChange.run();
                 skipOnce.add(p.getFileName().toString());
-                LinLog.info("[linlang] dynamically hot reloaded addon: " + p.getFileName());
+                LinLog.info("dynamically hot reloaded addon: " + p.getFileName());
             }
         });
     }
@@ -114,10 +114,10 @@ public final class BukkitFsHotReloader implements AutoCloseable {
         watchDir(dir, p -> {
             String n = p.getFileName().toString().toLowerCase();
             if (n.endsWith(".yml") || n.endsWith(".yaml") || n.endsWith(".json")) {
-                LinLog.debug("[linlang-debug] hot-reload event accepted: " + p);
+                LinLog.debug("hot-reload event accepted: " + p);
                 onChange.run();
                 skipOnce.add(p.getFileName().toString());
-                LinLog.info("[linlang] dynamically hot reloaded language: " + p.getFileName());
+                LinLog.info("dynamically hot reloaded language: " + p.getFileName());
             }
         });
     }

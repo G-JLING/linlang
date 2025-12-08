@@ -1,5 +1,5 @@
-name: LinlangRuntimeBukkit
-main: me.jling.bukkit.LinlangRuntimeBukkit
+name: BukkitLoader
+main: me.jling.bukkit.BukkitLoader
 version: ${project.version}
 api-version: '1.13'
 load: STARTUP
