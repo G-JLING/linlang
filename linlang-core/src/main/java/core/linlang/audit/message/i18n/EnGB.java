@@ -19,18 +19,35 @@ public class EnGB extends LinlangInternalMessageKeys implements LocaleProvider<L
 
     @Override
     public void define(LinlangInternalMessageKeys k) {
-        // —— Linlang.File —— //
+
+        // —— linFile.file —— //
         this.linFile.file.missingKeys =
                 " + This key is missing in old file!";
         this.linFile.file.fileMissingKeys =
                 "{file} has {count} missing keys; default keys have been generated. See {diff} for details.";
         this.linFile.file.fileGeneratedDifferent =
                 "A difference file has been generated for your review: {diff}";
-        this.linFile.file.fileSavedConfig =
+        this.linFile.file.fileSaved =
+                "ConfigFile saved: {file}";
+        this.linFile.file.fileSaveFailed =
+                "Failed to save ConfigFile: {file}. Reason: {reason}";
+        this.linFile.file.fileReloaded =
+                "ConfigFile reload successfully";
+        this.linFile.file.fileReloadFailed =
+                "Reload ConfigFile：{file} failed. Reason：{reason}";
+
+        // —— linFile.lang —— //
+        this.linFile.lang.missingKeys =
+                " + This key is missing in old file!";
+        this.linFile.lang.langMissingKeys =
+                "{file} has {count} missing keys; default keys have been generated. See {diff} for details.";
+        this.linFile.lang.langGeneratedDifferent =
+                "A difference file has been generated for your review: {diff}";
+        this.linFile.lang.langSaved =
                 "Configuration saved: {file}";
-        this.linFile.file.fileSaveConfigFailed =
+        this.linFile.lang.langSaveFailed =
                 "Failed to save configuration: {file}. Please contact " + ME + ". Reason: {reason}";
-        this.linFile.file.langChangeLocale =
+        this.linFile.lang.langChangeLocale =
                 "Language changed from {locale} to {file}. Please restart the server to apply changes.";
 
         // —— Linlang.Watcher —— //

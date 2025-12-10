@@ -5,7 +5,6 @@ import api.linlang.runtime.Lin;
 import api.linlang.runtime.Linlang;
 import org.bukkit.plugin.java.JavaPlugin;
 
-import me.jling.LinlangBukkitBootstrap;
 import org.bukkit.plugin.ServicePriority;
 
 public class BukkitLoader extends JavaPlugin {

@@ -1,7 +1,7 @@
 package me.jling.facade;
 
-import me.jling.LinlangBukkitBootstrap;
-import me.jling.runtime.LinlangBootstrapRuntime;
+import me.jling.runtime.LinlangRuntime;
+import me.jling.runtime.LinlangRuntime;
 import org.bukkit.plugin.java.JavaPlugin;
 import api.linlang.runtime.Linlang;
 import api.linlang.file.LinFile;
@@ -17,14 +17,14 @@ import java.util.Objects;
 import java.util.function.Function;
 
 /**
- * 为每一个插件提供 Linlang 服务完整实例
+ * 为每个插件提供 Linlang 服务完整实例的门面类
  */
 public final class LinlangFacade implements Linlang, Linlang.Configurable, AutoCloseable {
 
     @Getter
     private final JavaPlugin owner;
 
-    private final LinlangBootstrapRuntime runtime;
+    private final LinlangRuntime runtime;
 
     @Getter
     private volatile ConfigServiceImpl config;
@@ -42,7 +42,10 @@ public final class LinlangFacade implements Linlang, Linlang.Configurable, AutoC
     private final Object lifecycleLock = new Object();
     private volatile boolean closed = false;
 
-    public static LinlangFacade create(LinlangBootstrapRuntime runtime, JavaPlugin owner) {
+    /**
+     * 创建并注册一个新的 LinlangFacade 实例
+     */
+    public static LinlangFacade create(LinlangRuntime runtime, JavaPlugin owner) {
         Objects.requireNonNull(runtime, "runtime");
         Objects.requireNonNull(owner, "owner plugin");
         LinlangFacade f = new LinlangFacade(runtime, owner);
@@ -50,7 +53,10 @@ public final class LinlangFacade implements Linlang, Linlang.Configurable, AutoC
         return f;
     }
 
-    private LinlangFacade(LinlangBootstrapRuntime runtime, JavaPlugin owner) {
+    /**
+     * 构造一个新的 LinlangFacade 实例
+     */
+    private LinlangFacade(LinlangRuntime runtime, JavaPlugin owner) {
         this.runtime = runtime;
         this.owner = owner;
 
@@ -81,14 +87,14 @@ public final class LinlangFacade implements Linlang, Linlang.Configurable, AutoC
         };
     }
 
-    /* ================= Linlang API ================= */
-
+    /**
+     * 获取运行时版本
+     */
     @Override
     public String runtimeVersion() {
         try {
             return owner.getServer().getPluginManager().getPlugin(runtime.getClass().getModule().getName()).getDescription().getVersion();
         } catch (Throwable ignore) {
-            // Fallback to runtime plugin description if above reflection fails.
             try {
                 return runtime.getClass().getPackage().getImplementationVersion();
             } catch (Throwable t) {
@@ -97,33 +103,43 @@ public final class LinlangFacade implements Linlang, Linlang.Configurable, AutoC
         }
     }
 
+    /**
+     * 获取文件服务接口
+     */
     @Override
     public LinFile linFile() {
         return linFileView;
     }
 
+    /**
+     * 获取命令服务接口
+     */
     @Override
     public LinCommand linCommand() {
         return command;
     }
 
+    /**
+     * 获取消息服务接口
+     */
     @Override
     public LinMessenger linMessenger() {
         return messenger;
     }
 
+    /**
+     * 关闭门面实例并释放资源
+     */
     @Override
     public void close() {
         synchronized (lifecycleLock) {
             if (closed) return;
             closed = true;
-            // unregister from runtime
             try {
                 runtime.unregisterFacade(this);
             } catch (Throwable ignore) {
             }
 
-            // close command & other resources local to this facade
             try {
                 if (command instanceof AutoCloseable) ((AutoCloseable) command).close();
             } catch (Throwable ignore) {
@@ -135,71 +151,76 @@ public final class LinlangFacade implements Linlang, Linlang.Configurable, AutoC
         }
     }
 
-    /* ================= Linlang.Configurable API ================= */
-
+    /**
+     * 设置平台上下文
+     */
     @Override
     public LinlangFacade withPlatformContext(Object platformContext) {
-        // This facade is already created for a specific owner; ignore or validate
         return this;
     }
 
+    /**
+     * 设置命令前缀
+     */
     @Override
     public LinlangFacade withCommandPrefix(String prefix) {
         if (prefix == null) throw new IllegalArgumentException("prefix");
-        // create a provider that ignores its input and returns the fixed prefix
         return withCommandPrefixProvider(obj -> prefix);
     }
 
+    /**
+     * 设置命令前缀提供函数
+     */
     @Override
     public LinlangFacade withCommandPrefixProvider(Function<Object, String> provider) {
         if (provider == null) throw new IllegalArgumentException("provider");
-        // adapt provider to JavaPlugin version
         Function<JavaPlugin, String> adapted = p -> provider.apply(p);
         this.prefixFn = adapted;
-        rebuildCommands(); // rebuild for this facade only
+        rebuildCommands();
         return this;
     }
 
+    /**
+     * 设置初始语言
+     */
     @Override
     public LinlangFacade withInitialLanguage(String locale) {
         if (locale == null || locale.isBlank()) return this;
         this.preferredLocale = locale;
 
-        // Replace language service with a fresh one from runtime (runtime factory handles resolver etc.)
         LangServiceImpl oldLang = this.language;
         try {
             this.language = runtime.createLangService(owner);
-            // if the new language supports setting locale directly, try to set it
             try {
                 this.language.setLocale(locale);
             } catch (Throwable ignore) {
             }
         } catch (Throwable t) {
-            // fallback: keep old language and log via runtime's logger if available
             this.language = oldLang;
         }
 
-        // bind messages for new language (runtime will create message router)
         bindCommandMessages(locale);
-
-        // rebuild commands and messenger to pick up new language/prefix
         rebuildCommands();
         return this;
     }
 
+    /**
+     * 设置是否使用插件日志
+     */
     @Override
     public LinlangFacade withPluginLogger(boolean usePluginLogger) {
-        // plugin logger is usually runtime-level; here we ask runtime to optionally enable plugin-specific logger behavior
-        runtime.installAuditFor(this.owner, usePluginLogger); // RUNTIME API: allow per-plugin audit setup
+        runtime.installAuditFor(this.owner, usePluginLogger);
         return this;
     }
 
+    /**
+     * 重新加载配置和语言服务
+     */
     @Override
     public void reload() {
         synchronized (lifecycleLock) {
             if (closed) return;
             try {
-                // Recreate per-plugin language & config services via runtime factories (cold-reload substitute).
                 LangServiceImpl oldLang = this.language;
                 ConfigServiceImpl oldCfg = this.config;
 
@@ -207,60 +228,50 @@ public final class LinlangFacade implements Linlang, Linlang.Configurable, AutoC
                     this.language = runtime.createLangService(owner);
                     this.config = runtime.createConfigService(owner);
 
-                    // if possible set locale on the new language
                     try {
                         this.language.setLocale(this.preferredLocale);
                     } catch (Throwable ignore) {
                     }
 
-                    // rebind command messages for new language
                     bindCommandMessages(this.preferredLocale);
-
-                    // rebuild command and messenger with new services
                     rebuildCommands();
 
                 } catch (Throwable t) {
-                    // restore old on failure
                     this.language = (oldLang != null) ? oldLang : this.language;
                     this.config = (oldCfg != null) ? oldCfg : this.config;
                     throw t;
                 }
 
-                // rebind other plugin-specific hot reloaders if any (not implemented here)
             } catch (Throwable t) {
-                // swallow to avoid affecting other facades; runtime logging could be used
             }
         }
     }
 
-    /* ================= internal helpers ================= */
-
+    /**
+     * 绑定命令消息
+     */
     private void bindCommandMessages(String locale) {
         try {
-            // Ask runtime to create per-plugin CommandMessages bound to this.language
             runtime.createCommandMessages(this.language, locale);
         } catch (Throwable ignore) {
-            // fallback handled inside createCommands if needed
         }
     }
 
+    /**
+     * 重建命令和消息服务
+     */
     private void rebuildCommands() {
         synchronized (lifecycleLock) {
             if (closed) return;
             try {
-                // close previous command
                 try {
                     if (command instanceof AutoCloseable) ((AutoCloseable) command).close();
                 } catch (Throwable ignore) {
                 }
 
-                // create a fresh command instance for this owner using runtime factory
                 this.command = runtime.createCommands(owner, this.preferredLocale, this.prefixFn);
-
-                // recreate messenger with current language
                 this.messenger = runtime.createMessenger(this.language);
             } catch (Throwable t) {
-                // swallow to avoid affecting other facades
             }
         }
     }

@@ -7,8 +7,6 @@ import api.linlang.audit.LinLog;
 import api.linlang.command.LinCommand;
 import api.linlang.command.message.CommandMessages;
 import api.linlang.file.database.DataService;
-import api.linlang.file.file.ConfigService;
-import api.linlang.file.file.LangService;
 import api.linlang.messenger.LinMessenger;
 import audit.linlang.audit.AuditConfig;
 import core.linlang.audit.message.LinMsg;
@@ -21,7 +19,7 @@ import core.linlang.database.impl.DataServiceImpl;
 import core.linlang.file.impl.ConfigServiceImpl;
 import core.linlang.file.impl.LangServiceImpl;
 import lombok.Getter;
-import me.jling.LinlangBukkitBootstrap;
+import me.jling.bukkit.LinlangBukkitBootstrap;
 import me.jling.facade.LinlangFacade;
 import org.bukkit.plugin.java.JavaPlugin;
 
@@ -30,20 +28,12 @@ import java.util.Set;
 import java.util.Collections;
 import java.util.LinkedHashSet;
 
-/**
- * Linlang runtime (global backend).
- *
- * Key responsibilities:
- *  - Holds global immutable/shared services (audit, i18n templates, metrics, factories)
- *  - Provides factory methods for creating per-plugin services (Lang/Config/Command/Messenger/DataService)
- *  - Maintains facade registry for lifecycle
- *  - NO per-plugin mutable state is kept here
- */
-public final class LinlangBootstrapRuntime implements AutoCloseable {
+
+public final class LinlangRuntime implements AutoCloseable {
 
     private final JavaPlugin runtimePlugin;
 
-    private BukkitAuditProvider globalAudit;  // global audit provider
+    private BukkitAuditProvider globalAudit;
 
     private final LinkedHashSet<LinlangFacade> facades =
             new LinkedHashSet<>();
@@ -51,14 +41,17 @@ public final class LinlangBootstrapRuntime implements AutoCloseable {
     @Getter
     private final LinlangBukkitBootstrap bootstrap;
 
-    public LinlangBootstrapRuntime(JavaPlugin plugin, LinlangBukkitBootstrap bootstrap) {
+    /**
+     * 构造函数
+     * @param plugin 运行时插件
+     * @param bootstrap 启动器
+     */
+    public LinlangRuntime(JavaPlugin plugin, LinlangBukkitBootstrap bootstrap) {
         this.runtimePlugin = plugin;
         this.bootstrap = bootstrap;
     }
 
-    /* ============================================================
-     * GLOBAL INITIALIZATION (runtime plugin calls)
-     * ============================================================ */
+    // ========== 全局初始化方法 ==========
 
     /** Install global LinMsg keys and bind to LangService (runtime plugin’s language). */
     public void installLinMsg() {
@@ -80,7 +73,7 @@ public final class LinlangBootstrapRuntime implements AutoCloseable {
     }
 
     /** Install global audit provider (runtime plugin only). */
-    public LinlangBootstrapRuntime installAudit(boolean usePluginLogger) {
+    public LinlangRuntime installAudit(boolean usePluginLogger) {
         try {
             this.globalAudit = new BukkitAuditProvider(runtimePlugin, usePluginLogger);
             LinLog.install(this.globalAudit);

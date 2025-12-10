@@ -42,6 +42,7 @@ public class LinlangInternalMessageKeys {
     public static class LinFile {
 
         public File file = new File();
+        public Lang lang = new Lang();
         public Watcher watcher = new Watcher();
 
         public static class File {
@@ -51,31 +52,77 @@ public class LinlangInternalMessageKeys {
             public String missingKeys =
                     " + 此键在旧文件中缺失!";
 
-            @I18nComment(locale = "zh_CN", lines = "发现缺失键，已在 diffrent 文件中给出缺失项")
-            @I18nComment(locale = "en_GB", lines = "Missing keys detected; details written to the diffrent file")
+            @I18nComment(locale = "zh_CN", lines = "发现缺失键，已在 Different 文件中给出缺失项")
+            @I18nComment(locale = "en_GB", lines = "Missing keys detected; details written to the Different file")
             public String fileMissingKeys =
-                    "{file} 缺失键 {count} 个，已生成默认键。详情见 {diff}";
+                    "配置文件 {file} 缺失键 {count} 个，已生成默认键。详情见 {diff}";
 
-            @I18nComment(locale = "zh_CN", lines = "已生成差异（diffrent）文件以便审阅")
-            @I18nComment(locale = "en_GB", lines = "A diffrent file was generated for review")
+            @I18nComment(locale = "zh_CN", lines = "已生成差异（Different）文件以便审阅")
+            @I18nComment(locale = "en_GB", lines = "A Different file was generated for review")
             public String fileGeneratedDifferent =
                     "已生成差异告知文件：{diff}";
 
+            @I18nComment(locale = "zh_CN", lines = "配置文件重新加载成功")
+            @I18nComment(locale = "en_GB", lines = "ConfigService reload successfully")
+            public String fileReloaded =
+                    "配置文件重新加载成功";
+
             @I18nComment(locale = "zh_CN", lines = "配置已保存到磁盘")
-            @I18nComment(locale = "en_GB", lines = "Configuration saved to disk")
-            public String fileSavedConfig =
+            @I18nComment(locale = "en_GB", lines = "ConfigFile saved to disk")
+            public String fileSaved =
                     "已保存配置：{file}";
 
             @I18nComment(locale = "zh_CN", lines = "保存配置失败")
-            @I18nComment(locale = "en_GB", lines = "Failed to save configuration")
-            public String fileSaveConfigFailed =
-                    "保存配置失败：{file}，请联系 " + ME + "。原因：{reason}";
+            @I18nComment(locale = "en_GB", lines = "Failed to save ConfigFile")
+            public String fileSaveFailed =
+                    "保存配置失败：{file}。原因：{reason}";
 
-            @I18nComment(locale = "zh_CN", lines = "语言包已生成/更新")
-            @I18nComment(locale = "en_GB", lines = "Language pack generated/updated")
+            @I18nComment(locale = "zh_CN", lines = "重载配置失败")
+            @I18nComment(locale = "en_GB", lines = "Failed to reload ConfigFile")
+            public String fileReloadFailed = "重新加载配置失败：{file}。原因：{reason}";
+            
+        }
+        
+        public static class Lang {
+
+            @I18nComment(locale = "zh_CN", lines = "缺失键的注释标记")
+            @I18nComment(locale = "zh_CN", lines = "Missing keys annotation marker")
+            public String missingKeys =
+                    " + 此键在旧文件中缺失!";
+
+            @I18nComment(locale = "zh_CN", lines = "发现缺失键，已在 different 文件中给出缺失项")
+            @I18nComment(locale = "en_GB", lines = "Missing keys detected; details written to the different file")
+            public String langMissingKeys =
+                    "语言文件 {file} 缺失键 {count} 个，已生成默认键。详情见 {diff}";
+
+            @I18nComment(locale = "zh_CN", lines = "已生成差异（different）文件以便审阅")
+            @I18nComment(locale = "en_GB", lines = "A different file was generated for review")
+            public String langGeneratedDifferent =
+                    "已生成差异告知文件：{diff}";
+
+            @I18nComment(locale = "zh_CN", lines = "语言已保存到磁盘")
+            @I18nComment(locale = "en_GB", lines = "LangPack saved to disk")
+            public String langSaved =
+                    "已保存配置：{file}";
+
+            @I18nComment(locale = "zh_CN", lines = "语言文件重新加载成功")
+            @I18nComment(locale = "en_GB", lines = "LangPack reload successfully")
+            public String langReloaded =
+                    "语言文件重新加载成功";
+
+            @I18nComment(locale = "zh_CN", lines = "保存语言失败")
+            @I18nComment(locale = "en_GB", lines = "Failed to save LangPack")
+            public String langSaveFailed =
+                    "保存配置失败：{file}。原因：{reason}";
+
+            @I18nComment(locale = "zh_CN", lines = "重载语言失败")
+            @I18nComment(locale = "en_GB", lines = "Failed to save LangPack")
+            public String langReloadFailed = "重新加载语言失败：{file}。原因：{reason}";
+
+            @I18nComment(locale = "zh_CN", lines = "使用的语言被更新")
+            @I18nComment(locale = "en_GB", lines = "Using Language updated")
             public String langChangeLocale =
                     "语言已变更 {locale} -> {file}。";
-
         }
 
         public static class Watcher {

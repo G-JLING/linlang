@@ -226,6 +226,41 @@ public final class LangServiceImpl implements LangService {
     }
 
     @Override
+    public void reload() {
+        Map<String, Map<String, String>> newCache = new LinkedHashMap<>();
+        for (Map.Entry<BoundKey, BoundMeta> e : bound.entrySet()) {
+            BoundKey k = e.getKey();
+            BoundMeta bm = e.getValue();
+            if (bm == null || bm.holder == null) continue;
+            Class<?> keysClass = k.type();
+            String locale = k.locale();
+            Path file;
+            FileType fmt;
+            if (bm.file != null && bm.fmt != null) {
+                file = bm.file;
+                fmt = bm.fmt;
+            } else {
+                PackPath pp = resolvePackPath(keysClass, locale);
+                file = file(pp.path(), pp.name(), pp.fmt());
+                fmt = pp.fmt();
+            }
+            try {
+                Map<String, Object> doc = IOs.exists(file)
+                        ? (fmt == FileType.YAML ? YamlCodec.load(IOs.readString(file)) : JsonCodec.load(IOs.readString(file)))
+                        : new LinkedHashMap<>();
+                TreeMapper.populate(bm.holder, doc);
+                Map<String, String> flat = flatten(doc);
+                newCache.computeIfAbsent(locale, l -> new LinkedHashMap<>()).putAll(flat);
+            } catch (Exception ex) {
+                LinLog.warn(LinMsg.k("linFile.file.fileReloadLangFailed"), "file", file, "reason", ex.getMessage());
+            }
+        }
+        cache.clear();
+        cache.putAll(newCache);
+        LinLog.info(LinMsg.k("linFile.lang.LangReloaded"));
+    }
+
+    @Override
     public void setLocale(String locale) {
         String normalized = ensureLocale(locale, this.current);
         LinLog.debug(LinMsg.k("linCommand.commandLanguageSwitched"), "locale", normalized);

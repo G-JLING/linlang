@@ -152,6 +152,30 @@ public final class ConfigServiceImpl implements ConfigService {
         }
     }
 
+    public void reload() {
+        java.util.List<java.util.Map.Entry<Class<?>, Object>> snapshot;
+        synchronized (liveConfigs) {
+            snapshot = new java.util.ArrayList<>(liveConfigs.entrySet());
+        }
+        for (var e : snapshot) {
+            Class<?> type = e.getKey();
+            Object config = e.getValue();
+            try {
+                Binder.BoundConfig meta = Binder.configOf(type)
+                        .orElseThrow(() -> new IllegalArgumentException("[linlang] missing @ConfigFile on " + type));
+                Path file = toFile(meta.path(), meta.name(), meta.fmt());
+                if (!IOs.exists(file)) continue;
+                String raw = IOs.readString(file);
+                Map<String, Object> doc = meta.fmt() == FileType.YAML ? YamlCodec.load(raw) : JsonCodec.load(raw);
+                applyMigrations(type, doc);
+                populate(config, meta.keyMap(), doc);
+            } catch (Exception ex) {
+                LinLog.warn(LinMsg.k("linFile.file.fileReloadFailed"), "file", type, "reason", ex.getMessage());
+            }
+        }
+        LinLog.info(LinMsg.k("linFile.file.fileReloaded"));
+    }
+
 
     // —— 私有 —— //
     private Path toFile(String path, String name, FileType fmt) {

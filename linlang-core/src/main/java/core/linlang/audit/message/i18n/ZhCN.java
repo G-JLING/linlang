@@ -20,21 +20,40 @@ public class ZhCN extends LinlangInternalMessageKeys implements LocaleProvider<L
 
     @Override
     public void define(LinlangInternalMessageKeys k) {
-        // —— Linlang.File —— //
+
+        // —— linFile.file —— //
         this.linFile.file.missingKeys =
                 " + 此键在旧文件中缺失!";
         this.linFile.file.fileMissingKeys =
                 "{file} 缺失键 {count} 个，已生成默认键。详情见 {diff}";
         this.linFile.file.fileGeneratedDifferent =
                 "已生成差异告知文件：{diff}";
-        this.linFile.file.fileSavedConfig =
+        this.linFile.file.fileSaved =
                 "已保存配置：{file}";
-        this.linFile.file.fileSaveConfigFailed =
-                "保存配置失败：{file}，请联系 " + ME + "。原因：{reason}";
-        this.linFile.file.langChangeLocale =
-                "语言已变更 {locale} -> {file}。重新启动服务器以使更改生效。";
+        this.linFile.file.fileSaveFailed =
+                "保存配置失败：{file} 原因：{reason}";
+        this.linFile.file.fileReloaded =
+                "配置文件重新加载成功";
+        this.linFile.file.fileReloadFailed =
+                "重新加载配置失败：{file}。原因：{reason}";
 
-        // —— Linlang.Watcher —— //
+        // —— linFile.lang
+        this.linFile.lang.missingKeys =
+                " + 此键在旧文件中缺失!";
+        this.linFile.lang.langMissingKeys =
+                "{file} 缺失键 {count} 个，已生成默认键。详情见 {diff}";
+        this.linFile.lang.langGeneratedDifferent =
+                "已生成差异告知文件：{diff}";
+        this.linFile.lang.langSaved =
+                "已保存语言：{file}";
+        this.linFile.lang.langSaveFailed =
+                "保存语言失败：{file} 原因：{reason}";
+        this.linFile.lang.langReloaded =
+                "语言文件重新加载成功";
+        this.linFile.lang.langReloadFailed =
+                "重新加载语言文件失败：{file}。原因：{reason}";
+
+        // —— linFile.watcher —— //
         this.linFile.watcher.reloadWatchingStart =
                 "正在监听目录：{path}";
         this.linFile.watcher.reloadFileChanged =
@@ -42,7 +61,7 @@ public class ZhCN extends LinlangInternalMessageKeys implements LocaleProvider<L
         this.linFile.watcher.reloadFailed =
                 "热重载失败，请联系 " + ME + "。原因：{reason}";
 
-        // —— LinData —— //
+        // —— linData —— //
         this.linData.dbInit =
                 "已初始化数据库：{type} {url}";
         this.linData.ensureTable =

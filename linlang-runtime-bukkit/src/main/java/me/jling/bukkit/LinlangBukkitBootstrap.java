@@ -1,4 +1,4 @@
-package me.jling;
+package me.jling.bukkit;
 
 import api.linlang.audit.LinLog;
 import api.linlang.command.LinCommand;
@@ -13,10 +13,9 @@ import core.linlang.file.impl.LangServiceImpl;
 
 import lombok.Getter;
 import me.jling.facade.LinlangFacade;
-import me.jling.runtime.LinlangBootstrapRuntime;
+import me.jling.runtime.LinlangRuntime;
 import org.bukkit.plugin.java.JavaPlugin;
 
-import java.util.List;
 import java.util.function.Function;
 
 /**
@@ -39,7 +38,7 @@ public final class LinlangBukkitBootstrap implements AutoCloseable, Linlang, Lin
 
     private LinCommand command;              // 命令接口
     private LinMessenger messenger;          // 消息接口
-    private final LinlangBootstrapRuntime runtime;  // 运行时引导程序
+    private final LinlangRuntime runtime;  // 运行时引导程序
 
     // 当前语言环境，默认为中文
     private volatile String locale = "zh_CN";
@@ -64,7 +63,7 @@ public final class LinlangBukkitBootstrap implements AutoCloseable, Linlang, Lin
         this.runtimePlugin = runtimePlugin;
 
         // 初始化 runtime，全局服务，不含 per-plugin 状态
-        this.runtime = new LinlangBootstrapRuntime(runtimePlugin, this);
+        this.runtime = new LinlangRuntime(runtimePlugin, this);
 
         // 配置：runtime plugin 自己的 config/lang
         this.config = runtime.createConfigService(runtimePlugin);
