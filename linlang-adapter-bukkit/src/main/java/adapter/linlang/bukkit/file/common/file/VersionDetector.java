@@ -2,7 +2,7 @@ package adapter.linlang.bukkit.file.common.file;
 
 import org.bukkit.Bukkit;
 
-/* 取 org.bukkit.craftbukkit 包名中的版本号，如 v1_12_R1。 */
+/* 取 org.plugin.craftbukkit 包名中的版本号，如 v1_12_R1。 */
 public final class VersionDetector {
     private VersionDetector(){}
     public static String nmsSuffix(){

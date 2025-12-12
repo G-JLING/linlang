@@ -1,6 +1,6 @@
 package adapter.linlang.bukkit.command;
 
-// linlang-adapter-bukkit/src/main/java/io/linlang/lincommand/bukkit/BukkitLinCommand.java
+// linlang-adapter-plugin/src/main/java/io/linlang/lincommand/plugin/BukkitLinCommand.java
 
 import adapter.linlang.bukkit.command.interact.InteractionHub;
 import adapter.linlang.bukkit.command.interact.InteractiveResolvers;
@@ -83,7 +83,7 @@ public final class LinlangBukkitCommand implements LinCommand, CommandExecutor, 
         }
 
         if (pc == null) {
-            throw new IllegalStateException("应在 plugin.yml 中注册插件命令 '" + first + "'");
+            throw new IllegalStateException("应在 bukkit.yml 中注册插件命令 '" + first + "'");
         }
         pc.setExecutor(this);
         pc.setTabCompleter(this);

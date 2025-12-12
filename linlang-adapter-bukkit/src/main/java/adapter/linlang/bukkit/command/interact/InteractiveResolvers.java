@@ -1,6 +1,6 @@
 package adapter.linlang.bukkit.command.interact;
 
-// io/linlang/lincommand/bukkit/BukkitInteractiveResolvers.java
+// io/linlang/lincommand/plugin/BukkitInteractiveResolvers.java
 
 import core.linlang.command.signal.Interact;
 import api.linlang.command.LinCommand;

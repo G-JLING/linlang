@@ -1,6 +1,6 @@
 package adapter.linlang.bukkit.command.resolvers;
 
-// linlang-adapter-bukkit/src/main/java/io/linlang/lincommand/bukkit/BukkitResolvers.java
+// linlang-adapter-plugin/src/main/java/io/linlang/lincommand/plugin/BukkitResolvers.java
 
 import api.linlang.command.LinCommand;
 import org.bukkit.Bukkit;

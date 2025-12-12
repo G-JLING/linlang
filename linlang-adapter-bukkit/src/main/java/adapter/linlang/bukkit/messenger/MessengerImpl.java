@@ -36,7 +36,7 @@ public final class MessengerImpl implements LinMessenger {
     private final Function<String, String> translator; // key -> template
     private final boolean hexColor; // 1.16+ -> true
 
-    // Optional prefix (e.g., plugin prefix). Defaults to empty.
+    // Optional prefix (e.g., bukkit prefix). Defaults to empty.
     private Supplier<String> prefixSupplier = () -> "";
 
     /* ─────────────────────────────── 构造 ─────────────────────────────── */

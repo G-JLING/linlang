@@ -1,8 +1,19 @@
 name: BukkitLoader
-main: me.jling.bukkit.BukkitLoader
+main: me.jling.plugin.BukkitLoader
 version: ${project.version}
 api-version: '1.13'
 load: STARTUP
 authors: [JLING]
 website: https://jling.me
 description: Linlang runtime for Bukkit/Paper. Provides Linlang services to other plugins.
+
+commands:
+  linlang:
+    description: linlang runtime plugin internal commands
+    usage: /<command> [args]
+    aliases: linlang
+
+permissions:
+  linlangruntimebukkit.admin:
+    description: Allows to use linlang runtime admin commands
+    default: op

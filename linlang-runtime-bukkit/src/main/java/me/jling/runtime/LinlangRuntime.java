@@ -41,19 +41,13 @@ public final class LinlangRuntime implements AutoCloseable {
     @Getter
     private final LinlangBukkitBootstrap bootstrap;
 
-    /**
-     * 构造函数
-     * @param plugin 运行时插件
-     * @param bootstrap 启动器
-     */
+    // 初始化运行时对象，记录运行时插件和其引导器
     public LinlangRuntime(JavaPlugin plugin, LinlangBukkitBootstrap bootstrap) {
         this.runtimePlugin = plugin;
         this.bootstrap = bootstrap;
     }
 
-    // ========== 全局初始化方法 ==========
-
-    /** Install global LinMsg keys and bind to LangService (runtime plugin’s language). */
+    // 安装全局 LinMsg 消息键并绑定到运行时插件的语言服务
     public void installLinMsg() {
         try {
             LangServiceImpl lang = bootstrap.getLanguage();
@@ -72,7 +66,7 @@ public final class LinlangRuntime implements AutoCloseable {
         }
     }
 
-    /** Install global audit provider (runtime plugin only). */
+    // 安装全局审计提供者，可选使用插件日志器，并加载审计配置
     public LinlangRuntime installAudit(boolean usePluginLogger) {
         try {
             this.globalAudit = new BukkitAuditProvider(runtimePlugin, usePluginLogger);
@@ -91,38 +85,32 @@ public final class LinlangRuntime implements AutoCloseable {
         return this;
     }
 
-    /** Per-plugin audit override. Facade may call this. */
+    // 为指定插件安装或覆盖审计配置（当前实现为空，预留扩展）
     public void installAuditFor(JavaPlugin owner, boolean usePluginLogger) {
-        // If per-plugin audit is desired, implement custom provider here.
-        // For now: reuse global audit, or create per-plugin audit provider.
-        // You may expand this later depending on plugin demand.
+        // If per-bukkit audit is desired, implement custom provider here.
+        // For now: reuse global audit, or create per-bukkit audit provider.
+        // You may expand this later depending on bukkit demand.
     }
 
-    /* ============================================================
-     * FACTORY METHODS (The most important part)
-     *
-     * These methods create per-plugin service instances.
-     * ============================================================ */
-
-    /** Create per-plugin ConfigService. */
+    // 为指定插件创建独立的配置服务实例
     public ConfigServiceImpl createConfigService(JavaPlugin owner) {
         var resolver = new adapter.linlang.bukkit.file.common.file.BukkitPathResolver(owner);
         return new ConfigServiceImpl(resolver, List.of());
     }
 
-    /** Create per-plugin LangService. */
+    // 为指定插件创建独立的语言服务实例
     public LangServiceImpl createLangService(JavaPlugin owner) {
         var resolver = new adapter.linlang.bukkit.file.common.file.BukkitPathResolver(owner);
         return new LangServiceImpl(resolver, "zh_CN");
     }
 
-    /** Create per-plugin DataService (database). */
+    // 为指定插件创建独立的数据服务实例
     public DataService createDataService(JavaPlugin owner) {
         var resolver = new adapter.linlang.bukkit.file.common.file.BukkitPathResolver(owner);
         return new DataServiceImpl(resolver);
     }
 
-    /** Bind command messages for a language service. */
+    // 基于指定语言服务和语言标签创建命令消息路由
     public CommandMessages createCommandMessages(LangServiceImpl lang, String locale) {
         try {
             CommandMessageKeys keys = lang.bind(
@@ -135,7 +123,7 @@ public final class LinlangRuntime implements AutoCloseable {
         }
     }
 
-    /** Create per-plugin command instance. */
+    // 为指定插件创建命令系统实例并配置解析器与默认语言
     public LinCommand createCommands(
             JavaPlugin owner,
             String locale,
@@ -143,7 +131,7 @@ public final class LinlangRuntime implements AutoCloseable {
 
         String prefix = prefixFn.apply(owner);
 
-        // Use owner plugin's own LangService for command messages
+        // Use owner bukkit's own LangService for command messages
         LangServiceImpl lang = createLangService(owner);
         CommandMessages msgs = createCommandMessages(lang, locale);
 
@@ -154,43 +142,86 @@ public final class LinlangRuntime implements AutoCloseable {
                 .withPreferredLocaleTag(locale);
     }
 
-    /** Create messenger for per-plugin language. */
+    // 基于指定语言服务创建消息发送器
     public LinMessenger createMessenger(LangServiceImpl lang) {
         return new MessengerImpl(lang);
     }
 
-    /* ============================================================
-     * FACADE REGISTRY
-     * ============================================================ */
-
+    // 注册一个插件门面实例，纳入统一生命周期管理
     public void registerFacade(LinlangFacade facade) {
         synchronized (facades) {
             facades.add(facade);
         }
     }
 
+    // 取消注册一个插件门面实例
     public void unregisterFacade(LinlangFacade facade) {
         synchronized (facades) {
             facades.remove(facade);
         }
     }
 
+    // 获取当前所有已注册的插件门面快照
     public Set<LinlangFacade> listFacades() {
         synchronized (facades) {
             return Collections.unmodifiableSet(new LinkedHashSet<>(facades));
         }
     }
 
-    /* ============================================================
-     * CLOSE
-     * ============================================================ */
+    // 软重载运行时插件自身及所有已注册门面的服务实例
+    public void reload() {
+        try {
+            bootstrap.getConfig().reload();
+        } catch (Throwable ignore) {
+        }
+        try {
+            bootstrap.getLanguage().reload();
+        } catch (Throwable ignore) {
+        }
+        try {
+            bootstrap.reload();
+        } catch (Throwable ignore) {
+        }
 
+        java.util.Set<LinlangFacade> snapshot;
+        synchronized (facades) {
+            snapshot = new java.util.LinkedHashSet<>(facades);
+        }
+        for (LinlangFacade facade : snapshot) {
+            try {
+                facade.reload();
+            } catch (Throwable ignore) {
+            }
+        }
+    }
+
+    // 硬重启所有已注册门面的 Linlang 服务实例，并返回成功重启的数量
+    public int restart() {
+        java.util.Set<LinlangFacade> snapshot;
+        synchronized (facades) {
+            snapshot = new java.util.LinkedHashSet<>(facades);
+        }
+        int success = 0;
+        for (LinlangFacade facade : snapshot) {
+            try {
+                facade.restart();
+                success++;
+            } catch (Throwable ignore) {
+            }
+        }
+        return success;
+    }
+
+    // 关闭运行时：依次关闭所有门面并释放全局审计资源
     @Override
     public void close() {
         // Close facades
         synchronized (facades) {
             for (LinlangFacade f : facades.toArray(new LinlangFacade[0])) {
-                try { f.close(); } catch (Throwable ignore) {}
+                try {
+                    f.close();
+                } catch (Throwable ignore) {
+                }
             }
             facades.clear();
         }
@@ -200,7 +231,8 @@ public final class LinlangRuntime implements AutoCloseable {
             try {
                 var m = globalAudit.getClass().getMethod("close");
                 m.invoke(globalAudit);
-            } catch (Throwable ignore) {}
+            } catch (Throwable ignore) {
+            }
         }
 
         LinLog.info("[linlang] Runtime closed.");

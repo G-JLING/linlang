@@ -168,7 +168,7 @@ public final class BukkitAuditProvider implements LinLog.Provider {
             return;
         }
         if ("STARTUP".equals(upper)) {
-            // STARTUP notices: queue; plugin should flush after server fully started
+            // STARTUP notices: queue; bukkit should flush after server fully started
             deliverStartup(useJsonFor(config != null ? config.console : null) ? line : msg);
             // Also persist if file sink configured
             if (c != null && c.file != null && c.file.enabled && c.file.path != null) {

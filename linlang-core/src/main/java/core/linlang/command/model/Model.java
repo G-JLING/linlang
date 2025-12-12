@@ -9,7 +9,7 @@ import java.util.*;
 
 public final class Model {
     public static final class Node {
-        public List<String> literals = new ArrayList<>(); // e.g. ["plugin","reload"]
+        public List<String> literals = new ArrayList<>(); // e.g. ["bukkit","reload"]
         public List<Param>  params   = new ArrayList<>();
         public Exec exec;
         public String usage;

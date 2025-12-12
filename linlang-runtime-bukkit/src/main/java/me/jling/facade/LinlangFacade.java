@@ -1,7 +1,6 @@
 package me.jling.facade;
 
 import me.jling.runtime.LinlangRuntime;
-import me.jling.runtime.LinlangRuntime;
 import org.bukkit.plugin.java.JavaPlugin;
 import api.linlang.runtime.Linlang;
 import api.linlang.file.LinFile;
@@ -19,7 +18,7 @@ import java.util.function.Function;
 /**
  * 为每个插件提供 Linlang 服务完整实例的门面类
  */
-public final class LinlangFacade implements Linlang, Linlang.Configurable, AutoCloseable {
+public final class LinlangFacade implements Linlang, Linlang.Configurable, Linlang.Parametric, AutoCloseable {
 
     @Getter
     private final JavaPlugin owner;
@@ -47,7 +46,7 @@ public final class LinlangFacade implements Linlang, Linlang.Configurable, AutoC
      */
     public static LinlangFacade create(LinlangRuntime runtime, JavaPlugin owner) {
         Objects.requireNonNull(runtime, "runtime");
-        Objects.requireNonNull(owner, "owner plugin");
+        Objects.requireNonNull(owner, "owner bukkit");
         LinlangFacade f = new LinlangFacade(runtime, owner);
         runtime.registerFacade(f);
         return f;
@@ -156,6 +155,10 @@ public final class LinlangFacade implements Linlang, Linlang.Configurable, AutoC
      */
     @Override
     public LinlangFacade withPlatformContext(Object platformContext) {
+        // 对于 Bukkit 门面，平台上下文固定为创建时的 owner 插件，这里仅做类型与一致性校验
+        if (platformContext instanceof JavaPlugin plugin && plugin != this.owner) {
+            throw new IllegalArgumentException("LinlangFacade 只能绑定到其创建时的插件实例");
+        }
         return this;
     }
 
@@ -176,7 +179,6 @@ public final class LinlangFacade implements Linlang, Linlang.Configurable, AutoC
         if (provider == null) throw new IllegalArgumentException("provider");
         Function<JavaPlugin, String> adapted = p -> provider.apply(p);
         this.prefixFn = adapted;
-        rebuildCommands();
         return this;
     }
 
@@ -187,20 +189,6 @@ public final class LinlangFacade implements Linlang, Linlang.Configurable, AutoC
     public LinlangFacade withInitialLanguage(String locale) {
         if (locale == null || locale.isBlank()) return this;
         this.preferredLocale = locale;
-
-        LangServiceImpl oldLang = this.language;
-        try {
-            this.language = runtime.createLangService(owner);
-            try {
-                this.language.setLocale(locale);
-            } catch (Throwable ignore) {
-            }
-        } catch (Throwable t) {
-            this.language = oldLang;
-        }
-
-        bindCommandMessages(locale);
-        rebuildCommands();
         return this;
     }
 
@@ -214,10 +202,37 @@ public final class LinlangFacade implements Linlang, Linlang.Configurable, AutoC
     }
 
     /**
-     * 重新加载配置和语言服务
+     * 重新加载当前插件的软配置和语言服务
      */
     @Override
     public void reload() {
+        synchronized (lifecycleLock) {
+            if (closed) return;
+            try {
+                try {
+                    this.config.reload();
+                } catch (Throwable ignore) {
+                }
+                try {
+                    this.language.reload();
+                } catch (Throwable ignore) {
+                }
+                try {
+                    this.language.setLocale(this.preferredLocale);
+                } catch (Throwable ignore) {
+                }
+                bindCommandMessages(this.preferredLocale);
+                rebuildCommands();
+            } catch (Throwable t) {
+            }
+        }
+    }
+
+    /**
+     * 重启当前插件的 Linlang 服务，销毁并重建底层配置和语言实例
+     */
+    @Override
+    public void restart() {
         synchronized (lifecycleLock) {
             if (closed) return;
             try {

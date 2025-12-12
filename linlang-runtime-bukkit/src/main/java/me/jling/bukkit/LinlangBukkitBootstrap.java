@@ -21,7 +21,7 @@ import java.util.function.Function;
 /**
  * 此类是 Linlang 运行时插件的引导类，实现了 Linlang 接口。
  * 它为运行时插件本身提供配置、语言和命令功能。
- * 其他插件不会直接使用这个实例，而是通过 Lin.init(plugin) 创建的 LinlangFacade 来使用。
+ * 其他插件不会直接使用这个实例，而是通过 Lin.init(bukkit) 创建的 LinlangFacade 来使用。
  */
 public final class LinlangBukkitBootstrap implements AutoCloseable, Linlang, Linlang.Configurable {
 
@@ -38,6 +38,8 @@ public final class LinlangBukkitBootstrap implements AutoCloseable, Linlang, Lin
 
     private LinCommand command;              // 命令接口
     private LinMessenger messenger;          // 消息接口
+
+    @Getter
     private final LinlangRuntime runtime;  // 运行时引导程序
 
     // 当前语言环境，默认为中文
@@ -57,31 +59,31 @@ public final class LinlangBukkitBootstrap implements AutoCloseable, Linlang, Lin
     }
 
     /**
-     * Create bootstrap for runtime plugin.
+     * Create bootstrap for runtime bukkit.
      */
     private LinlangBukkitBootstrap(JavaPlugin runtimePlugin) {
         this.runtimePlugin = runtimePlugin;
 
-        // 初始化 runtime，全局服务，不含 per-plugin 状态
+        // 初始化 runtime，全局服务，不含 per-bukkit 状态
         this.runtime = new LinlangRuntime(runtimePlugin, this);
 
-        // 配置：runtime plugin 自己的 config/lang
+        // 配置：runtime bukkit 自己的 config/lang
         this.config = runtime.createConfigService(runtimePlugin);
         this.language = runtime.createLangService(runtimePlugin);
 
         // 初始化国际化（模板注册）
         this.runtime.installLinMsg();
 
-        // 初始化审计（runtime plugin 的审计）
+        // 初始化审计（runtime bukkit 的审计）
         this.runtime.installAudit(false);
 
-        // 初始化 runtime plugin 自己的命令
+        // 初始化 runtime bukkit 自己的命令
         this.command = runtime.createCommands(runtimePlugin, locale, prefixFn);
 
-        // messenger 基于 runtime plugin 自己的语言
+        // messenger 基于 runtime bukkit 自己的语言
         this.messenger = runtime.createMessenger(this.language);
 
-        // LinFile：runtime plugin 的视图
+        // LinFile：runtime bukkit 的视图
         this.linFileView = new LinFile() {
             public ConfigService config() {
                 return LinlangBukkitBootstrap.this.config;
@@ -96,7 +98,7 @@ public final class LinlangBukkitBootstrap implements AutoCloseable, Linlang, Lin
             }
         };
 
-        LinLog.info("[linlang] Runtime bootstrap initialized: plugin=" + runtimePlugin.getName());
+        LinLog.info("[linlang] Runtime bootstrap initialized: bukkit=" + runtimePlugin.getName());
     }
 
     /* -------------------------------------------------------------
@@ -104,24 +106,24 @@ public final class LinlangBukkitBootstrap implements AutoCloseable, Linlang, Lin
      * ------------------------------------------------------------- */
 
     /**
-     * Create per-plugin facade for other plugins.
+     * Create per-bukkit facade for other plugins.
      */
     public Linlang createFacade(Object platformContext) {
         if (!(platformContext instanceof JavaPlugin owner)) {
             return this; // fallback: return bootstrap itself
         }
 
-        // 若是 Runtime plugin 自己 => 返回当前 bootstrap
+        // 若是 Runtime bukkit 自己 => 返回当前 bootstrap
         if (owner == this.runtimePlugin) {
             return this;
         }
 
-        // 其他插件 => per-plugin facade
+        // 其他插件 => per-bukkit facade
         return LinlangFacade.create(runtime, owner);
     }
 
     /* ============================================================
-     * Linlang interface — runtime plugin ONLY
+     * Linlang interface — runtime bukkit ONLY
      * ============================================================ */
 
     /**
