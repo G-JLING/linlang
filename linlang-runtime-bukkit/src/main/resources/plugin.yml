@@ -1,4 +1,4 @@
-name: BukkitLoader
+name: LinlangRuntimeBukkit
 main: me.jling.plugin.BukkitLoader
 version: ${project.version}
 api-version: '1.13'

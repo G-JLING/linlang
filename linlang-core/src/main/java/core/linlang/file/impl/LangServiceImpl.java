@@ -10,7 +10,7 @@ import api.linlang.file.file.annotations.LangPack;
 import api.linlang.file.file.annotations.NoEmit;
 import api.linlang.file.file.implement.LocaleProvider;
 import api.linlang.file.file.path.PathResolver;
-import core.linlang.audit.message.LinMsg;
+import core.linlang.audit.LinMsg;
 import core.linlang.file.runtime.TreeMapper;
 import core.linlang.file.runtime.LocaleTag;
 import core.linlang.file.util.IOs;
@@ -138,7 +138,7 @@ public final class LangServiceImpl implements LangService {
                 ensureCommentAnchors(doc, comments);
                 LinLog.debug("ensured anchors for comments");
                 persist(file, pp.fmt(), doc, comments);
-                LinLog.debug(LinMsg.k("linFile.file.langChangeLocale"), "locale", locale, "file", file);
+                LinLog.debug(LinMsg.k("linFile.lang.langChangeLocale"), "locale", locale, "file", file);
             }
         } else {
             if (shouldEmit && !missing.isEmpty()) {
@@ -148,7 +148,7 @@ public final class LangServiceImpl implements LangService {
                 ensureCommentAnchors(doc, comments);
                 LinLog.debug("ensured anchors for comments");
                 persist(file, pp.fmt(), doc, comments);
-                LinLog.debug(LinMsg.k("linFile.file.langChangeLocale"), "locale", locale, "file", file);
+                LinLog.debug(LinMsg.k("linFile.lang.langChangeLocale"), "locale", locale, "file", file);
             }
         }
 
@@ -205,7 +205,7 @@ public final class LangServiceImpl implements LangService {
             Map<String, String> flat = flatten(curr);
             cache.computeIfAbsent(locale, k -> new LinkedHashMap<>()).putAll(flat);
         } catch (Exception e) {
-            LinLog.warn(LinMsg.k("linFile.file.fileSaveConfigFailed"), "file", f, "reason", e.getMessage());
+            LinLog.warn(LinMsg.k("linFile.lang.langSaveFailed"), "lang", f, "reason", e.getMessage());
         }
     }
 
@@ -252,7 +252,7 @@ public final class LangServiceImpl implements LangService {
                 Map<String, String> flat = flatten(doc);
                 newCache.computeIfAbsent(locale, l -> new LinkedHashMap<>()).putAll(flat);
             } catch (Exception ex) {
-                LinLog.warn(LinMsg.k("linFile.file.fileReloadLangFailed"), "file", file, "reason", ex.getMessage());
+                LinLog.warn(LinMsg.k("linFile.lang.langReloadLangFailed"), "lang", file, "reason", ex.getMessage());
             }
         }
         cache.clear();
@@ -319,9 +319,9 @@ public final class LangServiceImpl implements LangService {
     private void persist(Path f, FileType fmt, Map<String, Object> doc) {
         try {
             IOs.writeString(f, fmt == FileType.YAML ? YamlCodec.dump(doc) : JsonCodec.dump(doc));
-            LinLog.debug(LinMsg.k("linFile.file.fileSavedConfig"), "file", f);
+            LinLog.debug(LinMsg.k("linFile.lang.langSaved"), "lang", f);
         } catch (Exception e) {
-            LinLog.warn(LinMsg.k("linFile.file.fileSaveConfigFailed"), "file", f, "reason", e.getMessage());
+            LinLog.warn(LinMsg.k("linFile.lang.langSaveFailed"), "lang", f, "reason", e.getMessage());
             throw new RuntimeException(e);
         }
     }
@@ -332,9 +332,9 @@ public final class LangServiceImpl implements LangService {
                 : JsonCodec.dump(doc);
         try {
             IOs.writeString(file, out);
-            LinLog.debug(LinMsg.k("linFile.file.fileSavedConfig"), "file", file);
+            LinLog.debug(LinMsg.k("linFile.lang.langSaved"), "lang", file);
         } catch (Exception e) {
-            LinLog.warn(LinMsg.k("linFile.file.fileSaveConfigFailed"), "file", file, "reason", e.getMessage());
+            LinLog.warn(LinMsg.k("linFile.lang.langSaveFailed"), "lang", file, "reason", e.getMessage());
             throw new RuntimeException(e);
         }
     }
@@ -519,15 +519,15 @@ public final class LangServiceImpl implements LangService {
                 String base = YamlCodec.dump(pruned);
                 String marked = insertYamlMissingMarkers(base, missingVals);
                 IOs.writeString(diff, marked);
-                LinLog.info(LinMsg.k("linFile.file.fileGeneratedDifferent"), "diff", diff);
+                LinLog.info(LinMsg.k("linFile.lang.langGeneratedDifferent"), "diff", diff);
             } else {
                 Map<String, Object> wrapper = new LinkedHashMap<>();
                 wrapper.put("_missing", new java.util.ArrayList<>(missing));
                 wrapper.put("_file", fullDoc);
                 IOs.writeString(diff, JsonCodec.dump(wrapper));
-                LinLog.info(LinMsg.k("linFile.file.fileGeneratedDifferent"), "diff", diff);
+                LinLog.info(LinMsg.k("linFile.lang.langGeneratedDifferent"), "diff", diff);
             }
-            LinLog.warn(LinMsg.k("linFile.file.fileMissingKeys"), "file", f, "count", missing.size(), "diff", diff);
+            LinLog.warn(LinMsg.k("linFile.lang.langMissingKeys"), "lang", f, "count", missing.size(), "diff", diff);
         } catch (Exception e) { /* swallow */ }
     }
 
@@ -560,7 +560,7 @@ public final class LangServiceImpl implements LangService {
 
             String ci = " ".repeat(childIndent);
             String rendered = renderYamlScalar(missingWithValues.get(path));
-            lines.add(insertAt, ci + LinMsg.kh("linFile.file.missingKeys"));
+            lines.add(insertAt, ci + LinMsg.kh("linFile.lang.missingKeys"));
             lines.add(insertAt + 1, ci + last + ": " + rendered);
         }
         return String.join("\n", lines);

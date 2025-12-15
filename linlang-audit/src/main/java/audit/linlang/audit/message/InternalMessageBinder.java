@@ -2,8 +2,8 @@ package audit.linlang.audit.message;
 
 import api.linlang.file.file.LangService;
 import api.linlang.file.file.implement.LocaleProvider;
-import core.linlang.audit.message.LinMsg;
-import core.linlang.audit.message.LinlangInternalMessageKeys;
+import core.linlang.audit.LinMsg;
+import core.linlang.audit.LinlangInternalMessageKeys;
 
 // core.linlang.i18n
 public final class InternalMessageBinder {

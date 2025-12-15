@@ -1,10 +1,10 @@
-package core.linlang.audit.message.i18n;
+package core.linlang.audit.i18n;
 
 import api.linlang.file.file.FileType;
 import api.linlang.file.file.annotations.LangPack;
 import api.linlang.file.file.annotations.NoEmit;
 import api.linlang.file.file.implement.LocaleProvider;
-import core.linlang.audit.message.LinlangInternalMessageKeys;
+import core.linlang.audit.LinlangInternalMessageKeys;
 
 
 @NoEmit

@@ -1,6 +1,6 @@
 package me.jling.runtime;
 
-import adapter.linlang.bukkit.audit.common.BukkitAuditProvider;
+import adapter.linlang.bukkit.audit.BukkitAuditProvider;
 import adapter.linlang.bukkit.command.LinlangBukkitCommand;
 import adapter.linlang.bukkit.messenger.MessengerImpl;
 import api.linlang.audit.LinLog;
@@ -9,8 +9,8 @@ import api.linlang.command.message.CommandMessages;
 import api.linlang.file.database.DataService;
 import api.linlang.messenger.LinMessenger;
 import audit.linlang.audit.AuditConfig;
-import core.linlang.audit.message.LinMsg;
-import core.linlang.audit.message.LinlangInternalMessageKeys;
+import core.linlang.audit.LinMsg;
+import core.linlang.audit.LinlangInternalMessageKeys;
 import core.linlang.command.message.CommandMessageKeys;
 import core.linlang.command.message.CommandMessageRouter;
 import core.linlang.command.message.i18n.EnGB;
@@ -54,13 +54,13 @@ public final class LinlangRuntime implements AutoCloseable {
             var keys = lang.bind(
                     LinlangInternalMessageKeys.class,
                     lang.currentLocale(),
-                    List.of(new core.linlang.audit.message.i18n.ZhCN(), new core.linlang.audit.message.i18n.EnGB())
+                    List.of(new core.linlang.audit.i18n.ZhCN(), new core.linlang.audit.i18n.EnGB())
             );
 
             LinMsg.installKeys(() -> keys);
             LinMsg.install(lang::tr);
 
-            LinLog.info("[linlang] Installed global LinMsg templates.");
+            LinLog.info("Installed global LinMsg templates.");
         } catch (Throwable t) {
             LinLog.warn("Failed to install LinMsg templates: " + t.getMessage());
         }
@@ -71,7 +71,6 @@ public final class LinlangRuntime implements AutoCloseable {
         try {
             this.globalAudit = new BukkitAuditProvider(runtimePlugin, usePluginLogger);
             LinLog.install(this.globalAudit);
-            LinLog.init("Audit Init");
 
             try {
                 ConfigServiceImpl cfg = bootstrap.getConfig();

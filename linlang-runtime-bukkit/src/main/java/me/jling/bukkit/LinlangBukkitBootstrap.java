@@ -23,7 +23,7 @@ import java.util.function.Function;
  * 它为运行时插件本身提供配置、语言和命令功能。
  * 其他插件不会直接使用这个实例，而是通过 Lin.init(bukkit) 创建的 LinlangFacade 来使用。
  */
-public final class LinlangBukkitBootstrap implements AutoCloseable, Linlang, Linlang.Configurable {
+public final class LinlangBukkitBootstrap implements AutoCloseable, Linlang, Linlang.Configurable, Linlang.Parametric {
 
     @Getter
     private final JavaPlugin runtimePlugin;  // 运行时插件实例
@@ -158,7 +158,6 @@ public final class LinlangBukkitBootstrap implements AutoCloseable, Linlang, Lin
 
     @Override
     public LinlangBukkitBootstrap withPlatformContext(Object platformContext) {
-        // runtime bootstrap is already bound; ignore
         return this;
     }
 
@@ -169,8 +168,8 @@ public final class LinlangBukkitBootstrap implements AutoCloseable, Linlang, Lin
 
     @Override
     public LinlangBukkitBootstrap withCommandPrefixProvider(Function<Object, String> provider) {
+        if (provider == null) throw new IllegalArgumentException("provider");
         this.prefixFn = p -> provider.apply(p);
-        rebuildCommands();
         return this;
     }
 
@@ -178,11 +177,6 @@ public final class LinlangBukkitBootstrap implements AutoCloseable, Linlang, Lin
     public LinlangBukkitBootstrap withInitialLanguage(String locale) {
         if (locale == null || locale.isBlank()) return this;
         this.locale = locale;
-        try {
-            this.language.setLocale(locale);
-        } catch (Throwable ignore) {
-        }
-        rebuildCommands();
         return this;
     }
 
@@ -194,8 +188,30 @@ public final class LinlangBukkitBootstrap implements AutoCloseable, Linlang, Lin
 
     @Override
     public void reload() {
+        try {
+            this.config.reload();
+        } catch (Throwable ignore) {
+        }
+        try {
+            this.language.reload();
+        } catch (Throwable ignore) {
+        }
+        try {
+            this.language.setLocale(this.locale);
+        } catch (Throwable ignore) {
+        }
         rebuildCommands();
         this.messenger = runtime.createMessenger(this.language);
+    }
+
+    /**
+     * 重启运行时引导类的 Linlang 服务。
+     *
+     * <p>当前实现将重启语义视为一次软重载，以避免在运行时插件内部销毁全局服务实例。</p>
+     */
+    @Override
+    public void restart() {
+        reload();
     }
 
     private void rebuildCommands() {

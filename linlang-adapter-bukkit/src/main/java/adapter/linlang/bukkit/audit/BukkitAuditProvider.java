@@ -1,4 +1,4 @@
-package adapter.linlang.bukkit.audit.common;
+package adapter.linlang.bukkit.audit;
 
 /*
  * BukkitAuditProvider.java
@@ -6,7 +6,6 @@ package adapter.linlang.bukkit.audit.common;
  */
 
 import api.linlang.audit.LinLog;
-import api.linlang.runtime.Lin;
 import audit.linlang.audit.AuditConfig;
 import lombok.Setter;
 import org.bukkit.Bukkit;
@@ -177,11 +176,11 @@ public final class BukkitAuditProvider implements LinLog.Provider {
             return;
         }
         if (c == null || (c.console != null && c.console.enabled)) {
-            // Bukkit 默认 INFO 级别以上才可见；为保证 DEBUG 可见，统一使用 info 输出，但保留级别标记
             boolean consoleJson = c != null && useJsonFor(c.console);
             String consoleLine = line;
-            if (!consoleJson && "DEBUG".equalsIgnoreCase(level)) {
-                consoleLine = "[linlang-debug] " + line;
+            if (!consoleJson) {
+                // 为支持的控制台环境添加 ANSI 染色，仅用于控制台输出
+                consoleLine = colorizeForConsole(upper, consoleLine);
             }
             jul.info(consoleLine);
         }
@@ -217,7 +216,8 @@ public final class BukkitAuditProvider implements LinLog.Provider {
             if (consoleJson) {
                 jul.info(line);
             } else {
-                jul.info(fmt("AUDIT", event, kv));
+                String formatted = fmt("AUDIT", event, kv);
+                jul.info(colorizeForConsole("AUDIT", formatted));
             }
         }
         if (config.audit != null && config.audit.enabled && config.audit.path != null) {
@@ -225,20 +225,59 @@ public final class BukkitAuditProvider implements LinLog.Provider {
         }
     }
 
-    private static String prefixFor(String lvl) {
-        String label = "linlang-" + (lvl == null ? "info" : lvl.toLowerCase(Locale.ROOT));
-        // content width inside brackets (pad to fixed width for alignment)
-        int contentWidth = 14; // adjust total visual width if desired
-        String content = padRight(label, contentWidth);
-        return "[" + content + "] ";
+    // --- ANSI color helpers for console output (only used for console, not file/JSON) ---
+
+    private static final boolean ANSI_SUPPORTED =
+            !System.getProperty("os.name", "").toLowerCase(Locale.ROOT).contains("win");
+
+    private static final String ANSI_RESET = "\u001B[0m";
+    private static final String ANSI_DEBUG = "\u001B[36m";  // cyan
+    private static final String ANSI_INFO  = "\u001B[37m";  // white/gray
+    private static final String ANSI_WARN  = "\u001B[33m";  // yellow
+    private static final String ANSI_AUDIT = "\u001B[35m";  // magenta
+    private static final String ANSI_START = "\u001B[32m";  // green
+    private static final String ANSI_OP    = "\u001B[34m";  // blue
+
+    private static String colorizeForConsole(String level, String message) {
+        if (!ANSI_SUPPORTED || message == null) return message;
+        String u = level == null ? "INFO" : level.toUpperCase(Locale.ROOT);
+        String color = switch (u) {
+            case "DEBUG" -> ANSI_DEBUG;
+            case "WARN"  -> ANSI_WARN;
+            case "AUDIT" -> ANSI_AUDIT;
+            case "STARTUP", "INIT" -> ANSI_START;
+            case "OP"    -> ANSI_OP;
+            case "INFO"  -> ANSI_INFO;
+            default      -> ANSI_INFO;
+        };
+        return color + message + ANSI_RESET;
     }
 
-    private static String padRight(String s, int width) {
-        if (s == null) s = "";
-        if (s.length() >= width) return s.substring(0, width);
-        StringBuilder sb = new StringBuilder(s);
-        while (sb.length() < width) sb.append(' ');
-        return sb.toString();
+    private static String shortLevel(String lvl) {
+        String u = (lvl == null ? "INFO" : lvl).toUpperCase(Locale.ROOT);
+        return switch (u) {
+            case "DEBUG" -> "dbg";
+            case "INFO" -> "inf";
+            case "WARN" -> "wrn";
+            case "AUDIT" -> "log";
+            case "STARTUP" -> "str";
+            case "INIT" -> "int";
+            case "OP" -> "opr";
+            default -> {
+                String s = u.toLowerCase(Locale.ROOT);
+                if (s.length() >= 3) yield s.substring(0, 3);
+                // pad/truncate to 4 chars
+                StringBuilder sb = new StringBuilder(s);
+                while (sb.length() < 3) sb.append(' ');
+                yield sb.toString();
+            }
+        };
+    }
+
+    private static String prefixFor(String lvl) {
+        // 固定使用 linlang-xxx 形式的前缀，xxx 为级别缩写
+        String tag = shortLevel(lvl);
+        return "[linlang-" + tag + "] ";
     }
 
     private static String fmt(String lvl, String msg, Object... kv) {
@@ -249,7 +288,7 @@ public final class BukkitAuditProvider implements LinLog.Provider {
         if (kv != null && kv.length > 0) {
             while (template.contains("{}") && valueIdx < kv.length) {
                 String rep = String.valueOf(kv[valueIdx++]);
-                template = template.replaceFirst("\\\\{\\\\}", rep == null ? "null" : rep);
+                template = template.replaceFirst("\\{}", rep == null ? "null" : rep);
             }
         }
 

@@ -11,7 +11,7 @@ import api.linlang.file.file.path.PathResolver;
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
 import api.linlang.file.database.repo.Repository;
-import core.linlang.audit.message.LinMsg;
+import core.linlang.audit.LinMsg;
 import core.linlang.file.runtime.Binder;
 
 

@@ -10,7 +10,7 @@ import api.linlang.file.file.annotations.NoEmit;
 import api.linlang.file.file.migrator.Migrator;
 import api.linlang.file.file.migrator.MutableDocument;
 import api.linlang.file.file.path.PathResolver;
-import core.linlang.audit.message.LinMsg;
+import core.linlang.audit.LinMsg;
 import core.linlang.file.runtime.TreeMapper;
 import core.linlang.json.JsonCodec;
 import core.linlang.file.runtime.Binder;
@@ -147,7 +147,7 @@ public final class ConfigServiceImpl implements ConfigService {
                 Map<String, List<String>> comments = TreeMapper.extractComments(type);
                 if (shouldEmit) persist(file, meta.fmt(), doc, comments);
             } catch (Exception ex) {
-                LinLog.warn(LinMsg.k("linFile.file.fileSaveConfigFailed"), "file", type, "reason", ex.getMessage());
+                LinLog.warn(LinMsg.k("linFile.file.fileSaveFailed"), "file", type, "reason", ex.getMessage());
             }
         }
     }
@@ -207,9 +207,9 @@ public final class ConfigServiceImpl implements ConfigService {
                 : JsonCodec.dump(doc);
         try {
             IOs.writeString(file, out);
-            LinLog.debug(LinMsg.k("linFile.file.fileSavedConfig"), "file", file);
+            LinLog.debug(LinMsg.k("linFile.file.fileSaved"), "file", file);
         } catch (Exception e) {
-            LinLog.warn(LinMsg.k("linFile.file.fileSaveConfigFailed"), "file", file, "reason", e.getMessage());
+            LinLog.warn(LinMsg.k("linFile.file.fileSaveFailed"), "file", file, "reason", e.getMessage());
             throw new RuntimeException(e);
         }
     }

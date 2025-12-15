@@ -33,17 +33,18 @@ public class BukkitLoader extends JavaPlugin {
             sm.register(Linlang.class, bootstrap, this, ServicePriority.Highest);
 
             long ms = (System.nanoTime() - t0) / 1_000_000L;
-            LinLog.info("[linlang] Linlang bootstrap enabled in " + ms + "ms. API=" + Lin.API_VERSION
+            LinLog.info("Linlang bootstrap enabled in " + ms + "ms. API=" + Lin.API_VERSION
                     + ", Runtime=" + bootstrap.runtimeVersion()
                     + ", Plugin=" + getDescription().getVersion());
+            LinLog.info("琳琅 Bukkit 运行时在 {}ms 内成功启动", ms);
 
-            LinLog.info("[linlang] registered Linlang provider: providerClass={}, providerCL={}",
-                    bootstrap.getClass().getName(), bootstrap.getClass().getClassLoader());
-
-            LinLog.info("[linlang] Linlang interface classloader: {}", api.linlang.runtime.Linlang.class.getClassLoader());
+//            LinLog.info("[linlang] registered Linlang provider: providerClass={}, providerCL={}",
+//                    bootstrap.getClass().getName(), bootstrap.getClass().getClassLoader());
+//
+//            LinLog.info("[linlang] Linlang interface classloader: {}", api.linlang.runtime.Linlang.class.getClassLoader());
 
         } catch (Throwable t) {
-            LinLog.error("Failed to enable Linlang bootstrap: ", t);
+            LinLog.error("琳琅运行时启动失败 Failed to enable LinlangRuntimeBukkit: ", t);
             try {
                 getServer().getServicesManager().unregisterAll(this);
             } catch (Throwable ignored) {

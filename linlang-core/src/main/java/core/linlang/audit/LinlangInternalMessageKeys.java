@@ -1,4 +1,4 @@
-package core.linlang.audit.message;
+package core.linlang.audit;
 
 
 import api.linlang.file.file.annotations.I18nComment;
