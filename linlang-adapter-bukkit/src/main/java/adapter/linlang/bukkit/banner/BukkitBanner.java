@@ -7,7 +7,7 @@ import api.linlang.banner.LinBanner;
 import org.bukkit.plugin.java.JavaPlugin;
 
 /**
- * Bukkit 下的铭牌打印工具。
+ * Bukkit 下的铭牌打印工具
  *
  * <p>内部委托给 {@link LinBanner}，只是输出目标换成 Bukkit Logger。</p>
  */
@@ -22,6 +22,7 @@ public final class BukkitBanner {
 
     /** 通过 LinLog 输出 */
     public static void printWithLogs(BannerOptions opt) {
-        LinBanner.printWithLogs(opt);
+        LinBanner.printWithPrefix(opt);
     }
+    public static void print(BannerOptions opt) {LinBanner.print(opt);}
 }

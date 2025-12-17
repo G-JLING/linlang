@@ -22,6 +22,7 @@ public class BukkitLoader extends JavaPlugin {
             // 1) 初始化运行时装配器
             this.bootstrap = LinlangBukkitBootstrap.install(this);
             this.runtime = bootstrap.getRuntime();
+            this.bootstrap.withCommandPrefix("§f[§dlinlang§] ").reload();
             new CommandListener(this, runtime).register(bootstrap.linCommand());
 
             // 2) 确保服务总线上只保留本次注册（兼容热重载/重复启用）

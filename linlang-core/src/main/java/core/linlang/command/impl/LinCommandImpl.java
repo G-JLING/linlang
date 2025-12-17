@@ -121,7 +121,7 @@ public final class LinCommandImpl implements LinCommand {
                 String authorsStr = String.join(", ", authors);
                 String libVersion = libVersion();
 
-                sendTo(sender, prefix + " §f信息:");
+                sendTo(sender, prefix + "§f信息:");
                 sendTo(sender, "§7   |- §f插件: " + name);
                 sendTo(sender, "§7   |- §f作者: " + authorsStr);
                 sendTo(sender, "§7   |- §f构建版本: " + version);

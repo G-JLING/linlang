@@ -1,5 +1,6 @@
 package adapter.linlang.bukkit.banner;
 
+import api.linlang.audit.LinLog;
 import api.linlang.banner.provider.BannerFontProvider;
 import api.linlang.banner.service.AsciiFont;
 import core.linlang.banner.BannerFontLoader;
@@ -21,6 +22,8 @@ public final class BukkitBannerFontProvider implements BannerFontProvider {
         if (BannerFontLoader.loadBuiltin()) {
             return BannerFontLoader.getDefaultFont();
         }
+
+        LinLog.info("Bukkit 正在查寻字体文件资源");
 
         return BannerFontLoader.font("banner/font.yml");
     }

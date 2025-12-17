@@ -1,6 +1,7 @@
 package core.linlang.audit;
 
 import api.linlang.audit.LinLog;
+import com.fasterxml.jackson.core.JsonTokenId;
 import core.linlang.audit.config.AuditConfig;
 import lombok.Getter;
 import lombok.Setter;
@@ -48,12 +49,13 @@ public abstract class AbstractAuditProvider implements LinLog.Provider {
             !System.getProperty("os.name", "").toLowerCase(Locale.ROOT).contains("win");
 
     private static final String ANSI_RESET = "\u001B[0m";
-    private static final String ANSI_DEBUG = "\u001B[36m";  // cyan
-    private static final String ANSI_INFO  = "\u001B[37m";  // white/gray
-    private static final String ANSI_WARN  = "\u001B[33m";  // yellow
-    private static final String ANSI_AUDIT = "\u001B[35m";  // magenta
-    private static final String ANSI_START = "\u001B[32m";  // green
-    private static final String ANSI_OP    = "\u001B[34m";  // blue
+    private static final String ANSI_ERROR = "\u001B[31m";   // 红色 - 错误信息
+    private static final String ANSI_DEBUG = "\u001B[90m";   // 灰色 - 调试信息
+    private static final String ANSI_INFO  = "\u001B[37m";   // 白色 - 普通信息
+    private static final String ANSI_WARN  = "\u001B[33m";   // 黄色 - 警告信息
+    private static final String ANSI_AUDIT = "\u001B[35m";   // 紫色 - 审计信息
+    private static final String ANSI_START = "\u001B[92m";   // 亮绿色 - 在启动时
+    private static final String ANSI_OP    = "\u001B[96m";   // 亮青色 - 至管理员
 
     protected AbstractAuditProvider(Object runtimeOwnerKey,
                                     Logger runtimeLogger,
@@ -108,7 +110,7 @@ public abstract class AbstractAuditProvider implements LinLog.Provider {
     protected int levelValue(String level) {
         return switch (level) {
             case "DEBUG" -> 1;
-            case "INFO", "INIT", "OP", "STARTUP" -> 2;
+            case "INFO", "INIT", "OP", "STARTUP", "BANR" -> 2;
             case "WARN" -> 3;
             case "ERROR" -> 4;
             case "AUDIT" -> 5;
@@ -192,7 +194,11 @@ public abstract class AbstractAuditProvider implements LinLog.Provider {
     }
 
     protected String prefixFor(String lvl) {
-        String tag = shortLevel(lvl);
+        String u = (lvl == null ? "INFO" : lvl).toUpperCase(Locale.ROOT);
+        if ("BANR".equals(u)) {
+            return "";
+        }
+        String tag = shortLevel(u);
         return "[linlang-" + tag + "] ";
     }
 
@@ -201,6 +207,7 @@ public abstract class AbstractAuditProvider implements LinLog.Provider {
         String u = level == null ? "INFO" : level.toUpperCase(Locale.ROOT);
         String color = switch (u) {
             case "DEBUG" -> ANSI_DEBUG;
+            case "ERROR" -> ANSI_ERROR;
             case "WARN"  -> ANSI_WARN;
             case "AUDIT" -> ANSI_AUDIT;
             case "STARTUP", "INIT" -> ANSI_START;

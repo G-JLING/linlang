@@ -26,14 +26,41 @@ public final class BannerFontLoader {
      */
     @SuppressWarnings("unchecked")
     public static AsciiFont font(String resourceName, ClassLoader classLoader) {
-        AsciiFont f = REG.get(resourceName);
-        if (f != null) return f;
+        AsciiFont cached = REG.get(resourceName);
+        if (cached != null) return cached;
 
+        InputStream in = null;
+
+        // 1) 优先使用调用方传入的 ClassLoader
         ClassLoader cl = (classLoader != null ? classLoader : BannerFontLoader.class.getClassLoader());
-        try (InputStream in = cl.getResourceAsStream(resourceName)) {
-            if (in == null) return null;
+        in = cl.getResourceAsStream(resourceName);
+
+        // 2) 若失败，尝试线程上下文 ClassLoader
+        if (in == null) {
+            ClassLoader ctx = Thread.currentThread().getContextClassLoader();
+            if (ctx != null && ctx != cl) {
+                in = ctx.getResourceAsStream(resourceName);
+            }
+        }
+
+        // 3) 若仍失败，尝试系统 ClassLoader（通常没必要，但作为兜底）
+        if (in == null) {
+            ClassLoader sys = ClassLoader.getSystemClassLoader();
+            if (sys != null && sys != cl) {
+                in = sys.getResourceAsStream(resourceName);
+            }
+        }
+
+        if (in == null) {
+            // 到这里说明在所有尝试过的 ClassLoader 中都找不到该资源
+            // 可以在调用方（如 BukkitBanner）增加一条更详细的 warn 日志，
+            // 包含当前 classpath / 已加载 jar 等信息。
+            return null;
+        }
+
+        try (InputStream use = in) {
             Yaml yaml = new Yaml();
-            Map<String, Object> root = yaml.load(in);
+            Map<String, Object> root = yaml.load(use);
             int height = asInt(root.getOrDefault("height", 5));
             int gap    = asInt(root.getOrDefault("gap", 1));
             Map<String, Object> glyphs = (Map<String, Object>) root.get("glyphs");
@@ -55,14 +82,28 @@ public final class BannerFontLoader {
         }
     }
 
-    /** 使用 BannerFontLoader 自身的 classloader 加载资源（通常是 core 模块自带的内置字体） */
+    /**
+     * 使用 BannerFontLoader 自身的 classloader 加载资源（通常是 core 模块自带的内置字体）。
+     */
     public static AsciiFont font(String resourceName) {
         return font(resourceName, BannerFontLoader.class.getClassLoader());
     }
 
-    /** 载入内置字体到 registry，返回是否成功 */
+    /**
+     * 载入内置字体到 registry，返回是否成功。
+     *
+     * <p>会尝试从多个 ClassLoader 中查找 {@code banner/font.yml}，以提高在多模块 /
+     * 多插件环境下的可用性。</p>
+     */
     public static boolean loadBuiltin() {
-        AsciiFont f = font("banner/font.yml");
+        // 1) 先尝试线程上下文 ClassLoader（通常是插件的 ClassLoader）
+        AsciiFont f = font("banner/font.yml", Thread.currentThread().getContextClassLoader());
+
+        // 2) 若失败，再尝试 BannerFontLoader 自己的 ClassLoader
+        if (f == null) {
+            f = font("banner/font.yml", BannerFontLoader.class.getClassLoader());
+        }
+
         if (f != null) {
             REG.put(DEFAULT_KEY, f);
             return true;
