@@ -1,10 +1,10 @@
-package core.linlang.audit.i18n;
+package core.linlang.audit.internal.i18n;
 
 import api.linlang.file.file.FileType;
 import api.linlang.file.file.annotations.LangPack;
 import api.linlang.file.file.annotations.NoEmit;
 import api.linlang.file.file.implement.LocaleProvider;
-import core.linlang.audit.LinlangInternalMessageKeys;
+import core.linlang.audit.internal.LinlangInternalMessageKeys;
 
 @NoEmit
 @LangPack(name = "en_GB", path = "linlang", format = FileType.YAML, locale = "en_GB")

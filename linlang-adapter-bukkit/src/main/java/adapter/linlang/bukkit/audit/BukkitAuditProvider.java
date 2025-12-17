@@ -1,123 +1,60 @@
 package adapter.linlang.bukkit.audit;
 
-/*
- * BukkitAuditProvider.java
- * 是用于装配 audit 审计与日志 的类
- */
-
-import api.linlang.audit.LinLog;
-import audit.linlang.audit.AuditConfig;
-import lombok.Setter;
+import core.linlang.audit.AbstractAuditProvider;
+import core.linlang.audit.config.AuditConfig;
 import org.bukkit.Bukkit;
+import org.bukkit.entity.Player;
 import org.bukkit.plugin.java.JavaPlugin;
 
-import java.io.IOException;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.StandardOpenOption;
-import java.util.logging.Logger;
-import java.util.Locale;
-import java.util.logging.Level;
-import java.nio.file.StandardCopyOption;
-
-import org.bukkit.entity.Player;
-
-import java.util.ArrayDeque;
 import java.util.ArrayList;
-import java.util.Deque;
 import java.util.List;
+import java.util.logging.Logger;
 
-public final class BukkitAuditProvider implements LinLog.Provider {
-    private final Logger jul;
+/**
+ * Bukkit 平台审计与日志 Provider。
+ * <p>继承 AbstractAuditProvider，只实现 Bukkit 相关部分。</p>
+ */
+public final class BukkitAuditProvider extends AbstractAuditProvider {
 
-    @Setter
-    private AuditConfig config;
+    private final JavaPlugin runtimePlugin;
 
-    private static final int MAX_PENDING = 50;
-    private static final Deque<String> pendingOp = new ArrayDeque<>();
-    private static final Deque<String> pendingStartup = new ArrayDeque<>();
+    public BukkitAuditProvider(JavaPlugin runtimePlugin,
+                               AuditConfig runtimeConfig,
+                               boolean usePluginLogger) {
+        super(runtimePlugin,
+                createInitialLogger(runtimePlugin, usePluginLogger),
+                runtimeConfig);
+        this.runtimePlugin = runtimePlugin;
+    }
 
-    private static void enqueueBounded(Deque<String> q, String line) {
-        synchronized (q) {
-            while (q.size() >= MAX_PENDING) q.pollFirst();
-            q.addLast(line);
+    private static Logger createInitialLogger(JavaPlugin plugin, boolean usePluginLogger) {
+        Logger jul = usePluginLogger ? plugin.getLogger() : Bukkit.getLogger();
+        return jul;
+    }
+
+    @Override
+    protected Logger createLoggerFor(Object ownerKey, boolean usePluginLogger) {
+        if (ownerKey instanceof JavaPlugin jp) {
+            return usePluginLogger ? jp.getLogger() : Bukkit.getLogger();
         }
+        return Bukkit.getLogger();
     }
 
-    public BukkitAuditProvider(JavaPlugin plugin, boolean UsingPluginLogger) {
-        if (UsingPluginLogger) {
-            this.jul = plugin.getLogger();
-        } else {
-            this.jul = Bukkit.getLogger();
-        }
-        try {
-            this.jul.setLevel(Level.ALL);
-        } catch (Throwable ignore) {
-        }
-    }
-
-    private boolean shouldLog(String level) {
-        AuditConfig c = this.config;
-        if (c == null) return true;
-        String confLevel = String.valueOf(c.level).toUpperCase(Locale.ROOT);
-        int confLevelVal = levelValue(confLevel);
-        int msgLevelVal = levelValue(level.toUpperCase(Locale.ROOT));
-        return msgLevelVal >= confLevelVal;
-    }
-
-    private int levelValue(String level) {
-        return switch (level) {
-            case "DEBUG" -> 1;
-            case "INFO", "INIT", "OP", "STARTUP" -> 2;
-            case "WARN" -> 3;
-            case "AUDIT" -> 4;
-            default -> 2;
-        };
-    }
-
-    private static final Object FILE_LOCK = new Object();
-
-    private void writeToFile(AuditConfig.Output out, String line) {
-        if (out == null || out.path == null || out.path.isEmpty()) return;
-        Path p = Path.of(out.path);
-        try {
-            synchronized (FILE_LOCK) {
-                Path parent = p.toAbsolutePath().getParent();
-                if (parent != null) Files.createDirectories(parent);
-
-                long limit = (long) Math.max(1, out.sizeMb) * 1024L * 1024L;
-                if (Files.exists(p)) {
-                    long size = Files.size(p);
-                    if (size >= limit) rotateFiles(p, Math.max(1, out.retained));
-                }
-                Files.writeString(p, line + System.lineSeparator(), StandardOpenOption.CREATE, StandardOpenOption.APPEND);
-            }
-        } catch (IOException e) {
-            jul.warning("Failed to write log to file: " + out.path + " (" + e.getMessage() + ")");
-        }
-    }
-
-    private void rotateFiles(Path base, int retained) throws IOException {
-        // rename base.(i-1) -> base.i
-        for (int i = retained; i >= 2; i--) {
-            Path prev = Path.of(base.toString() + "." + (i - 1));
-            Path next = Path.of(base.toString() + "." + i);
-            if (Files.exists(prev)) {
-                Files.move(prev, next, StandardCopyOption.REPLACE_EXISTING);
+    @Override
+    protected Object normalizeOwnerKey(Object ownerHint) {
+        if (ownerHint == null) return runtimePlugin;
+        if (ownerHint instanceof JavaPlugin jp) return jp;
+        if (ownerHint instanceof Class<?> clazz) {
+            try {
+                return JavaPlugin.getProvidingPlugin(clazz);
+            } catch (IllegalArgumentException ignored) {
             }
         }
-        // base -> base.1
-        if (Files.exists(base)) {
-            Files.move(base, Path.of(base.toString() + ".1"), StandardCopyOption.REPLACE_EXISTING);
-        }
+        return runtimePlugin;
     }
 
-    private boolean useJsonFor(AuditConfig.Output out) {
-        if (out == null) return config != null && config.json;
-        return out.json != null ? out.json : (config != null && config.json);
-    }
-
-    private void deliverOp(String line) {
+    @Override
+    protected void platformDeliverOpLine(String line) {
         boolean any = false;
         for (Player p : Bukkit.getOnlinePlayers()) {
             if (p.isOp()) {
@@ -130,215 +67,12 @@ public final class BukkitAuditProvider implements LinLog.Provider {
         }
     }
 
-    private void deliverStartup(String line) {
-        // Keep for later; flushed by flushStartupToConsole()/broadcast
+    @Override
+    protected void platformDeliverStartupLine(String line) {
         enqueueBounded(pendingStartup, line);
     }
 
-    public void log(String level, String msg, Object... kv) {
-        AuditConfig c = this.config;
-        if (!shouldLog(level)) return;
-        String line;
-        boolean useJson = c != null && useJsonFor(c.console);
-        if (useJson) {
-            StringBuilder sb = new StringBuilder();
-            sb.append("{");
-            sb.append("\"level\":\"").append(level).append("\",");
-            sb.append("\"message\":\"").append(msg).append("\"");
-            for (int i = 0; i + 1 < kv.length; i += 2) {
-                sb.append(",\"").append(kv[i]).append("\":\"").append(String.valueOf(kv[i + 1])).append("\"");
-            }
-            if ((kv.length & 1) == 1) {
-                sb.append(",\"kv_odd\":\"").append(kv[kv.length - 1]).append("\"");
-            }
-            sb.append("}");
-            line = sb.toString();
-        } else {
-            line = fmt(level, msg, kv);
-        }
-        String upper = level.toUpperCase(Locale.ROOT);
-        if ("OP".equals(upper)) {
-            // OP notices: send to online OPs now, or queue for later when an OP joins
-            deliverOp(useJsonFor(config != null ? config.console : null) ? line : msg);
-            // Also write to file sink if configured
-            if (c != null && c.file != null && c.file.enabled && c.file.path != null) {
-                writeToFile(c.file, useJsonFor(c.file) ? line : fmt("OP", msg, kv));
-            }
-            return;
-        }
-        if ("STARTUP".equals(upper)) {
-            // STARTUP notices: queue; bukkit should flush after server fully started
-            deliverStartup(useJsonFor(config != null ? config.console : null) ? line : msg);
-            // Also persist if file sink configured
-            if (c != null && c.file != null && c.file.enabled && c.file.path != null) {
-                writeToFile(c.file, useJsonFor(c.file) ? line : fmt("STARTUP", msg, kv));
-            }
-            return;
-        }
-        if (c == null || (c.console != null && c.console.enabled)) {
-            boolean consoleJson = c != null && useJsonFor(c.console);
-            String consoleLine = line;
-            if (!consoleJson) {
-                // 为支持的控制台环境添加 ANSI 染色，仅用于控制台输出
-                consoleLine = colorizeForConsole(upper, consoleLine);
-            }
-            jul.info(consoleLine);
-        }
-        if (c != null && c.file != null && c.file.enabled && c.file.path != null) {
-            boolean fileJson = useJsonFor(c.file);
-            String fileLine = fileJson ? line : fmt(level, msg, kv);
-            writeToFile(c.file, fileLine);
-        }
-    }
-
-    public void audit(String event, Object... kv) {
-        if (config == null) return;
-        if (!config.audit.enabled) return;
-        boolean useJson = useJsonFor(config.audit);
-        String line;
-        if (useJson) {
-            StringBuilder sb = new StringBuilder();
-            sb.append("{");
-            sb.append("\"event\":\"").append(event).append("\"");
-            for (int i = 0; i + 1 < kv.length; i += 2) {
-                sb.append(",\"").append(kv[i]).append("\":\"").append(String.valueOf(kv[i + 1])).append("\"");
-            }
-            if ((kv.length & 1) == 1) {
-                sb.append(",\"kv_odd\":\"").append(kv[kv.length - 1]).append("\"");
-            }
-            sb.append("}");
-            line = sb.toString();
-        } else {
-            line = fmt("AUDIT", event, kv);
-        }
-        if (config.console != null && config.console.enabled) {
-            boolean consoleJson = useJsonFor(config.console);
-            if (consoleJson) {
-                jul.info(line);
-            } else {
-                String formatted = fmt("AUDIT", event, kv);
-                jul.info(colorizeForConsole("AUDIT", formatted));
-            }
-        }
-        if (config.audit != null && config.audit.enabled && config.audit.path != null) {
-            writeToFile(config.audit, line);
-        }
-    }
-
-    // --- ANSI color helpers for console output (only used for console, not file/JSON) ---
-
-    private static final boolean ANSI_SUPPORTED =
-            !System.getProperty("os.name", "").toLowerCase(Locale.ROOT).contains("win");
-
-    private static final String ANSI_RESET = "\u001B[0m";
-    private static final String ANSI_DEBUG = "\u001B[36m";  // cyan
-    private static final String ANSI_INFO  = "\u001B[37m";  // white/gray
-    private static final String ANSI_WARN  = "\u001B[33m";  // yellow
-    private static final String ANSI_AUDIT = "\u001B[35m";  // magenta
-    private static final String ANSI_START = "\u001B[32m";  // green
-    private static final String ANSI_OP    = "\u001B[34m";  // blue
-
-    private static String colorizeForConsole(String level, String message) {
-        if (!ANSI_SUPPORTED || message == null) return message;
-        String u = level == null ? "INFO" : level.toUpperCase(Locale.ROOT);
-        String color = switch (u) {
-            case "DEBUG" -> ANSI_DEBUG;
-            case "WARN"  -> ANSI_WARN;
-            case "AUDIT" -> ANSI_AUDIT;
-            case "STARTUP", "INIT" -> ANSI_START;
-            case "OP"    -> ANSI_OP;
-            case "INFO"  -> ANSI_INFO;
-            default      -> ANSI_INFO;
-        };
-        return color + message + ANSI_RESET;
-    }
-
-    private static String shortLevel(String lvl) {
-        String u = (lvl == null ? "INFO" : lvl).toUpperCase(Locale.ROOT);
-        return switch (u) {
-            case "DEBUG" -> "dbg";
-            case "INFO" -> "inf";
-            case "WARN" -> "wrn";
-            case "AUDIT" -> "log";
-            case "STARTUP" -> "str";
-            case "INIT" -> "int";
-            case "OP" -> "opr";
-            default -> {
-                String s = u.toLowerCase(Locale.ROOT);
-                if (s.length() >= 3) yield s.substring(0, 3);
-                // pad/truncate to 4 chars
-                StringBuilder sb = new StringBuilder(s);
-                while (sb.length() < 3) sb.append(' ');
-                yield sb.toString();
-            }
-        };
-    }
-
-    private static String prefixFor(String lvl) {
-        // 固定使用 linlang-xxx 形式的前缀，xxx 为级别缩写
-        String tag = shortLevel(lvl);
-        return "[linlang-" + tag + "] ";
-    }
-
-    private static String fmt(String lvl, String msg, Object... kv) {
-        String template = msg == null ? "" : msg;
-
-        // 1) Sequential "{}" placeholders replacement using kv values in order.
-        int valueIdx = 0;
-        if (kv != null && kv.length > 0) {
-            while (template.contains("{}") && valueIdx < kv.length) {
-                String rep = String.valueOf(kv[valueIdx++]);
-                template = template.replaceFirst("\\{}", rep == null ? "null" : rep);
-            }
-        }
-
-        // 2) Try to perform named placeholder replacements of form {key} using remaining kv pairs.
-        boolean replacedAny = false;
-        if (kv != null && kv.length > valueIdx) {
-            for (int i = valueIdx; i + 1 < kv.length; i += 2) {
-                String rawKey = String.valueOf(kv[i]);
-                if (rawKey == null) continue;
-                String k = rawKey.trim();
-                // accept keys provided either as name or as {name}
-                if (k.startsWith("{") && k.endsWith("}") && k.length() > 2) {
-                    k = k.substring(1, k.length() - 1).trim();
-                }
-                if (k.isEmpty()) continue;
-                String placeholder = "{" + k + "}";
-                if (template.contains(placeholder)) {
-                    String rep = String.valueOf(kv[i + 1]);
-                    template = template.replace(placeholder, rep == null ? "null" : rep);
-                    replacedAny = true;
-                }
-            }
-        }
-
-        StringBuilder sb = new StringBuilder();
-        // prefix for level (fixed width)
-        sb.append(prefixFor(lvl == null ? "info" : lvl));
-
-        if (replacedAny) {
-            sb.append(template);
-            return sb.toString();
-        }
-
-        // No named placeholder replaced: fall back to old behavior of appending key=value pairs
-        sb.append(template);
-        if (kv != null && kv.length > valueIdx) {
-            // append remaining kv as key=value pairs
-            for (int i = valueIdx; i + 1 < kv.length; i += 2) {
-                sb.append(' ').append(kv[i]).append('=').append(String.valueOf(kv[i + 1]));
-            }
-            if ((kv.length - valueIdx & 1) == 1) sb.append(" kv_odd=").append(kv[kv.length - 1]);
-        }
-        return sb.toString();
-    }
-
-    // --- Public flush helpers ---
-
-    /**
-     * Flush queued OP notices to any currently online operators.
-     */
+    @Override
     public void flushOpToOnlineOps() {
         List<String> batch;
         synchronized (pendingOp) {
@@ -346,20 +80,22 @@ public final class BukkitAuditProvider implements LinLog.Provider {
             batch = new ArrayList<>(pendingOp);
             pendingOp.clear();
         }
+        boolean anyOp = false;
         for (Player p : Bukkit.getOnlinePlayers()) {
             if (!p.isOp()) continue;
-            for (String s : batch) p.sendMessage(s);
+            anyOp = true;
+            for (String s : batch) {
+                p.sendMessage(s);
+            }
         }
-        // If still no OP online, push back to queue (keep most recent)
-        boolean anyOpOnline = Bukkit.getOnlinePlayers().stream().anyMatch(Player::isOp);
-        if (!anyOpOnline) {
-            for (String s : batch) enqueueBounded(pendingOp, s);
+        if (!anyOp) {
+            for (String s : batch) {
+                enqueueBounded(pendingOp, s);
+            }
         }
     }
 
-    /**
-     * Flush queued STARTUP notices to console (or broadcast to all players if some are online).
-     */
+    @Override
     public void flushStartupToConsole() {
         List<String> batch;
         synchronized (pendingStartup) {
@@ -378,9 +114,7 @@ public final class BukkitAuditProvider implements LinLog.Provider {
         }
     }
 
-    /**
-     * Convenience: call when an OP player joins to deliver any queued OP notices to them.
-     */
+    @Override
     public void flushOpTo(Object op) {
         if (!(op instanceof Player p)) return;
         if (!p.isOp()) return;
@@ -390,7 +124,8 @@ public final class BukkitAuditProvider implements LinLog.Provider {
             batch = new ArrayList<>(pendingOp);
             pendingOp.clear();
         }
-        for (String s : batch) p.sendMessage(s);
+        for (String s : batch) {
+            p.sendMessage(s);
+        }
     }
-
 }

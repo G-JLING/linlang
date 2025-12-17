@@ -29,11 +29,6 @@
             <scope>compile</scope>
         </dependency>
         <dependency>
-            <groupId>me.jling</groupId>
-            <artifactId>linlang-audit</artifactId>
-            <scope>compile</scope>
-        </dependency>
-        <dependency>
             <groupId>org.projectlombok</groupId>
             <artifactId>lombok</artifactId>
             <scope>provided</scope>

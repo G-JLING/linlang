@@ -10,7 +10,7 @@ import api.linlang.file.file.annotations.NoEmit;
 import api.linlang.file.file.migrator.Migrator;
 import api.linlang.file.file.migrator.MutableDocument;
 import api.linlang.file.file.path.PathResolver;
-import core.linlang.audit.LinMsg;
+import core.linlang.audit.internal.LinMsg;
 import core.linlang.file.runtime.TreeMapper;
 import core.linlang.json.JsonCodec;
 import core.linlang.file.runtime.Binder;

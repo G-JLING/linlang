@@ -11,7 +11,6 @@
     <modules>
         <module>linlang-core</module>
         <module>linlang-adapter-bukkit</module>
-        <module>linlang-audit</module>
         <module>linlang-runtime-bukkit</module>
     </modules>
 
@@ -25,11 +24,6 @@
             <dependency>
                 <groupId>me.jling</groupId>
                 <artifactId>linlang-adapter-bukkit</artifactId>
-                <version>${project.version}</version>
-            </dependency>
-            <dependency>
-                <groupId>me.jling</groupId>
-                <artifactId>linlang-audit</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>
@@ -73,9 +67,9 @@
         <maven.compiler.source>17</maven.compiler.source>
         <maven.compiler.target>17</maven.compiler.target>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-        <linlang.api.version>1.1.0.0-SNAPSHOT</linlang.api.version>
+        <linlang.api.version>1.1.0.1-SNAPSHOT</linlang.api.version>
         <shade.version>3.5.3</shade.version>
-        <revision>1.1.0.0-SNAPSHOT</revision>
+        <revision>1.1.0.1-SNAPSHOT</revision>
     </properties>
 
     <build>

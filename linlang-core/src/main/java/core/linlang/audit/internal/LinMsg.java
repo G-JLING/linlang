@@ -1,4 +1,4 @@
-package core.linlang.audit;
+package core.linlang.audit.internal;
 
 /**
  * Linlang 全局语言访问的静态入口。

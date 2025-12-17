@@ -8,9 +8,10 @@ import api.linlang.command.LinCommand;
 import api.linlang.command.message.CommandMessages;
 import api.linlang.file.database.DataService;
 import api.linlang.messenger.LinMessenger;
-import audit.linlang.audit.AuditConfig;
-import core.linlang.audit.LinMsg;
-import core.linlang.audit.LinlangInternalMessageKeys;
+import core.linlang.audit.AbstractAuditProvider;
+import core.linlang.audit.config.AuditConfig;
+import core.linlang.audit.internal.LinMsg;
+import core.linlang.audit.internal.LinlangInternalMessageKeys;
 import core.linlang.command.message.CommandMessageKeys;
 import core.linlang.command.message.CommandMessageRouter;
 import core.linlang.command.message.i18n.EnGB;
@@ -33,7 +34,7 @@ public final class LinlangRuntime implements AutoCloseable {
 
     private final JavaPlugin runtimePlugin;
 
-    private BukkitAuditProvider globalAudit;
+    private AbstractAuditProvider globalAudit;
 
     private final LinkedHashSet<LinlangFacade> facades =
             new LinkedHashSet<>();
@@ -54,7 +55,7 @@ public final class LinlangRuntime implements AutoCloseable {
             var keys = lang.bind(
                     LinlangInternalMessageKeys.class,
                     lang.currentLocale(),
-                    List.of(new core.linlang.audit.i18n.ZhCN(), new core.linlang.audit.i18n.EnGB())
+                    List.of(new core.linlang.audit.internal.i18n.ZhCN(), new core.linlang.audit.internal.i18n.EnGB())
             );
 
             LinMsg.installKeys(() -> keys);
@@ -66,29 +67,43 @@ public final class LinlangRuntime implements AutoCloseable {
         }
     }
 
-    // 安装全局审计提供者，可选使用插件日志器，并加载审计配置
+    /**
+     * 安装 runtime 自身的审计与日志。
+     *
+     * @param usePluginLogger 是否使用运行时插件自己的 logger 作为 console 输出
+     */
     public LinlangRuntime installAudit(boolean usePluginLogger) {
         try {
-            this.globalAudit = new BukkitAuditProvider(runtimePlugin, usePluginLogger);
-            LinLog.install(this.globalAudit);
+            // runtime 自己的 config service
+            ConfigServiceImpl cfg = bootstrap.getConfig(); // 你已有的方法
+            AuditConfig runtimeCfg = cfg.bind(AuditConfig.class);
 
-            try {
-                ConfigServiceImpl cfg = bootstrap.getConfig();
-                this.globalAudit.setConfig(cfg.bind(AuditConfig.class));
-            } catch (Throwable t) {
-                LinLog.warn("Failed to bind audit config: " + t.getMessage());
-            }
+            this.globalAudit = new BukkitAuditProvider(runtimePlugin, runtimeCfg, usePluginLogger);
+            LinLog.install(this.globalAudit);
         } catch (Throwable t) {
-            LinLog.warn("Failed to install audit: " + t.getMessage());
+            // 出错则使用默认配置
+            AuditConfig fallback = new AuditConfig();
+            this.globalAudit = new BukkitAuditProvider(runtimePlugin, fallback, usePluginLogger);
+            LinLog.install(this.globalAudit);
+            LinLog.warn("Failed to bind runtime audit config: {}", t.getMessage());
         }
         return this;
     }
 
-    // 为指定插件安装或覆盖审计配置（当前实现为空，预留扩展）
+    /**
+     * 为指定插件安装/刷新审计租户。
+     * 应在为该插件创建 LinlangFacade 前调用。
+     */
     public void installAuditFor(JavaPlugin owner, boolean usePluginLogger) {
-        // If per-bukkit audit is desired, implement custom provider here.
-        // For now: reuse global audit, or create per-bukkit audit provider.
-        // You may expand this later depending on bukkit demand.
+        if (globalAudit == null) return;
+        try {
+            // 为该插件创建独立的配置服务，路径落在该插件 data 文件夹
+            ConfigServiceImpl cfg = createConfigService(owner); // 你已有类似方法
+            AuditConfig pluginCfg = cfg.bind(AuditConfig.class);
+            globalAudit.registerTenant(owner, pluginCfg, usePluginLogger);
+        } catch (Throwable t) {
+            LinLog.warn("Failed to bind audit config for plugin {}: {}", owner.getName(), t.getMessage());
+        }
     }
 
     // 为指定插件创建独立的配置服务实例

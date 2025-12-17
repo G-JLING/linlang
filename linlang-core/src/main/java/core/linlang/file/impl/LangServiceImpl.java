@@ -10,7 +10,7 @@ import api.linlang.file.file.annotations.LangPack;
 import api.linlang.file.file.annotations.NoEmit;
 import api.linlang.file.file.implement.LocaleProvider;
 import api.linlang.file.file.path.PathResolver;
-import core.linlang.audit.LinMsg;
+import core.linlang.audit.internal.LinMsg;
 import core.linlang.file.runtime.TreeMapper;
 import core.linlang.file.runtime.LocaleTag;
 import core.linlang.file.util.IOs;

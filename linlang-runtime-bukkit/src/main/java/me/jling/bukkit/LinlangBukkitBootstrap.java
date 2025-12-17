@@ -98,7 +98,7 @@ public final class LinlangBukkitBootstrap implements AutoCloseable, Linlang, Lin
             }
         };
 
-        LinLog.info("[linlang] Runtime bootstrap initialized: bukkit=" + runtimePlugin.getName());
+        LinLog.info("Runtime bootstrap initialized: bukkit=" + runtimePlugin.getName());
     }
 
     /* -------------------------------------------------------------
@@ -110,13 +110,15 @@ public final class LinlangBukkitBootstrap implements AutoCloseable, Linlang, Lin
      */
     public Linlang createFacade(Object platformContext) {
         if (!(platformContext instanceof JavaPlugin owner)) {
-            return this; // fallback: return bootstrap itself
+            return this;
         }
 
         // 若是 Runtime bukkit 自己 => 返回当前 bootstrap
         if (owner == this.runtimePlugin) {
             return this;
         }
+
+        runtime.installAuditFor(owner, false);
 
         // 其他插件 => per-bukkit facade
         return LinlangFacade.create(runtime, owner);
