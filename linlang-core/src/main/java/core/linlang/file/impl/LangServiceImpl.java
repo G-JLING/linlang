@@ -53,12 +53,14 @@ public final class LangServiceImpl implements LangService {
         Path file;
         FileType fmt;
         boolean emit;
+        LocaleProvider<?> provider; // 记录 bind 时选用的 provider，用于 reload 时生成默认值
 
-        BoundMeta(Object h, Path f, FileType fm, boolean em) {
+        BoundMeta(Object h, Path f, FileType fm, boolean em, LocaleProvider<?> prov) {
             this.holder = h;
             this.file = f;
             this.fmt = fm;
             this.emit = em;
+            this.provider = prov;
         }
     }
 
@@ -162,10 +164,11 @@ public final class LangServiceImpl implements LangService {
             bm.file = file;
             bm.fmt = pp.fmt();
             bm.emit = shouldEmit;
+            bm.provider = prov;
         } else {
             holder = newInstance(keysClass);
             TreeMapper.populate(holder, doc);
-            bound.put(bk, new BoundMeta(holder, file, pp.fmt(), shouldEmit));
+            bound.put(bk, new BoundMeta(holder, file, pp.fmt(), shouldEmit, prov));
         }
 
         // 5) 缓存扁平化：合并到该 locale 的总键表（避免多次 bind 覆盖之前的键）
@@ -189,7 +192,9 @@ public final class LangServiceImpl implements LangService {
         T holder = (T) bm.holder;
         Map<String, Object> out = new LinkedHashMap<>();
         TreeMapper.export(holder, out);
-        var pp = resolvePackPath(keysClass, locale);
+        var pp = (bm != null && bm.provider != null)
+                ? resolvePackPathFromProvider(bm.provider.getClass(), locale)
+                : resolvePackPath(keysClass, locale);
         Path f = bm.file != null ? bm.file : file(pp.path(), pp.name(), pp.fmt());
         try {
             Map<String, Object> curr = IOs.exists(f)
@@ -227,37 +232,98 @@ public final class LangServiceImpl implements LangService {
 
     @Override
     public void reload() {
+        // 基于当前已 bind 的对象进行“就地”重载（不更换 holder 引用）
         Map<String, Map<String, String>> newCache = new LinkedHashMap<>();
-        for (Map.Entry<BoundKey, BoundMeta> e : bound.entrySet()) {
+
+        java.util.List<java.util.Map.Entry<BoundKey, BoundMeta>> snapshot =
+                new java.util.ArrayList<>(bound.entrySet());
+
+        for (var e : snapshot) {
             BoundKey k = e.getKey();
             BoundMeta bm = e.getValue();
-            if (bm == null || bm.holder == null) continue;
+            if (k == null || bm == null || bm.holder == null) continue;
+
             Class<?> keysClass = k.type();
             String locale = k.locale();
-            Path file;
-            FileType fmt;
-            if (bm.file != null && bm.fmt != null) {
-                file = bm.file;
-                fmt = bm.fmt;
-            } else {
-                PackPath pp = resolvePackPath(keysClass, locale);
-                file = file(pp.path(), pp.name(), pp.fmt());
-                fmt = pp.fmt();
-            }
+
             try {
-                Map<String, Object> doc = IOs.exists(file)
-                        ? (fmt == FileType.YAML ? YamlCodec.load(IOs.readString(file)) : JsonCodec.load(IOs.readString(file)))
-                        : new LinkedHashMap<>();
-                TreeMapper.populate(bm.holder, doc);
-                Map<String, String> flat = flatten(doc);
-                newCache.computeIfAbsent(locale, l -> new LinkedHashMap<>()).putAll(flat);
+                reloadOne(keysClass, locale, bm, newCache);
             } catch (Exception ex) {
-                LinLog.warn(LinMsg.k("linFile.lang.langReloadLangFailed"), "lang", file, "reason", ex.getMessage());
+                Path f = bm.file;
+                LinLog.warn(LinMsg.k("linFile.lang.langReloadLangFailed"), "lang", (f == null ? keysClass : f), "reason", ex.getMessage());
             }
         }
+
         cache.clear();
         cache.putAll(newCache);
         LinLog.info(LinMsg.k("linFile.lang.LangReloaded"));
+    }
+
+    /**
+     * 对单个 (keysClass, locale) 执行“就地”重载：读取磁盘 → 合并默认值 → diff/写回（可选）→ populate 到既有 holder → 更新缓存。
+     * <p>
+     * 注意：此方法不会更换 holder 引用；外部持有的 keys 实例将直接看到字段更新。
+     * </p>
+     */
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    private void reloadOne(Class<?> keysClass, String locale, BoundMeta bm, Map<String, Map<String, String>> newCache) {
+        // 解析文件位置与格式：优先使用 bound 时记录的 file/fmt；缺失则按 provider/keysClass 的 @LangPack 推导
+        Path file;
+        FileType fmt;
+        if (bm.file != null && bm.fmt != null) {
+            file = bm.file;
+            fmt = bm.fmt;
+        } else {
+            PackPath pp = (bm.provider != null)
+                    ? resolvePackPathFromProvider(bm.provider.getClass(), locale)
+                    : resolvePackPath(keysClass, locale);
+            file = file(pp.path(), pp.name(), pp.fmt());
+            fmt = pp.fmt();
+            bm.file = file;
+            bm.fmt = fmt;
+        }
+
+        boolean exists = IOs.exists(file);
+        Map<String, Object> doc = exists
+                ? (fmt == FileType.YAML ? YamlCodec.load(IOs.readString(file)) : JsonCodec.load(IOs.readString(file)))
+                : new LinkedHashMap<>();
+
+        // 构建默认值：类字段默认 + provider 默认（若存在）
+        Object defaults = newInstance((Class) keysClass);
+        if (bm.provider != null) {
+            try {
+                ((LocaleProvider) bm.provider).define(defaults);
+            } catch (Throwable ignore) {
+                // provider 默认值失败不影响 reload 主流程
+            }
+        }
+        Map<String, Object> defDoc = new LinkedHashMap<>();
+        TreeMapper.export(defaults, defDoc);
+
+        // 合并默认值并收集缺失键（让删除字段/缺失字段在 reload 后回到默认值）
+        java.util.Set<String> missing = new java.util.LinkedHashSet<>();
+        mergeDefaultsCollect(defDoc, doc, "", missing);
+
+        // YAML 支持注释：为缺失键确保锚点，再写回
+        Map<String, java.util.List<String>> comments =
+                (fmt == FileType.YAML) ? extractCommentsByLocale(keysClass, locale) : java.util.Collections.emptyMap();
+
+        boolean shouldEmit = bm.emit;
+        if (shouldEmit) {
+            ensureCommentAnchors(doc, comments);
+            if (!missing.isEmpty()) {
+                writeDiff(file, fmt, (Map<String, Object>) doc, missing);
+            }
+            // 即使没有缺失键，也写回一次以保证格式/注释一致（与 bindInternal 行为一致）
+            persist(file, fmt, (Map<String, Object>) doc, comments);
+        }
+
+        // 就地回填到既有 holder
+        TreeMapper.populate(bm.holder, (Map<String, Object>) doc);
+
+        // 更新扁平化缓存
+        Map<String, String> flat = flatten((Map<String, Object>) doc);
+        newCache.computeIfAbsent(locale, l -> new LinkedHashMap<>()).putAll(flat);
     }
 
     @Override
