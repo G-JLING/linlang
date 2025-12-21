@@ -66,6 +66,12 @@ public final class LangServiceImpl implements LangService {
 
     private final Map<BoundKey, BoundMeta> bound = new ConcurrentHashMap<>();
 
+    // 每个 keysClass 最近一次返回给调用者的 holder（用于 setLocale/reload 时切换该 holder 的语言内容）
+    private final Map<Class<?>, Object> activeHolders = new ConcurrentHashMap<>();
+
+    // 记录每个 keysClass 在 bind 时传入的 providers，用于 setLocale/ensureLocaleCacheLoaded 生成该 locale 的默认值
+    private final Map<Class<?>, List<LocaleProvider<?>>> providersByKeys = new ConcurrentHashMap<>();
+
     public LangServiceImpl(PathResolver paths, String defaultLocale) {
         this.paths = paths;
         this.current = LocaleTag.parse(defaultLocale);
@@ -100,6 +106,12 @@ public final class LangServiceImpl implements LangService {
 
         // Defensive providers null check, use provList for further usage
         List<? extends LocaleProvider<T>> provList = providers == null ? Collections.emptyList() : providers;
+        // 记住 providers（用于未来 setLocale 后补齐未 bind 的 locale）
+        if (!provList.isEmpty()) {
+            providersByKeys.putIfAbsent(keysClass, (List) List.copyOf((List) provList));
+        } else {
+            providersByKeys.putIfAbsent(keysClass, List.of());
+        }
 
         // 1) 选择 provider
         LocaleProvider<T> prov = null;
@@ -180,6 +192,8 @@ public final class LangServiceImpl implements LangService {
             cache.put(locale, bucket);
         }
         bucket.putAll(flat);
+        // 记录该 keysClass 当前对外暴露的 holder，后续 setLocale/reload 会对它执行语言切换
+        activeHolders.put(keysClass, holder);
         setLocale(locale);
         return holder;
     }
@@ -256,6 +270,20 @@ public final class LangServiceImpl implements LangService {
 
         cache.clear();
         cache.putAll(newCache);
+
+        // reload 会重建 cache（只包含已 bind 的 locale）；这里补齐当前语言，避免 setLocale 后再次 reload 失效
+        LocaleTag cur = this.current;
+        if (cur != null) {
+            try {
+                ensureLocaleCacheLoaded(cur.tag());
+            } catch (Throwable ignore) {
+            }
+            try {
+                switchActiveHoldersToLocale(cur.tag());
+            } catch (Throwable ignore) {
+            }
+        }
+
         LinLog.info(LinMsg.k("linFile.lang.LangReloaded"));
     }
 
@@ -329,8 +357,143 @@ public final class LangServiceImpl implements LangService {
     @Override
     public void setLocale(String locale) {
         String normalized = ensureLocale(locale, this.current);
-        LinLog.debug(LinMsg.k("linCommand.commandLanguageSwitched"), "locale", normalized);
         this.current = LocaleTag.parse(normalized);
+
+        // 保障当前语言在 cache 中可用：即使该 locale 未显式 bind，也尽量从磁盘载入/生成
+        try {
+            ensureLocaleCacheLoaded(normalized);
+        } catch (Throwable ignore) {
+        }
+
+        // 关键：将“对外暴露的 holder”（如插件持有的 LangKeys 实例）切换到该 locale
+        try {
+            switchActiveHoldersToLocale(normalized);
+        } catch (Throwable ignore) {
+        }
+
+        LinLog.debug(LinMsg.k("linCommand.commandLanguageSwitched"), "locale", normalized);
+    }
+    /**
+     * 将当前对外暴露的 holder（activeHolders）切换到指定 locale。
+     * <p>
+     * 目的：插件通常会长期持有 bind(...) 返回的 keys 实例（如 LangKeys lang）。
+     * 如果仅切换 current/cache，而不更新该实例字段，则插件直接读 lang.xxx 时仍是旧语言。
+     * </p>
+     * <p>
+     * 此方法会：为每个 keysClass 加载/生成该 locale 的 doc，并 populate 到 active holder；
+     * 同时维护 bound 映射，确保后续 reloadOne 不会因旧 locale 重复覆盖同一个 holder。
+     * </p>
+     */
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    private void switchActiveHoldersToLocale(String locale) {
+        if (locale == null || locale.isBlank()) return;
+        if (activeHolders.isEmpty()) return;
+
+        for (var en : new ArrayList<>(activeHolders.entrySet())) {
+            Class<?> keysClass = en.getKey();
+            Object holder = en.getValue();
+            if (keysClass == null || holder == null) continue;
+
+            // 选择与 locale 匹配的 provider（如果 bind 时传入过 providers）
+            LocaleProvider<?> prov = null;
+            List<LocaleProvider<?>> provList = (List) providersByKeys.getOrDefault(keysClass, List.of());
+            if (provList != null && !provList.isEmpty()) {
+                for (LocaleProvider<?> p : provList) {
+                    if (p != null && p.locale() != null && p.locale().equalsIgnoreCase(locale)) {
+                        prov = p;
+                        break;
+                    }
+                }
+            }
+
+            // 推导 pack 路径：优先 provider 上的 @LangPack，否则 keysClass 上的 @LangPack
+            PackPath pp = (prov != null)
+                    ? resolvePackPathFromProvider(prov.getClass(), locale)
+                    : resolvePackPath(keysClass, locale);
+            Path f = file(pp.path(), pp.name(), pp.fmt());
+            boolean exists = IOs.exists(f);
+
+            // emit 策略：@NoEmit 直接禁用；否则尽量沿用该 keysClass 已 bind 的 emit 偏好
+            boolean annotatedNoEmit = keysClass.isAnnotationPresent(NoEmit.class)
+                    || (prov != null && prov.getClass().isAnnotationPresent(NoEmit.class));
+            boolean emit = !annotatedNoEmit;
+            if (emit) {
+                for (var be : bound.entrySet()) {
+                    BoundKey bk = be.getKey();
+                    BoundMeta bm = be.getValue();
+                    if (bk != null && bm != null && bk.type() == keysClass) {
+                        emit = bm.emit;
+                        break;
+                    }
+                }
+            }
+
+            // 读/生成/合并 defaults
+            Map<String, Object> doc;
+            try {
+                Object defaults = newInstance((Class) keysClass);
+                if (prov != null) {
+                    try { ((LocaleProvider) prov).define(defaults); } catch (Throwable ignore) {}
+                }
+                Map<String, Object> defDoc = new LinkedHashMap<>();
+                TreeMapper.export(defaults, defDoc);
+
+                if (exists) {
+                    doc = (pp.fmt() == FileType.YAML)
+                            ? YamlCodec.load(IOs.readString(f))
+                            : JsonCodec.load(IOs.readString(f));
+                    if (doc == null) doc = new LinkedHashMap<>();
+                } else {
+                    doc = new LinkedHashMap<>();
+                }
+
+                Set<String> missing = new LinkedHashSet<>();
+                mergeDefaultsCollect(defDoc, doc, "", missing);
+
+                Map<String, List<String>> comments =
+                        (pp.fmt() == FileType.YAML) ? extractCommentsByLocale(keysClass, locale) : Collections.emptyMap();
+
+                if (emit) {
+                    ensureCommentAnchors(doc, comments);
+                    if (exists && !missing.isEmpty()) {
+                        writeDiff(f, pp.fmt(), (Map<String, Object>) doc, missing);
+                    }
+                    persist(f, pp.fmt(), (Map<String, Object>) doc, comments);
+                }
+            } catch (Exception ex) {
+                // 单个 keysClass 失败不影响其他
+                continue;
+            }
+
+            // populate 到 active holder（不更换引用）
+            TreeMapper.populate(holder, (Map<String, Object>) doc);
+
+            // 同步 bound：移除该 holder 旧的 boundKey（避免 reload() 多次覆盖同一 holder），并放入新的 (type, locale)
+            BoundMeta existingMeta = null;
+            for (var it = bound.entrySet().iterator(); it.hasNext(); ) {
+                var be = it.next();
+                BoundKey bk = be.getKey();
+                BoundMeta bm = be.getValue();
+                if (bk == null || bm == null) continue;
+                if (bk.type() == keysClass && bm.holder == holder) {
+                    existingMeta = bm;
+                    it.remove();
+                }
+            }
+            if (existingMeta == null) {
+                existingMeta = new BoundMeta(holder, f, pp.fmt(), emit, prov);
+            } else {
+                existingMeta.file = f;
+                existingMeta.fmt = pp.fmt();
+                existingMeta.emit = emit;
+                existingMeta.provider = prov;
+            }
+            bound.put(new BoundKey(keysClass, locale), existingMeta);
+
+            // 更新该 locale 的 cache bucket（若 cache 已存在则 merge）
+            Map<String, String> flat = flatten((Map<String, Object>) doc);
+            cache.computeIfAbsent(locale, k -> new LinkedHashMap<>()).putAll(flat);
+        }
     }
 
     @Override
@@ -805,6 +968,121 @@ public final class LangServiceImpl implements LangService {
             }
         }
         return base;
+    }
+
+    /**
+     * 确保指定 locale 的扁平化缓存已加载。
+     *
+     * 说明：tr(...) 依赖 cache。但 reload() 默认只重建“已 bind 的 locale”。
+     * 如果外部 setLocale(...) 切换到一个未 bind 的语言，则 cache 可能缺失该 locale，
+     * 导致看起来语言没有切换（或 reload 后失效）。
+     *
+     * 该方法会基于已绑定的 keysClass（任意 locale）推导该 locale 的文件路径，
+     * 并从磁盘加载内容填充到 cache。不会创建新的 holder，也不会影响 bound；
+     * 仅用于 tr(...) 的即时生效。
+     */
+    private void ensureLocaleCacheLoaded(String locale) {
+        if (locale == null || locale.isBlank()) return;
+        if (cache.containsKey(locale)) return;
+
+        // 每个 keysClass 都尝试加载该 locale 的语言文件；必要时（emit 开启）会自动生成
+        Map<String, String> bucket = new LinkedHashMap<>();
+
+        // 以 bound 中出现过的 keysClass 为基准（意味着系统确实使用过这些 keys）
+        Set<Class<?>> keysClasses = new LinkedHashSet<>();
+        for (var en : bound.entrySet()) {
+            BoundKey k = en.getKey();
+            if (k != null && k.type() != null) keysClasses.add(k.type());
+        }
+
+        for (Class<?> keysClass : keysClasses) {
+            if (keysClass == null) continue;
+
+            // 选择与 locale 匹配的 provider（如果当初 bind 时传入过 providers）
+            LocaleProvider<?> prov = null;
+            List<LocaleProvider<?>> provList = (List) providersByKeys.getOrDefault(keysClass, List.of());
+            if (provList != null && !provList.isEmpty()) {
+                for (LocaleProvider<?> p : provList) {
+                    if (p != null && p.locale() != null && p.locale().equalsIgnoreCase(locale)) {
+                        prov = p;
+                        break;
+                    }
+                }
+            }
+
+            // 推导 pack 路径：优先 provider 上的 @LangPack，否则 keysClass 上的 @LangPack
+            PackPath pp = (prov != null)
+                    ? resolvePackPathFromProvider(prov.getClass(), locale)
+                    : resolvePackPath(keysClass, locale);
+
+            Path f = file(pp.path(), pp.name(), pp.fmt());
+            boolean exists = IOs.exists(f);
+
+            // emit 策略：若 keysClass 或 provider 标了 @NoEmit 则不生成/写回；否则尽量沿用已 bind 的 emit 偏好
+            boolean annotatedNoEmit = keysClass.isAnnotationPresent(NoEmit.class)
+                    || (prov != null && prov.getClass().isAnnotationPresent(NoEmit.class));
+            boolean emit = !annotatedNoEmit;
+            if (emit) {
+                // 若该 keysClass 之前绑定过某个 locale，则沿用其 emit 偏好（取第一个即可）
+                for (var en : bound.entrySet()) {
+                    BoundKey bk = en.getKey();
+                    BoundMeta bm = en.getValue();
+                    if (bk != null && bm != null && bk.type() == keysClass) {
+                        emit = bm.emit;
+                        break;
+                    }
+                }
+            }
+
+            try {
+                // 构建默认值：类字段默认 + provider 默认
+                Object defaults = newInstance((Class) keysClass);
+                if (prov != null) {
+                    try {
+                        ((LocaleProvider) prov).define(defaults);
+                    } catch (Throwable ignore) {
+                    }
+                }
+                Map<String, Object> defDoc = new LinkedHashMap<>();
+                TreeMapper.export(defaults, defDoc);
+
+                Map<String, Object> doc;
+                if (exists) {
+                    doc = (pp.fmt() == FileType.YAML)
+                            ? YamlCodec.load(IOs.readString(f))
+                            : JsonCodec.load(IOs.readString(f));
+                    if (doc == null) doc = new LinkedHashMap<>();
+                } else {
+                    doc = new LinkedHashMap<>();
+                }
+
+                // 合并默认值并收集缺失键（让删除字段/缺失字段能回到默认值）
+                Set<String> missing = new LinkedHashSet<>();
+                mergeDefaultsCollect(defDoc, doc, "", missing);
+
+                Map<String, List<String>> comments =
+                        (pp.fmt() == FileType.YAML) ? extractCommentsByLocale(keysClass, locale) : Collections.emptyMap();
+
+                if (emit) {
+                    ensureCommentAnchors(doc, comments);
+                    if (exists && !missing.isEmpty()) {
+                        writeDiff(f, pp.fmt(), (Map<String, Object>) doc, missing);
+                    }
+                    // 不存在时生成文件；存在时也写回一次，保证注释/格式一致
+                    persist(f, pp.fmt(), (Map<String, Object>) doc, comments);
+                }
+
+                // 加入扁平化缓存
+                bucket.putAll(flatten((Map<String, Object>) doc));
+
+            } catch (Exception ignore) {
+                // 单个文件失败不影响其他 pack
+            }
+        }
+
+        if (!bucket.isEmpty()) {
+            cache.put(locale, bucket);
+        }
     }
 
     private static String ensureLocale(String locale, LocaleTag current) {
