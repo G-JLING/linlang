@@ -159,21 +159,71 @@ public final class ConfigServiceImpl implements ConfigService {
         }
         for (var e : snapshot) {
             Class<?> type = e.getKey();
-            Object config = e.getValue();
+            Object target = e.getValue();
+            if (type == null || target == null) continue;
             try {
-                Binder.BoundConfig meta = Binder.configOf(type)
-                        .orElseThrow(() -> new IllegalArgumentException("[linlang] missing @ConfigFile on " + type));
-                Path file = toFile(meta.path(), meta.name(), meta.fmt());
-                if (!IOs.exists(file)) continue;
-                String raw = IOs.readString(file);
-                Map<String, Object> doc = meta.fmt() == FileType.YAML ? YamlCodec.load(raw) : JsonCodec.load(raw);
-                applyMigrations(type, doc);
-                populate(config, meta.keyMap(), doc);
+                reloadIntoExisting(type, target);
             } catch (Exception ex) {
                 LinLog.warn(LinMsg.k("linFile.file.fileReloadFailed"), "file", type, "reason", ex.getMessage());
             }
         }
         LinLog.info(LinMsg.k("linFile.file.fileReloaded"));
+    }
+
+    /**
+     * 将磁盘中的配置重新载入并“就地”填充到已 bind 的对象实例中（不更换引用）。
+     * <p>
+     * 该流程尽量复用 bind(...) 的逻辑：包含默认值合并、缺失键 diff 生成、迁移、以及按既有 emit 偏好写回文件。
+     * </p>
+     */
+    private void reloadIntoExisting(Class<?> type, Object target) {
+        Binder.BoundConfig meta = Binder.configOf(type)
+                .orElseThrow(() -> new IllegalArgumentException("[linlang] missing @ConfigFile on " + type));
+        Path file = toFile(meta.path(), meta.name(), meta.fmt());
+
+        // 读取或初始化文件（若不存在则按默认值生成）
+        boolean exists = IOs.exists(file);
+        Map<String, Object> doc = loadOrInit(file, type, meta);
+
+        // 迁移
+        applyMigrations(type, doc);
+
+        // 合并默认值并收集缺失键，保证“删除字段/缺失字段”在 reload 后能回到默认值
+        Map<String, Object> defaults = new LinkedHashMap<>();
+        try {
+            Object defInst = type.getDeclaredConstructor().newInstance();
+            export(defInst, meta.keyMap(), defaults);
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+
+        java.util.Set<String> missing = new java.util.LinkedHashSet<>();
+        if (exists) mergeDefaultsCollect(defaults, doc, "", missing);
+
+        // 缺失键 diff（缺失键旁插入注释+默认值）
+        if (!missing.isEmpty()) {
+            writeDiff(file, meta.fmt(), doc, missing);
+        }
+
+        // 按既有 emit 偏好写回（受 @NoEmit 控制）
+        Map<String, List<String>> comments = TreeMapper.extractComments(type);
+        boolean annotatedNoEmit = type.isAnnotationPresent(NoEmit.class);
+        boolean shouldEmit;
+        synchronized (emitFlags) {
+            Boolean flag = emitFlags.get(type);
+            shouldEmit = (flag != null ? flag : true) && !annotatedNoEmit;
+        }
+        if (shouldEmit) {
+            persist(file, meta.fmt(), doc, comments);
+        }
+
+        // 就地填充到已绑定实例（不替换引用）
+        populate(target, meta.keyMap(), doc);
+
+        // 维持 liveConfigs 引用不变，仅确保该 type 的 emit 偏好存在
+        synchronized (emitFlags) {
+            emitFlags.putIfAbsent(type, shouldEmit);
+        }
     }
 
 

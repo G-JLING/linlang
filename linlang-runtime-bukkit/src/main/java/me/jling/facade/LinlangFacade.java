@@ -11,6 +11,7 @@ import api.linlang.messenger.LinMessenger;
 import core.linlang.file.impl.ConfigServiceImpl;
 import core.linlang.file.impl.LangServiceImpl;
 import lombok.Getter;
+import api.linlang.audit.LinLog;
 
 import java.util.Objects;
 import java.util.function.Function;
@@ -59,13 +60,19 @@ public final class LinlangFacade implements Linlang, Linlang.Configurable, Linla
         this.runtime = runtime;
         this.owner = owner;
 
-        this.prefixFn = p -> "§f[§d" + p.getDescription().getName() + "§f]";
-        this.preferredLocale = "zh_CN";
+        this.prefixFn = p -> "§f[§d" + p.getDescription().getName() + "§f] ";
 
         this.language = runtime.createLangService(owner);
         this.config = runtime.createConfigService(owner);
 
-        this.command = runtime.createCommands(owner, this.preferredLocale, this.prefixFn);
+        String locale = effectiveLocale();
+        this.preferredLocale = locale;
+        try {
+            this.language.setLocale(locale);
+        } catch (Throwable ignore) {
+        }
+
+        this.command = runtime.createCommands(owner, locale, this.prefixFn);
         this.messenger = runtime.createMessenger(this.language);
 
         this.linFileView = new LinFile() {
@@ -209,19 +216,22 @@ public final class LinlangFacade implements Linlang, Linlang.Configurable, Linla
         synchronized (lifecycleLock) {
             if (closed) return;
             try {
+//                try {
+//                    this.config.reload();
+//                } catch (Throwable ignore) {
+//                }
+//                try {
+//                    this.language.reload();
+//                } catch (Throwable ignore) {
+//                }
+
+                String locale = effectiveLocale();
                 try {
-                    this.config.reload();
+                    this.language.setLocale(locale);
                 } catch (Throwable ignore) {
                 }
-                try {
-                    this.language.reload();
-                } catch (Throwable ignore) {
-                }
-                try {
-                    this.language.setLocale(this.preferredLocale);
-                } catch (Throwable ignore) {
-                }
-                bindCommandMessages(this.preferredLocale);
+
+                bindCommandMessages(locale);
                 rebuildCommands();
             } catch (Throwable t) {
             }
@@ -240,15 +250,26 @@ public final class LinlangFacade implements Linlang, Linlang.Configurable, Linla
                 ConfigServiceImpl oldCfg = this.config;
 
                 try {
-                    this.language = runtime.createLangService(owner);
-                    this.config = runtime.createConfigService(owner);
+                    // 重建配置与语言服务
+//                    this.config = runtime.createConfigService(owner);
+//                    try {
+//                        this.config.reload();
+//                    } catch (Throwable ignore) {
+//                    }
+//
+//                    this.language = runtime.createLangService(owner);
+//                    try {
+//                        this.language.reload();
+//                    } catch (Throwable ignore) {
+//                    }
 
+                    String locale = effectiveLocale();
                     try {
-                        this.language.setLocale(this.preferredLocale);
+                        this.language.setLocale(locale);
                     } catch (Throwable ignore) {
                     }
 
-                    bindCommandMessages(this.preferredLocale);
+                    bindCommandMessages(locale);
                     rebuildCommands();
 
                 } catch (Throwable t) {
@@ -289,5 +310,21 @@ public final class LinlangFacade implements Linlang, Linlang.Configurable, Linla
             } catch (Throwable t) {
             }
         }
+    }
+
+    /**
+     * 基于当前 preferredLocale 计算生效语言：
+     * <ul>
+     *     <li>若 preferredLocale 已由插件通过 parameters/withInitialLanguage 设置，则使用该值；</li>
+     *     <li>否则回退到默认语言 "zh_CN"。</li>
+     * </ul>
+     * Facade 不再从 Bukkit config 试图推断语言，避免与插件自身配置来源冲突。
+     */
+    private String effectiveLocale() {
+        String v = this.preferredLocale;
+        if (v != null && !v.isBlank()) {
+            return v.trim();
+        }
+        return "zh_CN";
     }
 }
