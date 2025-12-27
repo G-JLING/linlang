@@ -17,11 +17,15 @@ import core.linlang.command.message.CommandMessageRouter;
 import core.linlang.command.message.i18n.EnGB;
 import core.linlang.command.message.i18n.ZhCN;
 import core.linlang.database.impl.DataServiceImpl;
+import core.linlang.event.impl.DefaultEventBus;
 import core.linlang.file.impl.ConfigServiceImpl;
 import core.linlang.file.impl.LangServiceImpl;
+import core.linlang.event.dispatcher.EventDispatcher;
+import core.linlang.event.api.LinEventBus;
 import lombok.Getter;
 import me.jling.bukkit.LinlangBukkitBootstrap;
 import me.jling.facade.LinlangFacade;
+import org.bukkit.Bukkit;
 import org.bukkit.plugin.java.JavaPlugin;
 
 import java.util.List;
@@ -33,6 +37,14 @@ import java.util.LinkedHashSet;
 public final class LinlangRuntime implements AutoCloseable {
 
     private final JavaPlugin runtimePlugin;
+
+    /** 平台事件调度器：MAIN=主线程，ASYNC=异步线程 */
+    @Getter
+    private final EventDispatcher dispatcher;
+
+    /** 运行时级事件总线（全局共享，可用于运行时管理/统计/诊断） */
+    @Getter
+    private final LinEventBus runtimeBus;
 
     private AbstractAuditProvider globalAudit;
 
@@ -46,6 +58,16 @@ public final class LinlangRuntime implements AutoCloseable {
     public LinlangRuntime(JavaPlugin plugin, LinlangBukkitBootstrap bootstrap) {
         this.runtimePlugin = plugin;
         this.bootstrap = bootstrap;
+        this.dispatcher = new BukkitDispatcher(plugin);
+        this.runtimeBus = new DefaultEventBus(this.dispatcher);
+    }
+
+    /**
+     * 为每个 facade 创建独立事件总线（不跨插件共享）。
+     * facade 关闭时应调用 bus.shutdown()。
+     */
+    public LinEventBus newFacadeBus() {
+        return new DefaultEventBus(this.dispatcher);
     }
 
     // 安装全局 LinMsg 消息键并绑定到运行时插件的语言服务
@@ -54,7 +76,6 @@ public final class LinlangRuntime implements AutoCloseable {
             LangServiceImpl lang = bootstrap.getLanguage();
             var keys = lang.bind(
                     LinlangInternalMessageKeys.class,
-                    lang.currentLocale(),
                     List.of(new core.linlang.audit.internal.i18n.ZhCN(), new core.linlang.audit.internal.i18n.EnGB())
             );
 
@@ -115,7 +136,7 @@ public final class LinlangRuntime implements AutoCloseable {
     // 为指定插件创建独立的语言服务实例
     public LangServiceImpl createLangService(JavaPlugin owner) {
         var resolver = new adapter.linlang.bukkit.file.common.file.BukkitPathResolver(owner);
-        return new LangServiceImpl(resolver, "zh_CN");
+        return new LangServiceImpl(resolver);
     }
 
     // 为指定插件创建独立的数据服务实例
@@ -128,7 +149,7 @@ public final class LinlangRuntime implements AutoCloseable {
     public CommandMessages createCommandMessages(LangServiceImpl lang, String locale) {
         try {
             CommandMessageKeys keys = lang.bind(
-                    CommandMessageKeys.class, locale,
+                    CommandMessageKeys.class,
                     List.of(new ZhCN(), new EnGB())
             );
             return new CommandMessageRouter(keys);
@@ -250,5 +271,40 @@ public final class LinlangRuntime implements AutoCloseable {
         }
 
         LinLog.info("[linlang] Runtime closed.");
+    }
+
+    /** Bukkit 平台事件调度器实现：确保 MAIN 在主线程执行。 */
+    private static final class BukkitDispatcher implements EventDispatcher {
+        private final JavaPlugin plugin;
+
+        private BukkitDispatcher(JavaPlugin plugin) {
+            this.plugin = plugin;
+        }
+
+        @Override
+        public void executeMain(Runnable task) {
+            if (task == null) return;
+            try {
+                if (Bukkit.isPrimaryThread()) {
+                    task.run();
+                } else {
+                    Bukkit.getScheduler().runTask(plugin, task);
+                }
+            } catch (Throwable t) {
+                // 最差回退：直接执行
+                try { task.run(); } catch (Throwable ignore) {}
+            }
+        }
+
+        @Override
+        public void executeAsync(Runnable task) {
+            if (task == null) return;
+            try {
+                Bukkit.getScheduler().runTaskAsynchronously(plugin, task);
+            } catch (Throwable t) {
+                // 最差回退：直接执行
+                try { task.run(); } catch (Throwable ignore) {}
+            }
+        }
     }
 }

@@ -1,5 +1,9 @@
 package me.jling.facade;
 
+import core.linlang.event.api.LinEventBus;
+import core.linlang.event.api.ThreadMode;
+import core.linlang.i18n.event.LocaleChanged;
+import core.linlang.i18n.LocaleController;
 import me.jling.runtime.LinlangRuntime;
 import org.bukkit.plugin.java.JavaPlugin;
 import api.linlang.runtime.Linlang;
@@ -11,7 +15,6 @@ import api.linlang.messenger.LinMessenger;
 import core.linlang.file.impl.ConfigServiceImpl;
 import core.linlang.file.impl.LangServiceImpl;
 import lombok.Getter;
-import api.linlang.audit.LinLog;
 
 import java.util.Objects;
 import java.util.function.Function;
@@ -25,6 +28,12 @@ public final class LinlangFacade implements Linlang, Linlang.Configurable, Linla
     private final JavaPlugin owner;
 
     private final LinlangRuntime runtime;
+
+    // Facade 级事件总线：用于该插件门面内部模块通信（不跨插件共享）
+    private final LinEventBus events;
+
+    // Facade 级语言控制器：语言代码的唯一真相源（发布 LocaleChanged）
+    private final LocaleController localeController;
 
     @Getter
     private volatile ConfigServiceImpl config;
@@ -62,17 +71,42 @@ public final class LinlangFacade implements Linlang, Linlang.Configurable, Linla
 
         this.prefixFn = p -> "§f[§d" + p.getDescription().getName() + "§f] ";
 
+        // --- Facade 级事件系统与语言控制器 ---
+        this.events = runtime.newFacadeBus();
+        this.localeController = new LocaleController(this.events);
+
+        // 监听语言变更：让文件语言服务与命令服务跟随 facade 的语言代码
+        this.events.on(this, LocaleChanged.class, ThreadMode.CURRENT, 0, e -> {
+            try {
+                // 语言文件服务：切换 locale（LangServiceImpl 内部会更新 active holders + cache）
+                try {
+                    if (this.language != null) this.language.setLocale(e.newLocale());
+                } catch (Throwable ignore) {
+                }
+
+                // 命令内建 i18n：绑定消息并重建命令（当前实现仍需重建；未来可改为渲染时按 locale 选择）
+                try {
+                    bindCommandMessages(e.newLocale());
+                } catch (Throwable ignore) {
+                }
+                try {
+                    rebuildCommands(e.newLocale());
+                } catch (Throwable ignore) {
+                }
+            } catch (Throwable ignore) {
+            }
+        });
+
         this.language = runtime.createLangService(owner);
         this.config = runtime.createConfigService(owner);
 
+        // 计算初始语言并写入语言控制器，然后发布一次 bootstrap 事件
         String locale = effectiveLocale();
         this.preferredLocale = locale;
-        try {
-            this.language.setLocale(locale);
-        } catch (Throwable ignore) {
-        }
+        this.localeController.setLocale(locale, "boot");
 
-        this.command = runtime.createCommands(owner, locale, this.prefixFn);
+        // 首次创建命令/消息服务（LocaleChanged 监听器也会重建一次，这里直接用当前 locale）
+        this.command = runtime.createCommands(owner, this.localeController.locale(), this.prefixFn);
         this.messenger = runtime.createMessenger(this.language);
 
         this.linFileView = new LinFile() {
@@ -133,6 +167,16 @@ public final class LinlangFacade implements Linlang, Linlang.Configurable, Linla
         return messenger;
     }
 
+    /** 获取 facade 级语言控制器（语言代码唯一真相源） */
+    public LocaleController locale() {
+        return localeController;
+    }
+
+    /** 获取 facade 级事件总线 */
+    public LinEventBus events() {
+        return events;
+    }
+
     /**
      * 关闭门面实例并释放资源
      */
@@ -152,6 +196,13 @@ public final class LinlangFacade implements Linlang, Linlang.Configurable, Linla
             }
             try {
                 if (messenger instanceof AutoCloseable) ((AutoCloseable) messenger).close();
+            } catch (Throwable ignore) {
+            }
+
+            try {
+                // 清理该 facade 注册的全部监听器，避免插件卸载后泄漏
+                this.events.unregisterAll(this);
+                this.events.shutdown();
             } catch (Throwable ignore) {
             }
         }
@@ -216,23 +267,9 @@ public final class LinlangFacade implements Linlang, Linlang.Configurable, Linla
         synchronized (lifecycleLock) {
             if (closed) return;
             try {
-//                try {
-//                    this.config.reload();
-//                } catch (Throwable ignore) {
-//                }
-//                try {
-//                    this.language.reload();
-//                } catch (Throwable ignore) {
-//                }
-
                 String locale = effectiveLocale();
-                try {
-                    this.language.setLocale(locale);
-                } catch (Throwable ignore) {
-                }
-
-                bindCommandMessages(locale);
-                rebuildCommands();
+                // 通过 LocaleController 发布变更事件，驱动语言/命令服务同步更新
+                this.localeController.setLocale(locale, "facade.reload");
             } catch (Throwable t) {
             }
         }
@@ -264,13 +301,7 @@ public final class LinlangFacade implements Linlang, Linlang.Configurable, Linla
 //                    }
 
                     String locale = effectiveLocale();
-                    try {
-                        this.language.setLocale(locale);
-                    } catch (Throwable ignore) {
-                    }
-
-                    bindCommandMessages(locale);
-                    rebuildCommands();
+                    this.localeController.setLocale(locale, "facade.restart");
 
                 } catch (Throwable t) {
                     this.language = (oldLang != null) ? oldLang : this.language;
@@ -296,7 +327,7 @@ public final class LinlangFacade implements Linlang, Linlang.Configurable, Linla
     /**
      * 重建命令和消息服务
      */
-    private void rebuildCommands() {
+    private void rebuildCommands(String locale) {
         synchronized (lifecycleLock) {
             if (closed) return;
             try {
@@ -305,7 +336,8 @@ public final class LinlangFacade implements Linlang, Linlang.Configurable, Linla
                 } catch (Throwable ignore) {
                 }
 
-                this.command = runtime.createCommands(owner, this.preferredLocale, this.prefixFn);
+                String use = (locale != null && !locale.isBlank()) ? locale.trim() : effectiveLocale();
+                this.command = runtime.createCommands(owner, use, this.prefixFn);
                 this.messenger = runtime.createMessenger(this.language);
             } catch (Throwable t) {
             }

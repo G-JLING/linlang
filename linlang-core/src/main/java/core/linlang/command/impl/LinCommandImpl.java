@@ -17,8 +17,9 @@ import core.linlang.command.parser.SpecParser;
 import core.linlang.command.signal.Interact;
 
 import java.util.*;
+import core.linlang.i18n.LocaleAware;
 
-public final class LinCommandImpl implements LinCommand {
+public final class LinCommandImpl implements LinCommand, LocaleAware {
     // 用于控制 /root help 单页打印的条目刷数量
     private int help_page_size = 8;
     // 命令
@@ -35,8 +36,8 @@ public final class LinCommandImpl implements LinCommand {
     // 命令消息
     private CommandMessages messages = CommandMessages.defaults();
 
-    // 首选语言：用于 usage/描述 的渲染（外部可在读取 cfg.language 后设置）
-    private LocaleTag locale = LocaleTag.parse("zh_CN");
+    // 默认语言：用于 usage/描述/labels 的 i18n 选择与命令框架内建提示的默认回退
+    private volatile LocaleTag locale = LocaleTag.parse("zh_CN");
 
     public LinCommand install(String pluginPrefix, Object platform, CommandMessages msgs) {
         this.prefix = pluginPrefix;
@@ -51,7 +52,7 @@ public final class LinCommandImpl implements LinCommand {
     }
 
     public LinCommandImpl withPreferredLocaleTag(String tag) {
-        this.locale = LocaleTag.parse(tag);
+        setLocale(tag);
         return this;
     }
 
@@ -61,7 +62,7 @@ public final class LinCommandImpl implements LinCommand {
     }
 
     public LinCommandImpl withPreferredLocale(LocaleTag loc) {
-        this.locale = (loc == null ? LocaleTag.parse("zh_CN") : loc);
+        setLocale(loc == null ? null : loc.tag());
         return this;
     }
 
@@ -72,6 +73,46 @@ public final class LinCommandImpl implements LinCommand {
         }
         n.usage = buildUsage(n);
         return this;
+    }
+
+    // --- LocaleAware ---
+
+    @Override
+    public String locale() {
+        LocaleTag l = this.locale;
+        return (l == null ? "zh_CN" : l.tag());
+    }
+
+    @Override
+    public void setLocale(String locale) {
+        LocaleTag next = LocaleTag.parse(locale == null ? "zh_CN" : locale);
+        LocaleTag cur = this.locale;
+        // LocaleTag.parse 已做规范化，这里用 tag 字符串比较即可
+        if (cur != null && cur.tag().equalsIgnoreCase(next.tag())) {
+            return;
+        }
+        this.locale = next;
+
+        // 立即刷新已注册节点缓存的 usage（避免外部直接读取 n.usage 时看到旧语言）
+        try {
+            for (var n : nodes) {
+                if (n == null) continue;
+                n.usage = buildUsage(n);
+            }
+        } catch (Throwable ignore) {
+        }
+    }
+
+    /** @deprecated 内部兼容别名：请改用 {@link #locale()} */
+    @Deprecated
+    public String defaultLocale() {
+        return locale();
+    }
+
+    /** @deprecated 内部兼容别名：请改用 {@link #setLocale(String)} */
+    @Deprecated
+    public void setDefaultLocale(String locale) {
+        setLocale(locale);
     }
 
 

@@ -16,19 +16,16 @@ import core.linlang.file.runtime.LocaleTag;
 import core.linlang.file.util.IOs;
 import core.linlang.yaml.YamlCodec;
 import core.linlang.json.JsonCodec;
-import lombok.Getter;
-import lombok.Setter;
 
 import java.nio.file.Path;
 import java.text.MessageFormat;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
+import core.linlang.i18n.LocaleAware;
 
-public final class LangServiceImpl implements LangService {
+public final class LangServiceImpl implements LangService, LocaleAware {
     private final PathResolver paths;
-    @Getter
-    @Setter
-    private LocaleTag current;
+    private volatile LocaleTag applied = LocaleTag.parse("zh_CN");
 
     private final Map<String, Map<String, String>> cache = new java.util.concurrent.ConcurrentHashMap<>();
 
@@ -72,36 +69,38 @@ public final class LangServiceImpl implements LangService {
     // 记录每个 keysClass 在 bind 时传入的 providers，用于 setLocale/ensureLocaleCacheLoaded 生成该 locale 的默认值
     private final Map<Class<?>, List<LocaleProvider<?>>> providersByKeys = new ConcurrentHashMap<>();
 
-    public LangServiceImpl(PathResolver paths, String defaultLocale) {
+    public LangServiceImpl(PathResolver paths) {
         this.paths = paths;
-        this.current = LocaleTag.parse(defaultLocale);
     }
 
+    // --- LocaleAware ---
+
     @Override
-    public String currentLocale() {
-        return current == null ? null : current.tag();
+    public String locale() {
+        LocaleTag l = this.applied;
+        return (l == null ? "zh_CN" : l.tag());
     }
 
     // —— 对象模式：单一键结构类 + 多语言提供者 —— //
     @Override
-    public <T> T bind(Class<T> keysClass, String locale,
+    public <T> T bind(Class<T> keysClass,
                       List<? extends LocaleProvider<T>> providers,
                       boolean emit) {
         // existing bind logic moved here (see below)
-        return bindInternal(keysClass, locale, providers, emit);
+        return bindInternal(keysClass, providers, emit);
     }
 
     @Override
-    public <T> T bind(Class<T> keysClass, String locale,
+    public <T> T bind(Class<T> keysClass,
                       List<? extends LocaleProvider<T>> providers) {
-        return bindInternal(keysClass, locale, providers, true);
+        return bindInternal(keysClass, providers, true);
     }
 
-    private <T> T bindInternal(Class<T> keysClass, String locale,
+    private <T> T bindInternal(Class<T> keysClass,
                                List<? extends LocaleProvider<T>> providers,
                                boolean emitFlag) {
         // Normalize locale and debug entry
-        locale = ensureLocale(locale, this.current);
+        String locale = safeLocale(this.applied == null ? null : this.applied.tag());
         LinLog.debug("bindInternal.enter", "keys", keysClass.getName(), "locale", locale);
 
         // Defensive providers null check, use provList for further usage
@@ -116,7 +115,8 @@ public final class LangServiceImpl implements LangService {
         // 1) 选择 provider
         LocaleProvider<T> prov = null;
         for (LocaleProvider<T> p : provList) {
-            if (p != null && p.locale().equalsIgnoreCase(locale)) {
+            String pl = (p == null ? null : p.locale());
+            if (pl != null && pl.equalsIgnoreCase(locale)) {
                 prov = p;
                 break;
             }
@@ -272,7 +272,7 @@ public final class LangServiceImpl implements LangService {
         cache.putAll(newCache);
 
         // reload 会重建 cache（只包含已 bind 的 locale）；这里补齐当前语言，避免 setLocale 后再次 reload 失效
-        LocaleTag cur = this.current;
+        LocaleTag cur = this.applied;
         if (cur != null) {
             try {
                 ensureLocaleCacheLoaded(cur.tag());
@@ -356,22 +356,16 @@ public final class LangServiceImpl implements LangService {
 
     @Override
     public void setLocale(String locale) {
-        String normalized = ensureLocale(locale, this.current);
-        this.current = LocaleTag.parse(normalized);
+        String normalized = safeLocale(locale);
+        LocaleTag cur = this.applied;
+        if (cur != null && cur.tag().equalsIgnoreCase(normalized)) return;
 
-        // 保障当前语言在 cache 中可用：即使该 locale 未显式 bind，也尽量从磁盘载入/生成
-        try {
-            ensureLocaleCacheLoaded(normalized);
-        } catch (Throwable ignore) {
-        }
+        this.applied = LocaleTag.parse(normalized);
 
-        // 关键：将“对外暴露的 holder”（如插件持有的 LangKeys 实例）切换到该 locale
-        try {
-            switchActiveHoldersToLocale(normalized);
-        } catch (Throwable ignore) {
-        }
+        try { ensureLocaleCacheLoaded(normalized); } catch (Throwable ignore) {}
+        try { switchActiveHoldersToLocale(normalized); } catch (Throwable ignore) {}
 
-        LinLog.debug(LinMsg.k("linCommand.commandLanguageSwitched"), "locale", normalized);
+        LinLog.debug(LinMsg.k("linFile.lang.langChangeLocale"), "locale", normalized);
     }
     /**
      * 将当前对外暴露的 holder（activeHolders）切换到指定 locale。
@@ -498,7 +492,7 @@ public final class LangServiceImpl implements LangService {
 
     @Override
     public String tr(String key, Object... args) {
-        LocaleTag cur = this.current != null ? this.current : LocaleTag.parse("en_GB");
+        LocaleTag cur = this.applied != null ? this.applied : LocaleTag.parse("en_GB");
         String v = val(cur, key);
         if (v == null) v = val(LocaleTag.parse("en_GB"), key);
         if (v == null) v = key;
@@ -1085,10 +1079,8 @@ public final class LangServiceImpl implements LangService {
         }
     }
 
-    private static String ensureLocale(String locale, LocaleTag current) {
-        if (locale == null || locale.isBlank()) {
-            return current != null ? current.tag() : "zh_CN";
-        }
+    private static String safeLocale(String locale) {
+        if (locale == null || locale.isBlank()) return "zh_CN";
         return locale;
     }
 
