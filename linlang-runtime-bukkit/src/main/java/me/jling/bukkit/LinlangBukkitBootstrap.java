@@ -164,12 +164,12 @@ public final class LinlangBukkitBootstrap implements AutoCloseable, Linlang, Lin
     }
 
     @Override
-    public LinlangBukkitBootstrap withCommandPrefix(String prefix) {
-        return withCommandPrefixProvider(p -> prefix);
+    public LinlangBukkitBootstrap totalPrefix(String prefix) {
+        return totalPrefixProvider(p -> prefix);
     }
 
     @Override
-    public LinlangBukkitBootstrap withCommandPrefixProvider(Function<Object, String> provider) {
+    public LinlangBukkitBootstrap totalPrefixProvider(Function<Object, String> provider) {
         if (provider == null) throw new IllegalArgumentException("provider");
         this.prefixFn = p -> provider.apply(p);
         return this;
@@ -183,7 +183,7 @@ public final class LinlangBukkitBootstrap implements AutoCloseable, Linlang, Lin
     }
 
     @Override
-    public LinlangBukkitBootstrap withPluginLogger(boolean usePluginLogger) {
+    public LinlangBukkitBootstrap usingPluginLogger(boolean usePluginLogger) {
         runtime.installAuditFor(this.runtimePlugin, usePluginLogger);
         return this;
     }

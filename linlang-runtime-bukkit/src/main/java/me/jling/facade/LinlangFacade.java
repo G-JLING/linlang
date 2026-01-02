@@ -2,8 +2,11 @@ package me.jling.facade;
 
 import core.linlang.event.api.LinEventBus;
 import core.linlang.event.api.ThreadMode;
-import core.linlang.i18n.event.LocaleChanged;
-import core.linlang.i18n.LocaleController;
+import core.linlang.total.i18n.event.LocaleChanged;
+import core.linlang.total.i18n.LocaleController;
+import core.linlang.total.prefix.PrefixAware;
+import core.linlang.total.prefix.TotalPrefixController;
+import core.linlang.total.prefix.event.TotalPrefixChanged;
 import me.jling.runtime.LinlangRuntime;
 import org.bukkit.plugin.java.JavaPlugin;
 import api.linlang.runtime.Linlang;
@@ -46,6 +49,12 @@ public final class LinlangFacade implements Linlang, Linlang.Configurable, Linla
     private volatile Function<JavaPlugin, String> prefixFn;
     private volatile String preferredLocale;
 
+    /**
+     * facade 级全局前缀名控制器（唯一真相源）。
+     * <p>只允许通过 {@link #totalPrefix(String)} / {@link #totalPrefixProvider(Function)} 修改。</p>
+     */
+    private final TotalPrefixController prefixController;
+
     private final LinFile linFileView;
 
     private final Object lifecycleLock = new Object();
@@ -69,11 +78,15 @@ public final class LinlangFacade implements Linlang, Linlang.Configurable, Linla
         this.runtime = runtime;
         this.owner = owner;
 
-        this.prefixFn = p -> "§f[§d" + p.getDescription().getName() + "§f] ";
+        this.prefixFn = LinlangFacade::defaultPrefix;
 
         // --- Facade 级事件系统与语言控制器 ---
         this.events = runtime.newFacadeBus();
         this.localeController = new LocaleController(this.events);
+        this.prefixController = new TotalPrefixController(this.events);
+
+        this.prefixController.setPrefix(resolveTotalPrefix(), "boot");
+
 
         // 监听语言变更：让文件语言服务与命令服务跟随 facade 的语言代码
         this.events.on(this, LocaleChanged.class, ThreadMode.CURRENT, 0, e -> {
@@ -105,9 +118,12 @@ public final class LinlangFacade implements Linlang, Linlang.Configurable, Linla
         this.preferredLocale = locale;
         this.localeController.setLocale(locale, "boot");
 
-        // 首次创建命令/消息服务（LocaleChanged 监听器也会重建一次，这里直接用当前 locale）
-        this.command = runtime.createCommands(owner, this.localeController.locale(), this.prefixFn);
+        this.command = runtime.createCommands(owner, this.localeController.locale(), p -> this.prefixController.prefix());
         this.messenger = runtime.createMessenger(this.language);
+
+        // 将 facade 的全局前缀名
+        wirePrefix(this.command);
+        wirePrefix(this.messenger);
 
         this.linFileView = new LinFile() {
             @Override
@@ -224,19 +240,22 @@ public final class LinlangFacade implements Linlang, Linlang.Configurable, Linla
      * 设置命令前缀
      */
     @Override
-    public LinlangFacade withCommandPrefix(String prefix) {
+    public LinlangFacade totalPrefix(String prefix) {
         if (prefix == null) throw new IllegalArgumentException("prefix");
-        return withCommandPrefixProvider(obj -> prefix);
+        return totalPrefixProvider(obj -> prefix);
     }
 
     /**
      * 设置命令前缀提供函数
      */
     @Override
-    public LinlangFacade withCommandPrefixProvider(Function<Object, String> provider) {
+    public LinlangFacade totalPrefixProvider(Function<Object, String> provider) {
         if (provider == null) throw new IllegalArgumentException("provider");
         Function<JavaPlugin, String> adapted = p -> provider.apply(p);
         this.prefixFn = adapted;
+
+        // 解析新的全局前缀名，并通过事件发布（模块可订阅此事件自行更新）
+        this.prefixController.setPrefix(resolveTotalPrefix(), "api");
         return this;
     }
 
@@ -254,7 +273,7 @@ public final class LinlangFacade implements Linlang, Linlang.Configurable, Linla
      * 设置是否使用插件日志
      */
     @Override
-    public LinlangFacade withPluginLogger(boolean usePluginLogger) {
+    public LinlangFacade usingPluginLogger(boolean usePluginLogger) {
         runtime.installAuditFor(this.owner, usePluginLogger);
         return this;
     }
@@ -267,6 +286,12 @@ public final class LinlangFacade implements Linlang, Linlang.Configurable, Linla
         synchronized (lifecycleLock) {
             if (closed) return;
             try {
+                // 软重载也刷新一次全局前缀（适配 totalPrefixProvider 依赖外部状态的情况）
+                try {
+                    this.prefixController.setPrefix(resolveTotalPrefix(), "facade.reload");
+                } catch (Throwable ignore) {
+                }
+
                 String locale = effectiveLocale();
                 // 通过 LocaleController 发布变更事件，驱动语言/命令服务同步更新
                 this.localeController.setLocale(locale, "facade.reload");
@@ -337,10 +362,63 @@ public final class LinlangFacade implements Linlang, Linlang.Configurable, Linla
                 }
 
                 String use = (locale != null && !locale.isBlank()) ? locale.trim() : effectiveLocale();
-                this.command = runtime.createCommands(owner, use, this.prefixFn);
+                this.command = runtime.createCommands(owner, use, p -> this.prefixController.prefix());
                 this.messenger = runtime.createMessenger(this.language);
+
+                wirePrefix(this.command);
+                wirePrefix(this.messenger);
             } catch (Throwable t) {
             }
+        }
+    }
+
+    /**
+     * 将 facade 的全局前缀名变更事件接线到模块。
+     * <p>模块只需实现 {@link PrefixAware}，即可在收到 {@link TotalPrefixChanged} 后自行更新内部状态。</p>
+     */
+    private void wirePrefix(Object module) {
+        if (!(module instanceof PrefixAware pa)) return;
+
+        // 1) 先应用当前前缀
+        try {
+            pa.setTotalPrefix(this.prefixController.prefix());
+        } catch (Throwable ignore) {
+        }
+
+        // 2) 订阅后续变更（owner=module，方便模块 close 时自行管理；Facade close 时也会 unregisterAll(this)）
+        this.events.on(module, TotalPrefixChanged.class, ThreadMode.CURRENT, 0, e -> {
+            try {
+                pa.setTotalPrefix(e.newPrefix());
+            } catch (Throwable ignore) {
+            }
+        });
+    }
+
+    /**
+     * 解析当前 facade 的全局前缀名：来自 prefixFn，若为空则回退到默认前缀。
+     */
+    private String resolveTotalPrefix() {
+        String out = null;
+        try {
+            Function<JavaPlugin, String> fn = this.prefixFn;
+            if (fn != null) out = fn.apply(this.owner);
+        } catch (Throwable ignore) {
+        }
+        if (out != null) {
+            String v = out.trim();
+            if (!v.isEmpty()) return v;
+        }
+        return defaultPrefix(this.owner);
+    }
+
+    /**
+     * 默认前缀：未设置 totalPrefix 时使用。
+     */
+    private static String defaultPrefix(JavaPlugin p) {
+        try {
+            return "§f[§d" + p.getDescription().getName() + "§f] ";
+        } catch (Throwable ignore) {
+            return "[Linlang] ";
         }
     }
 

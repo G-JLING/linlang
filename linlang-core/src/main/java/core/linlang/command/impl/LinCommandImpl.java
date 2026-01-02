@@ -17,9 +17,10 @@ import core.linlang.command.parser.SpecParser;
 import core.linlang.command.signal.Interact;
 
 import java.util.*;
-import core.linlang.i18n.LocaleAware;
+import core.linlang.total.i18n.LocaleAware;
+import core.linlang.total.prefix.PrefixAware;
 
-public final class LinCommandImpl implements LinCommand, LocaleAware {
+public final class LinCommandImpl implements LinCommand, LocaleAware, PrefixAware {
     // 用于控制 /root help 单页打印的条目刷数量
     private int help_page_size = 8;
     // 命令
@@ -28,7 +29,7 @@ public final class LinCommandImpl implements LinCommand, LocaleAware {
     // 为每个已注册节点保存参数 i18n 标签映射：paramName -> ( "zh_CN" -> "行号", "en_GB" -> "line number" )
     public final Map<Model.Node, Map<String, Map<String, String>>> paramI18n = new IdentityHashMap<>();
     // 实例名字，或者叫命令前缀
-    private String prefix = "";
+    private volatile String prefix = "";
     // 实例根命令
     private String root = "";
     // 实例
@@ -113,6 +114,20 @@ public final class LinCommandImpl implements LinCommand, LocaleAware {
     @Deprecated
     public void setDefaultLocale(String locale) {
         setLocale(locale);
+    }
+
+
+    // --- PrefixAware ---
+
+    /**
+     * 设置 Linlang 全局前缀名（Total Prefix）。
+     * <p>该前缀用于命令框架内建输出（help/错误提示/info 等）的统一前缀。</p>
+     */
+    @Override
+    public void setTotalPrefix(String totalPrefix) {
+        String next = (totalPrefix == null ? "" : totalPrefix);
+        // 保持与外部一致：不强制 trim，避免颜色码/空格被误删
+        this.prefix = next;
     }
 
 

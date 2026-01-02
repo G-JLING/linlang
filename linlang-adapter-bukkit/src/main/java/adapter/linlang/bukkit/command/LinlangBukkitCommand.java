@@ -27,15 +27,13 @@ import net.md_5.bungee.api.chat.TextComponent;
 public final class LinlangBukkitCommand implements LinCommand, CommandExecutor, TabCompleter, AutoCloseable {
     private final LinCommandImpl core = new LinCommandImpl();
     private JavaPlugin plugin;
-    private String root = null; // 可用第一个 register 的首字面量作为根
+    private String root = null;
     private InteractionHub hub;
     private CommandMessages messages = CommandMessages.defaults();
-
-    // 缓存单行可点击输出（玩家与控制台分开），用于把多段点击文本拼成一行
     private final Map<UUID, java.util.List<BaseComponent>> pendingPlayerLine = new HashMap<>();
     private final Map<Object, StringBuilder> pendingConsoleLine = new IdentityHashMap<>();
 
-    // 新的 install 方法，支持传入消息提供器
+
     public LinlangBukkitCommand install(String pluginPrefix, Object platform, CommandMessages msgs) {
         this.plugin = (JavaPlugin) platform;
         this.hub = new InteractionHub(this.plugin);

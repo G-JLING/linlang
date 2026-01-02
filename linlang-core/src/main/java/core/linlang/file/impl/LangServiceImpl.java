@@ -21,7 +21,7 @@ import java.nio.file.Path;
 import java.text.MessageFormat;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
-import core.linlang.i18n.LocaleAware;
+import core.linlang.total.i18n.LocaleAware;
 
 public final class LangServiceImpl implements LangService, LocaleAware {
     private final PathResolver paths;

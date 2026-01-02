@@ -19,6 +19,7 @@ import org.bukkit.entity.Player;
 import java.util.Map;
 import java.util.function.Function;
 import java.util.function.Supplier;
+import core.linlang.total.prefix.PrefixAware;
 
 /**
  * 面向 Bukkit 的消息发送门面。
@@ -31,13 +32,22 @@ import java.util.function.Supplier;
  *   <li>提供 Chat、Title、ActionBar 三种输出通道。</li>
  * </ul>
  */
-public final class MessengerImpl implements LinMessenger {
+public final class MessengerImpl implements LinMessenger, PrefixAware {
 
     private final Function<String, String> translator; // key -> template
     private final boolean hexColor; // 1.16+ -> true
 
-    // Optional prefix (e.g., bukkit prefix). Defaults to empty.
-    private Supplier<String> prefixSupplier = () -> "";
+    /**
+     * Linlang 全局前缀（由 Facade 通过事件注入）。
+     * <p>不做 trim，以免破坏颜色码与尾随空格。</p>
+     */
+    private volatile String totalPrefix = "";
+
+    /**
+     * 插件/业务侧的额外前缀（可选）。
+     * <p>若不设置则为空串。</p>
+     */
+    private Supplier<String> localPrefixSupplier = () -> "";
 
     /* ─────────────────────────────── 构造 ─────────────────────────────── */
 
@@ -59,18 +69,16 @@ public final class MessengerImpl implements LinMessenger {
         this.hexColor = isAtLeast116();
     }
 
-    /* ─────────────────────────────── 配置 ─────────────────────────────── */
 
-    /** 设置固定前缀（仅聊天/控制台；Title/ActionBar 不附带前缀）。 */
-    public MessengerImpl withPrefix(String prefix) {
-        this.prefixSupplier = () -> (prefix == null ? "" : prefix);
-        return this;
-    }
+    // ─────────────────────────────── PrefixAware ───────────────────────────────
 
-    /** 设置动态前缀（运行时计算；仅聊天/控制台）。 */
-    public MessengerImpl withPrefixProvider(Supplier<String> supplier) {
-        this.prefixSupplier = (supplier == null ? () -> "" : supplier);
-        return this;
+    /**
+     * 设置 Linlang 全局前缀名。
+     * <p>该前缀会自动附加到聊天/控制台输出；Title/ActionBar 不附带前缀。</p>
+     */
+    @Override
+    public void setTotalPrefix(String prefix) {
+        this.totalPrefix = (prefix == null ? "" : prefix);
     }
 
     /* ─────────────────────────────── 文本：模板 ─────────────────────────────── */
@@ -299,7 +307,16 @@ public final class MessengerImpl implements LinMessenger {
     }
 
     private String prefix() {
-        try { return prefixSupplier.get(); } catch (Throwable ignored) { return ""; }
+        String tp = this.totalPrefix;
+        String lp;
+        try {
+            lp = localPrefixSupplier.get();
+        } catch (Throwable ignored) {
+            lp = "";
+        }
+        if (tp == null) tp = "";
+        if (lp == null) lp = "";
+        return tp + lp;
     }
 
     /** 将 {@code recipient} 解析为 {@link CommandSender}；若不是则返回 null。 */

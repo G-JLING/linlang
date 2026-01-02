@@ -1,4 +1,4 @@
-package core.linlang.i18n.event;
+package core.linlang.total.i18n.event;
 
 /**
  * 语言代码变更事件。

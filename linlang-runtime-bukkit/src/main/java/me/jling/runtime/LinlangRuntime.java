@@ -38,11 +38,11 @@ public final class LinlangRuntime implements AutoCloseable {
 
     private final JavaPlugin runtimePlugin;
 
-    /** 平台事件调度器：MAIN=主线程，ASYNC=异步线程 */
+    /** 平台事件调度器 */
     @Getter
     private final EventDispatcher dispatcher;
 
-    /** 运行时级事件总线（全局共享，可用于运行时管理/统计/诊断） */
+    /** 事件总线*/
     @Getter
     private final LinEventBus runtimeBus;
 
@@ -63,8 +63,8 @@ public final class LinlangRuntime implements AutoCloseable {
     }
 
     /**
-     * 为每个 facade 创建独立事件总线（不跨插件共享）。
-     * facade 关闭时应调用 bus.shutdown()。
+     * 为每个 facade 创建独立事件总线
+     * facade 关闭时应调用 bus.shutdown()
      */
     public LinEventBus newFacadeBus() {
         return new DefaultEventBus(this.dispatcher);

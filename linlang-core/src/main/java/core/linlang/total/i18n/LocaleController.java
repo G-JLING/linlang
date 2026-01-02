@@ -1,7 +1,7 @@
-package core.linlang.i18n;
+package core.linlang.total.i18n;
 
 import core.linlang.event.api.LinEventBus;
-import core.linlang.i18n.event.LocaleChanged;
+import core.linlang.total.i18n.event.LocaleChanged;
 
 import java.util.Locale;
 

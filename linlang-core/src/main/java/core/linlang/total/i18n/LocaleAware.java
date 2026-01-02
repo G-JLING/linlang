@@ -1,4 +1,4 @@
-package core.linlang.i18n;
+package core.linlang.total.i18n;
 
 
 /** 内部接口：可以跟随全局语言变更（仅供 runtime/facade 使用） */
