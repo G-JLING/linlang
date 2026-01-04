@@ -69,6 +69,19 @@ public final class MessengerImpl implements LinMessenger, PrefixAware {
         this.hexColor = isAtLeast116();
     }
 
+    /* ─────────────────────────────── 配置 ─────────────────────────────── */
+
+    /** 设置固定前缀（仅聊天/控制台；Title/ActionBar 不附带前缀）。 */
+    public MessengerImpl withPrefix(String prefix) {
+        this.localPrefixSupplier = () -> (prefix == null ? "" : prefix);
+        return this;
+    }
+
+    /** 设置动态前缀（运行时计算；仅聊天/控制台）。 */
+    public MessengerImpl withPrefixProvider(Supplier<String> supplier) {
+        this.localPrefixSupplier = (supplier == null ? () -> "" : supplier);
+        return this;
+    }
 
     // ─────────────────────────────── PrefixAware ───────────────────────────────
 

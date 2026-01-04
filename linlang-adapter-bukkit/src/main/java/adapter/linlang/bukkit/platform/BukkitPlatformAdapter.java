@@ -1,0 +1,147 @@
+// adapter/linlang/bukkit/platform/BukkitPlatformAdapter.java
+package adapter.linlang.bukkit.platform;
+
+import adapter.linlang.bukkit.audit.BukkitAuditProvider;
+import adapter.linlang.bukkit.command.LinlangBukkitCommand;
+import adapter.linlang.bukkit.messenger.MessengerImpl;
+import api.linlang.command.LinCommand;
+import api.linlang.command.message.CommandMessages;
+import api.linlang.file.file.path.PathResolver;
+import api.linlang.messenger.LinMessenger;
+import core.linlang.audit.AbstractAuditProvider;
+import core.linlang.audit.config.AuditConfig;
+import core.linlang.event.dispatcher.EventDispatcher;
+import core.linlang.platform.PlatformAdapter;
+import core.linlang.file.impl.LangServiceImpl;
+import org.bukkit.Bukkit;
+import org.bukkit.plugin.java.JavaPlugin;
+
+import java.lang.reflect.Method;
+import java.util.Locale;
+import java.util.function.Supplier;
+
+/**
+ * Bukkit 平台适配器：把“平台差异”集中在这里，
+ * core 的 RuntimeCore/FacadeCore 不再直接依赖 Bukkit API。
+ */
+public final class BukkitPlatformAdapter implements PlatformAdapter<JavaPlugin> {
+
+    @Override
+    public EventDispatcher dispatcher(JavaPlugin runtimeHost) {
+        return new BukkitDispatcher(runtimeHost);
+    }
+
+    @Override
+    public PathResolver pathResolver(JavaPlugin owner) {
+        // 你的 BukkitPathResolver 在 adapter 模块里
+        return new adapter.linlang.bukkit.file.common.file.BukkitPathResolver(owner);
+    }
+
+    @Override
+    public LinCommand createCommands(JavaPlugin owner, String locale, Supplier<String> totalPrefix, CommandMessages messages) {
+        String prefix = safe(totalPrefix);
+        String useLocale = (locale == null || locale.isBlank()) ? "zh_CN" : locale.trim();
+
+        return new LinlangBukkitCommand()
+                .install(prefix, owner, messages)
+                .withDefaultResolvers()
+                .withInteractiveResolvers()
+                .withPreferredLocaleTag(useLocale);
+    }
+
+    @Override
+    public LinMessenger createMessenger(LangServiceImpl lang) {
+        return new MessengerImpl(lang);
+    }
+
+    @Override
+    public AbstractAuditProvider createGlobalAudit(JavaPlugin runtimeHost, AuditConfig cfg, boolean usePluginLogger) {
+        return new BukkitAuditProvider(runtimeHost, cfg, usePluginLogger);
+    }
+
+    @Override
+    public void registerAuditTenant(AbstractAuditProvider globalAudit, JavaPlugin owner, AuditConfig cfg, boolean usePluginLogger) {
+        if (globalAudit == null || owner == null || cfg == null) return;
+        // 这里用反射，避免你的 AbstractAuditProvider / BukkitAuditProvider 接口变动导致编译碎裂
+        try {
+            Method m = globalAudit.getClass().getMethod("registerTenant", JavaPlugin.class, AuditConfig.class, boolean.class);
+            m.invoke(globalAudit, owner, cfg, usePluginLogger);
+        } catch (Throwable ignore) {
+        }
+    }
+
+    @Override
+    public void validatePlatformContext(JavaPlugin owner, Object platformContext) {
+        // Bukkit 下平台上下文应该就是 JavaPlugin；且必须与 facade 的 owner 一致
+        if (platformContext == null) return;
+        if (platformContext instanceof JavaPlugin p && p != owner) {
+            throw new IllegalArgumentException("PlatformContext 必须为 facade 创建时的插件实例");
+        }
+    }
+
+    @Override
+    public String defaultTotalPrefix(JavaPlugin owner) {
+        try {
+            String name = owner.getDescription().getName();
+            return "§f[§d" + name + "§f] ";
+        } catch (Throwable ignore) {
+            return "[Linlang] ";
+        }
+    }
+
+    @Override
+    public String runtimeVersion(JavaPlugin runtimeHost) {
+        try {
+            return runtimeHost.getDescription().getVersion();
+        } catch (Throwable ignore) {
+            try {
+                return runtimeHost.getClass().getPackage().getImplementationVersion();
+            } catch (Throwable t) {
+                return "unknown";
+            }
+        }
+    }
+
+    // --- helpers ---
+
+    private static String safe(Supplier<String> s) {
+        try {
+            String v = (s == null) ? null : s.get();
+            if (v == null) return "";
+            v = v.trim();
+            return v;
+        } catch (Throwable ignore) {
+            return "";
+        }
+    }
+
+    /** Bukkit 平台事件调度器：确保 MAIN 在主线程执行。 */
+    private static final class BukkitDispatcher implements EventDispatcher {
+        private final JavaPlugin plugin;
+
+        private BukkitDispatcher(JavaPlugin plugin) {
+            this.plugin = plugin;
+        }
+
+        @Override
+        public void executeMain(Runnable task) {
+            if (task == null) return;
+            try {
+                if (Bukkit.isPrimaryThread()) task.run();
+                else Bukkit.getScheduler().runTask(plugin, task);
+            } catch (Throwable t) {
+                try { task.run(); } catch (Throwable ignore) {}
+            }
+        }
+
+        @Override
+        public void executeAsync(Runnable task) {
+            if (task == null) return;
+            try {
+                Bukkit.getScheduler().runTaskAsynchronously(plugin, task);
+            } catch (Throwable t) {
+                try { task.run(); } catch (Throwable ignore) {}
+            }
+        }
+    }
+}

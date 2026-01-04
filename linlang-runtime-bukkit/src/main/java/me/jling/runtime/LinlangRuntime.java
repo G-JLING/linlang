@@ -1,226 +1,202 @@
 package me.jling.runtime;
 
-import adapter.linlang.bukkit.audit.BukkitAuditProvider;
-import adapter.linlang.bukkit.command.LinlangBukkitCommand;
-import adapter.linlang.bukkit.messenger.MessengerImpl;
+import adapter.linlang.bukkit.platform.BukkitPlatformAdapter;
 import api.linlang.audit.LinLog;
 import api.linlang.command.LinCommand;
 import api.linlang.command.message.CommandMessages;
 import api.linlang.file.database.DataService;
 import api.linlang.messenger.LinMessenger;
-import core.linlang.audit.AbstractAuditProvider;
-import core.linlang.audit.config.AuditConfig;
-import core.linlang.audit.internal.LinMsg;
-import core.linlang.audit.internal.LinlangInternalMessageKeys;
-import core.linlang.command.message.CommandMessageKeys;
-import core.linlang.command.message.CommandMessageRouter;
-import core.linlang.command.message.i18n.EnGB;
-import core.linlang.command.message.i18n.ZhCN;
-import core.linlang.database.impl.DataServiceImpl;
-import core.linlang.event.impl.DefaultEventBus;
+import core.linlang.event.api.LinEventBus;
+import core.linlang.event.dispatcher.EventDispatcher;
 import core.linlang.file.impl.ConfigServiceImpl;
 import core.linlang.file.impl.LangServiceImpl;
-import core.linlang.event.dispatcher.EventDispatcher;
-import core.linlang.event.api.LinEventBus;
+import core.linlang.platform.PlatformAdapter;
+import core.linlang.runtime.RuntimeCore;
 import lombok.Getter;
 import me.jling.bukkit.LinlangBukkitBootstrap;
 import me.jling.facade.LinlangFacade;
-import org.bukkit.Bukkit;
 import org.bukkit.plugin.java.JavaPlugin;
 
-import java.util.List;
-import java.util.Set;
 import java.util.Collections;
 import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Set;
+import java.util.function.Function;
 
-
+/**
+ * Bukkit 运行时薄壳：把平台无关逻辑下沉到 core 的 {@link RuntimeCore}。
+ * <p>
+ * 该类只保留 Bukkit 模块仍然需要的 API 形状（供 Bootstrap/旧 Facade 调用），
+ * 内部全部委托给 core。
+ */
 public final class LinlangRuntime implements AutoCloseable {
 
+    /** 运行时插件实例（Bukkit） */
     private final JavaPlugin runtimePlugin;
 
-    /** 平台事件调度器 */
-    @Getter
-    private final EventDispatcher dispatcher;
-
-    /** 事件总线*/
-    @Getter
-    private final LinEventBus runtimeBus;
-
-    private AbstractAuditProvider globalAudit;
-
-    private final LinkedHashSet<LinlangFacade> facades =
-            new LinkedHashSet<>();
-
+    /** Bukkit 引导器（保留引用，便于旧逻辑仍能工作） */
     @Getter
     private final LinlangBukkitBootstrap bootstrap;
 
-    // 初始化运行时对象，记录运行时插件和其引导器
+    /** 平台适配器（Bukkit） */
+    private final PlatformAdapter<JavaPlugin> adapter;
+
+    /** core 运行时（平台无关） */
+    @Getter
+    private final RuntimeCore<JavaPlugin> core;
+
+    /** 平台事件调度器（兼容旧 getter） */
+    @Getter
+    private final EventDispatcher dispatcher;
+
+    /** 运行时事件总线（兼容旧 getter） */
+    @Getter
+    private final LinEventBus runtimeBus;
+
+    /** 旧 Facade 注册表（为了不立刻改 Facade 类型；下一步再收敛到 core） */
+    private final LinkedHashSet<LinlangFacade> facades = new LinkedHashSet<>();
+
+    /**
+     * 初始化运行时对象。
+     * <p>注意：该构造只负责装配 core，不在这里创建任何 per-plugin 服务实例。</p>
+     */
     public LinlangRuntime(JavaPlugin plugin, LinlangBukkitBootstrap bootstrap) {
         this.runtimePlugin = plugin;
         this.bootstrap = bootstrap;
-        this.dispatcher = new BukkitDispatcher(plugin);
-        this.runtimeBus = new DefaultEventBus(this.dispatcher);
+
+        this.adapter = new BukkitPlatformAdapter();
+        this.dispatcher = this.adapter.dispatcher(plugin);
+        this.core = new RuntimeCore<>(plugin, this.adapter);
+        this.runtimeBus = this.core.runtimeBus();
     }
 
     /**
-     * 为每个 facade 创建独立事件总线
-     * facade 关闭时应调用 bus.shutdown()
+     * 为每个 facade 创建独立事件总线。
+     * <p>facade 关闭时应调用 bus.shutdown()</p>
      */
     public LinEventBus newFacadeBus() {
-        return new DefaultEventBus(this.dispatcher);
-    }
-
-    // 安装全局 LinMsg 消息键并绑定到运行时插件的语言服务
-    public void installLinMsg() {
-        try {
-            LangServiceImpl lang = bootstrap.getLanguage();
-            var keys = lang.bind(
-                    LinlangInternalMessageKeys.class,
-                    List.of(new core.linlang.audit.internal.i18n.ZhCN(), new core.linlang.audit.internal.i18n.EnGB())
-            );
-
-            LinMsg.installKeys(() -> keys);
-            LinMsg.install(lang::tr);
-
-            LinLog.info("Installed global LinMsg templates.");
-        } catch (Throwable t) {
-            LinLog.warn("Failed to install LinMsg templates: " + t.getMessage());
-        }
+        return core.newFacadeBus();
     }
 
     /**
-     * 安装 runtime 自身的审计与日志。
+     * 安装全局 LinMsg 消息键并绑定到运行时插件语言服务。
+     */
+    public void installLinMsg() {
+        core.attachRuntimeFileServices(bootstrap.getConfig(), bootstrap.getLanguage());
+        core.installLinMsg();
+    }
+
+    /**
+     * 安装运行时自身的审计与日志。
      *
      * @param usePluginLogger 是否使用运行时插件自己的 logger 作为 console 输出
      */
     public LinlangRuntime installAudit(boolean usePluginLogger) {
-        try {
-            // runtime 自己的 config service
-            ConfigServiceImpl cfg = bootstrap.getConfig(); // 你已有的方法
-            AuditConfig runtimeCfg = cfg.bind(AuditConfig.class);
-
-            this.globalAudit = new BukkitAuditProvider(runtimePlugin, runtimeCfg, usePluginLogger);
-            LinLog.install(this.globalAudit);
-        } catch (Throwable t) {
-            // 出错则使用默认配置
-            AuditConfig fallback = new AuditConfig();
-            this.globalAudit = new BukkitAuditProvider(runtimePlugin, fallback, usePluginLogger);
-            LinLog.install(this.globalAudit);
-            LinLog.warn("Failed to bind runtime audit config: {}", t.getMessage());
-        }
+        core.attachRuntimeFileServices(bootstrap.getConfig(), bootstrap.getLanguage());
+        core.installAudit(usePluginLogger);
         return this;
     }
 
     /**
-     * 为指定插件安装/刷新审计租户。
-     * 应在为该插件创建 LinlangFacade 前调用。
+     * 为指定插件安装/刷新审计租户（每插件独立配置与输出路径）。
      */
     public void installAuditFor(JavaPlugin owner, boolean usePluginLogger) {
-        if (globalAudit == null) return;
-        try {
-            // 为该插件创建独立的配置服务，路径落在该插件 data 文件夹
-            ConfigServiceImpl cfg = createConfigService(owner); // 你已有类似方法
-            AuditConfig pluginCfg = cfg.bind(AuditConfig.class);
-            globalAudit.registerTenant(owner, pluginCfg, usePluginLogger);
-        } catch (Throwable t) {
-            LinLog.warn("Failed to bind audit config for plugin {}: {}", owner.getName(), t.getMessage());
-        }
+        core.installAuditFor(owner, usePluginLogger);
     }
 
-    // 为指定插件创建独立的配置服务实例
+    /**
+     * 为指定插件创建独立的配置服务实例。
+     */
     public ConfigServiceImpl createConfigService(JavaPlugin owner) {
-        var resolver = new adapter.linlang.bukkit.file.common.file.BukkitPathResolver(owner);
-        return new ConfigServiceImpl(resolver, List.of());
+        return core.createConfigService(owner);
     }
 
-    // 为指定插件创建独立的语言服务实例
+    /**
+     * 为指定插件创建独立的语言服务实例。
+     */
     public LangServiceImpl createLangService(JavaPlugin owner) {
-        var resolver = new adapter.linlang.bukkit.file.common.file.BukkitPathResolver(owner);
-        return new LangServiceImpl(resolver);
+        return core.createLangService(owner);
     }
 
-    // 为指定插件创建独立的数据服务实例
+    /**
+     * 为指定插件创建独立的数据服务实例。
+     */
     public DataService createDataService(JavaPlugin owner) {
-        var resolver = new adapter.linlang.bukkit.file.common.file.BukkitPathResolver(owner);
-        return new DataServiceImpl(resolver);
+        return core.createDataService(owner);
     }
 
-    // 基于指定语言服务和语言标签创建命令消息路由
+    /**
+     * 基于指定语言服务创建命令消息路由。
+     * <p>locale 参数当前仅用于兼容旧签名；实际由 lang 的当前语言决定。</p>
+     */
     public CommandMessages createCommandMessages(LangServiceImpl lang, String locale) {
-        try {
-            CommandMessageKeys keys = lang.bind(
-                    CommandMessageKeys.class,
-                    List.of(new ZhCN(), new EnGB())
-            );
-            return new CommandMessageRouter(keys);
-        } catch (Throwable t) {
-            return CommandMessages.defaults();
-        }
+        return core.createCommandMessages(lang);
     }
 
-    // 为指定插件创建命令系统实例并配置解析器与默认语言
-    public LinCommand createCommands(
-            JavaPlugin owner,
-            String locale,
-            java.util.function.Function<JavaPlugin, String> prefixFn) {
+    /**
+     * 为指定插件创建命令系统实例并配置解析器与默认语言。
+     * <p>兼容旧调用：内部会使用 owner 自己的 LangService 来绑定命令消息。</p>
+     */
+    public LinCommand createCommands(JavaPlugin owner, String locale, Function<JavaPlugin, String> prefixFn) {
+        String useLocale = (locale == null || locale.isBlank()) ? "zh_CN" : locale.trim();
+        Function<JavaPlugin, String> fn = (prefixFn != null) ? prefixFn : adapter::defaultTotalPrefix;
 
-        String prefix = prefixFn.apply(owner);
-
-        // Use owner bukkit's own LangService for command messages
+        // 旧逻辑：命令消息使用单独的 lang（owner 的）
         LangServiceImpl lang = createLangService(owner);
-        CommandMessages msgs = createCommandMessages(lang, locale);
-
-        return new LinlangBukkitCommand()
-                .install(prefix, owner, msgs)
-                .withDefaultResolvers()
-                .withInteractiveResolvers()
-                .withPreferredLocaleTag(locale);
+        return core.createCommands(owner, lang, useLocale, () -> fn.apply(owner));
     }
 
-    // 基于指定语言服务创建消息发送器
+    /**
+     * 基于指定语言服务创建消息发送器。
+     */
     public LinMessenger createMessenger(LangServiceImpl lang) {
-        return new MessengerImpl(lang);
+        return core.createMessenger(lang);
     }
 
-    // 注册一个插件门面实例，纳入统一生命周期管理
+    /**
+     * 注册一个插件门面实例，纳入统一生命周期管理。
+     * <p>注意：这还是旧 Facade 注册表，下一步会收敛到 FacadeCore。</p>
+     */
     public void registerFacade(LinlangFacade facade) {
         synchronized (facades) {
             facades.add(facade);
         }
     }
 
-    // 取消注册一个插件门面实例
+    /**
+     * 取消注册一个插件门面实例。
+     */
     public void unregisterFacade(LinlangFacade facade) {
         synchronized (facades) {
             facades.remove(facade);
         }
     }
 
-    // 获取当前所有已注册的插件门面快照
+    /**
+     * 获取当前所有已注册的插件门面快照。
+     */
     public Set<LinlangFacade> listFacades() {
         synchronized (facades) {
             return Collections.unmodifiableSet(new LinkedHashSet<>(facades));
         }
     }
 
-    // 软重载运行时插件自身及所有已注册门面的服务实例
+    /**
+     * 软重载运行时插件自身及所有已注册门面的服务实例。
+     */
     public void reload() {
+        // 先让 core 做 runtime 自身重载
         try {
-            bootstrap.getConfig().reload();
-        } catch (Throwable ignore) {
-        }
-        try {
-            bootstrap.getLanguage().reload();
-        } catch (Throwable ignore) {
-        }
-        try {
-            bootstrap.reload();
-        } catch (Throwable ignore) {
+            core.attachRuntimeFileServices(bootstrap.getConfig(), bootstrap.getLanguage());
+            core.reload();
+        } catch (Throwable t) {
+            // 不影响后续 facade reload
         }
 
-        java.util.Set<LinlangFacade> snapshot;
+        // 兼容旧 Facade：逐个 reload
+        Set<LinlangFacade> snapshot;
         synchronized (facades) {
-            snapshot = new java.util.LinkedHashSet<>(facades);
+            snapshot = new LinkedHashSet<>(facades);
         }
         for (LinlangFacade facade : snapshot) {
             try {
@@ -230,13 +206,23 @@ public final class LinlangRuntime implements AutoCloseable {
         }
     }
 
-    // 硬重启所有已注册门面的 Linlang 服务实例，并返回成功重启的数量
+    /**
+     * 硬重启所有已注册门面，并返回成功数量。
+     */
     public int restart() {
-        java.util.Set<LinlangFacade> snapshot;
-        synchronized (facades) {
-            snapshot = new java.util.LinkedHashSet<>(facades);
-        }
         int success = 0;
+
+        // 先让 core 做 facadeCore 的 restart（如果已经接入）
+        try {
+            success += core.restart();
+        } catch (Throwable ignore) {
+        }
+
+        // 再兼容旧 Facade
+        Set<LinlangFacade> snapshot;
+        synchronized (facades) {
+            snapshot = new LinkedHashSet<>(facades);
+        }
         for (LinlangFacade facade : snapshot) {
             try {
                 facade.restart();
@@ -247,10 +233,12 @@ public final class LinlangRuntime implements AutoCloseable {
         return success;
     }
 
-    // 关闭运行时：依次关闭所有门面并释放全局审计资源
+    /**
+     * 关闭运行时：关闭所有门面并释放资源。
+     */
     @Override
     public void close() {
-        // Close facades
+        // 先关旧 facades
         synchronized (facades) {
             for (LinlangFacade f : facades.toArray(new LinlangFacade[0])) {
                 try {
@@ -261,50 +249,12 @@ public final class LinlangRuntime implements AutoCloseable {
             facades.clear();
         }
 
-        // Close global audit if closeable
-        if (globalAudit != null) {
-            try {
-                var m = globalAudit.getClass().getMethod("close");
-                m.invoke(globalAudit);
-            } catch (Throwable ignore) {
-            }
+        // 再关 core
+        try {
+            core.close();
+        } catch (Throwable ignore) {
         }
 
         LinLog.info("[linlang] Runtime closed.");
-    }
-
-    /** Bukkit 平台事件调度器实现：确保 MAIN 在主线程执行。 */
-    private static final class BukkitDispatcher implements EventDispatcher {
-        private final JavaPlugin plugin;
-
-        private BukkitDispatcher(JavaPlugin plugin) {
-            this.plugin = plugin;
-        }
-
-        @Override
-        public void executeMain(Runnable task) {
-            if (task == null) return;
-            try {
-                if (Bukkit.isPrimaryThread()) {
-                    task.run();
-                } else {
-                    Bukkit.getScheduler().runTask(plugin, task);
-                }
-            } catch (Throwable t) {
-                // 最差回退：直接执行
-                try { task.run(); } catch (Throwable ignore) {}
-            }
-        }
-
-        @Override
-        public void executeAsync(Runnable task) {
-            if (task == null) return;
-            try {
-                Bukkit.getScheduler().runTaskAsynchronously(plugin, task);
-            } catch (Throwable t) {
-                // 最差回退：直接执行
-                try { task.run(); } catch (Throwable ignore) {}
-            }
-        }
     }
 }

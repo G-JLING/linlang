@@ -91,7 +91,7 @@ public final class CommandListener {
 
                     sender.sendMessage("§d[Linlang] §7已注册插件列表（" + facades.size() + "）：");
                     for (LinlangFacade facade : facades) {
-                        JavaPlugin owner = facade.getOwner();
+                        JavaPlugin owner = facade.owner();
                         Plugin p = owner;
                         String name = p.getName();
                         String version = "unknown";
@@ -124,7 +124,7 @@ public final class CommandListener {
 
                     Set<LinlangFacade> facades = runtime.listFacades();
                     LinlangFacade target = facades.stream()
-                            .filter(f -> f.getOwner().getName().equalsIgnoreCase(pluginName))
+                            .filter(f -> f.owner().getName().equalsIgnoreCase(pluginName))
                             .findFirst()
                             .orElse(null);
 
@@ -132,14 +132,14 @@ public final class CommandListener {
                         // 尝试做一次模糊匹配
                         String lower = pluginName.toLowerCase(Locale.ROOT);
                         Set<LinlangFacade> candidates = facades.stream()
-                                .filter(f -> f.getOwner().getName().toLowerCase(Locale.ROOT).contains(lower))
+                                .filter(f -> f.owner().getName().toLowerCase(Locale.ROOT).contains(lower))
                                 .collect(Collectors.toSet());
                         if (candidates.size() == 1) {
                             target = candidates.iterator().next();
                         } else if (candidates.size() > 1) {
                             sender.sendMessage("§c[Linlang] 找到多个匹配的插件名称，请更精确地指定：");
                             for (LinlangFacade f : candidates) {
-                                sender.sendMessage("§7  - §f" + f.getOwner().getName());
+                                sender.sendMessage("§7  - §f" + f.owner().getName());
                             }
                             return;
                         }
@@ -152,9 +152,9 @@ public final class CommandListener {
 
                     try {
                         target.restart();
-                        sender.sendMessage("§a[Linlang] 已重启插件 §f" + target.getOwner().getName() + " §a的 Linlang 实例。");
+                        sender.sendMessage("§a[Linlang] 已重启插件 §f" + target.owner().getName() + " §a的 Linlang 实例。");
                     } catch (Throwable t) {
-                        sender.sendMessage("§c[Linlang] 重启插件 §f" + target.getOwner().getName() + " §c的 Linlang 实例时发生错误，请查看控制台日志。");
+                        sender.sendMessage("§c[Linlang] 重启插件 §f" + target.owner().getName() + " §c的 Linlang 实例时发生错误，请查看控制台日志。");
                     }
                 },
                 LinCommand.Permission.perms("linlangruntimebukkit.admin"),
