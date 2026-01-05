@@ -14,12 +14,11 @@ import core.linlang.platform.PlatformAdapter;
 import core.linlang.runtime.RuntimeCore;
 import lombok.Getter;
 import me.jling.bukkit.LinlangBukkitBootstrap;
-import me.jling.facade.LinlangFacade;
+import me.jling.facade.BukkitFacadeImpl;
 import org.bukkit.plugin.java.JavaPlugin;
 
 import java.util.Collections;
 import java.util.LinkedHashSet;
-import java.util.List;
 import java.util.Set;
 import java.util.function.Function;
 
@@ -29,7 +28,7 @@ import java.util.function.Function;
  * 该类只保留 Bukkit 模块仍然需要的 API 形状（供 Bootstrap/旧 Facade 调用），
  * 内部全部委托给 core。
  */
-public final class LinlangRuntime implements AutoCloseable {
+public final class BukkitRuntimeImpl implements AutoCloseable {
 
     /** 运行时插件实例（Bukkit） */
     private final JavaPlugin runtimePlugin;
@@ -54,13 +53,13 @@ public final class LinlangRuntime implements AutoCloseable {
     private final LinEventBus runtimeBus;
 
     /** 旧 Facade 注册表（为了不立刻改 Facade 类型；下一步再收敛到 core） */
-    private final LinkedHashSet<LinlangFacade> facades = new LinkedHashSet<>();
+    private final LinkedHashSet<BukkitFacadeImpl> facades = new LinkedHashSet<>();
 
     /**
      * 初始化运行时对象。
      * <p>注意：该构造只负责装配 core，不在这里创建任何 per-plugin 服务实例。</p>
      */
-    public LinlangRuntime(JavaPlugin plugin, LinlangBukkitBootstrap bootstrap) {
+    public BukkitRuntimeImpl(JavaPlugin plugin, LinlangBukkitBootstrap bootstrap) {
         this.runtimePlugin = plugin;
         this.bootstrap = bootstrap;
 
@@ -91,7 +90,7 @@ public final class LinlangRuntime implements AutoCloseable {
      *
      * @param usePluginLogger 是否使用运行时插件自己的 logger 作为 console 输出
      */
-    public LinlangRuntime installAudit(boolean usePluginLogger) {
+    public BukkitRuntimeImpl installAudit(boolean usePluginLogger) {
         core.attachRuntimeFileServices(bootstrap.getConfig(), bootstrap.getLanguage());
         core.installAudit(usePluginLogger);
         return this;
@@ -157,7 +156,7 @@ public final class LinlangRuntime implements AutoCloseable {
      * 注册一个插件门面实例，纳入统一生命周期管理。
      * <p>注意：这还是旧 Facade 注册表，下一步会收敛到 FacadeCore。</p>
      */
-    public void registerFacade(LinlangFacade facade) {
+    public void registerFacade(BukkitFacadeImpl facade) {
         synchronized (facades) {
             facades.add(facade);
         }
@@ -166,7 +165,7 @@ public final class LinlangRuntime implements AutoCloseable {
     /**
      * 取消注册一个插件门面实例。
      */
-    public void unregisterFacade(LinlangFacade facade) {
+    public void unregisterFacade(BukkitFacadeImpl facade) {
         synchronized (facades) {
             facades.remove(facade);
         }
@@ -175,7 +174,7 @@ public final class LinlangRuntime implements AutoCloseable {
     /**
      * 获取当前所有已注册的插件门面快照。
      */
-    public Set<LinlangFacade> listFacades() {
+    public Set<BukkitFacadeImpl> listFacades() {
         synchronized (facades) {
             return Collections.unmodifiableSet(new LinkedHashSet<>(facades));
         }
@@ -194,11 +193,11 @@ public final class LinlangRuntime implements AutoCloseable {
         }
 
         // 兼容旧 Facade：逐个 reload
-        Set<LinlangFacade> snapshot;
+        Set<BukkitFacadeImpl> snapshot;
         synchronized (facades) {
             snapshot = new LinkedHashSet<>(facades);
         }
-        for (LinlangFacade facade : snapshot) {
+        for (BukkitFacadeImpl facade : snapshot) {
             try {
                 facade.reload();
             } catch (Throwable ignore) {
@@ -219,11 +218,11 @@ public final class LinlangRuntime implements AutoCloseable {
         }
 
         // 再兼容旧 Facade
-        Set<LinlangFacade> snapshot;
+        Set<BukkitFacadeImpl> snapshot;
         synchronized (facades) {
             snapshot = new LinkedHashSet<>(facades);
         }
-        for (LinlangFacade facade : snapshot) {
+        for (BukkitFacadeImpl facade : snapshot) {
             try {
                 facade.restart();
                 success++;
@@ -240,7 +239,7 @@ public final class LinlangRuntime implements AutoCloseable {
     public void close() {
         // 先关旧 facades
         synchronized (facades) {
-            for (LinlangFacade f : facades.toArray(new LinlangFacade[0])) {
+            for (BukkitFacadeImpl f : facades.toArray(new BukkitFacadeImpl[0])) {
                 try {
                     f.close();
                 } catch (Throwable ignore) {

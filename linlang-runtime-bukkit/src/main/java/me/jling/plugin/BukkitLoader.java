@@ -5,7 +5,7 @@ import api.linlang.runtime.Lin;
 import api.linlang.runtime.Linlang;
 import me.jling.bukkit.LinlangBukkitBootstrap;
 import me.jling.plugin.command.CommandListener;
-import me.jling.runtime.LinlangRuntime;
+import me.jling.runtime.BukkitRuntimeImpl;
 import org.bukkit.plugin.java.JavaPlugin;
 
 import org.bukkit.plugin.ServicePriority;
@@ -13,7 +13,7 @@ import org.bukkit.plugin.ServicePriority;
 public class BukkitLoader extends JavaPlugin {
 
     private LinlangBukkitBootstrap bootstrap;
-    private LinlangRuntime runtime;
+    private BukkitRuntimeImpl runtime;
 
     @Override
     public void onEnable() {

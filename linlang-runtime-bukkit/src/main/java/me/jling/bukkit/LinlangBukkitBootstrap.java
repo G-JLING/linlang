@@ -12,8 +12,8 @@ import core.linlang.file.impl.ConfigServiceImpl;
 import core.linlang.file.impl.LangServiceImpl;
 
 import lombok.Getter;
-import me.jling.facade.LinlangFacade;
-import me.jling.runtime.LinlangRuntime;
+import me.jling.facade.BukkitFacadeImpl;
+import me.jling.runtime.BukkitRuntimeImpl;
 import org.bukkit.plugin.java.JavaPlugin;
 
 import java.util.function.Function;
@@ -21,7 +21,7 @@ import java.util.function.Function;
 /**
  * 此类是 Linlang 运行时插件的引导类，实现了 Linlang 接口。
  * 它为运行时插件本身提供配置、语言和命令功能。
- * 其他插件不会直接使用这个实例，而是通过 Lin.init(bukkit) 创建的 LinlangFacade 来使用。
+ * 其他插件不会直接使用这个实例，而是通过 Lin.init(bukkit) 创建的 BukkitFacadeImpl 来使用。
  */
 public final class LinlangBukkitBootstrap implements AutoCloseable, Linlang, Linlang.Configurable, Linlang.Parametric {
 
@@ -40,7 +40,7 @@ public final class LinlangBukkitBootstrap implements AutoCloseable, Linlang, Lin
     private LinMessenger messenger;          // 消息接口
 
     @Getter
-    private final LinlangRuntime runtime;  // 运行时引导程序
+    private final BukkitRuntimeImpl runtime;  // 运行时引导程序
 
     // 当前语言环境，默认为中文
     private volatile String locale = "zh_CN";
@@ -65,7 +65,7 @@ public final class LinlangBukkitBootstrap implements AutoCloseable, Linlang, Lin
         this.runtimePlugin = runtimePlugin;
 
         // 初始化 runtime，全局服务，不含 per-bukkit 状态
-        this.runtime = new LinlangRuntime(runtimePlugin, this);
+        this.runtime = new BukkitRuntimeImpl(runtimePlugin, this);
 
         // 配置：runtime bukkit 自己的 config/lang
         this.config = runtime.createConfigService(runtimePlugin);
@@ -121,7 +121,7 @@ public final class LinlangBukkitBootstrap implements AutoCloseable, Linlang, Lin
         runtime.installAuditFor(owner, false);
 
         // 其他插件 => per-bukkit facade
-        return LinlangFacade.create(runtime, owner);
+        return BukkitFacadeImpl.create(runtime, owner);
     }
 
     /* ============================================================
@@ -176,7 +176,7 @@ public final class LinlangBukkitBootstrap implements AutoCloseable, Linlang, Lin
     }
 
     @Override
-    public LinlangBukkitBootstrap withInitialLanguage(String locale) {
+    public LinlangBukkitBootstrap totalLocale(String locale) {
         if (locale == null || locale.isBlank()) return this;
         this.locale = locale;
         return this;

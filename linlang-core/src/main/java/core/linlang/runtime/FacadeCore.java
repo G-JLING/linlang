@@ -196,7 +196,7 @@ public final class FacadeCore<P> implements Linlang, Linlang.Configurable, Linla
     }
 
     @Override
-    public FacadeCore<P> withInitialLanguage(String locale) {
+    public FacadeCore<P> totalLocale(String locale) {
         if (locale == null || locale.isBlank()) return this;
         this.preferredLocale = locale.trim();
         return this;

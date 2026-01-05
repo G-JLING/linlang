@@ -2,8 +2,8 @@ package me.jling.plugin.command;
 
 import api.linlang.command.LinCommand;
 import api.linlang.runtime.Lin;
-import me.jling.facade.LinlangFacade;
-import me.jling.runtime.LinlangRuntime;
+import me.jling.facade.BukkitFacadeImpl;
+import me.jling.runtime.BukkitRuntimeImpl;
 import org.bukkit.command.CommandSender;
 import org.bukkit.plugin.Plugin;
 import org.bukkit.plugin.java.JavaPlugin;
@@ -29,9 +29,9 @@ import java.util.stream.Collectors;
 public final class CommandListener {
 
     private final JavaPlugin runtimePlugin;
-    private final LinlangRuntime runtime;
+    private final BukkitRuntimeImpl runtime;
 
-    public CommandListener(JavaPlugin runtimePlugin, LinlangRuntime runtime) {
+    public CommandListener(JavaPlugin runtimePlugin, BukkitRuntimeImpl runtime) {
         this.runtimePlugin = Objects.requireNonNull(runtimePlugin, "runtimePlugin");
         this.runtime = Objects.requireNonNull(runtime, "runtime");
     }
@@ -82,7 +82,7 @@ public final class CommandListener {
                 "linlang plugins",
                 ctx -> {
                     CommandSender sender = (CommandSender) ctx.sender();
-                    Set<me.jling.facade.LinlangFacade> facades = runtime.listFacades();
+                    Set<BukkitFacadeImpl> facades = runtime.listFacades();
 
                     if (facades.isEmpty()) {
                         sender.sendMessage("§d[Linlang] §7当前没有已注册的插件门面。");
@@ -90,7 +90,7 @@ public final class CommandListener {
                     }
 
                     sender.sendMessage("§d[Linlang] §7已注册插件列表（" + facades.size() + "）：");
-                    for (LinlangFacade facade : facades) {
+                    for (BukkitFacadeImpl facade : facades) {
                         JavaPlugin owner = facade.owner();
                         Plugin p = owner;
                         String name = p.getName();
@@ -122,8 +122,8 @@ public final class CommandListener {
                         return;
                     }
 
-                    Set<LinlangFacade> facades = runtime.listFacades();
-                    LinlangFacade target = facades.stream()
+                    Set<BukkitFacadeImpl> facades = runtime.listFacades();
+                    BukkitFacadeImpl target = facades.stream()
                             .filter(f -> f.owner().getName().equalsIgnoreCase(pluginName))
                             .findFirst()
                             .orElse(null);
@@ -131,14 +131,14 @@ public final class CommandListener {
                     if (target == null) {
                         // 尝试做一次模糊匹配
                         String lower = pluginName.toLowerCase(Locale.ROOT);
-                        Set<LinlangFacade> candidates = facades.stream()
+                        Set<BukkitFacadeImpl> candidates = facades.stream()
                                 .filter(f -> f.owner().getName().toLowerCase(Locale.ROOT).contains(lower))
                                 .collect(Collectors.toSet());
                         if (candidates.size() == 1) {
                             target = candidates.iterator().next();
                         } else if (candidates.size() > 1) {
                             sender.sendMessage("§c[Linlang] 找到多个匹配的插件名称，请更精确地指定：");
-                            for (LinlangFacade f : candidates) {
+                            for (BukkitFacadeImpl f : candidates) {
                                 sender.sendMessage("§7  - §f" + f.owner().getName());
                             }
                             return;
@@ -192,7 +192,7 @@ public final class CommandListener {
                 "linlang restart-all",
                 ctx -> {
                     CommandSender sender = (CommandSender) ctx.sender();
-                    Set<LinlangFacade> facades = runtime.listFacades();
+                    Set<BukkitFacadeImpl> facades = runtime.listFacades();
                     int total = facades.size();
                     int success = runtime.restart();
 

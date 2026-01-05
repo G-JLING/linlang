@@ -7,7 +7,7 @@ import api.linlang.runtime.Linlang;
 import core.linlang.event.api.LinEventBus;
 import core.linlang.runtime.FacadeCore;
 import core.linlang.total.i18n.LocaleController;
-import me.jling.runtime.LinlangRuntime;
+import me.jling.runtime.BukkitRuntimeImpl;
 import org.bukkit.plugin.java.JavaPlugin;
 
 import java.util.Objects;
@@ -19,25 +19,25 @@ import java.util.function.Function;
  * 该类只保留 Bukkit 侧需要的 API 形状与类型绑定（JavaPlugin），
  * 核心逻辑全部委托给 core 的 {@link FacadeCore}。
  */
-public final class LinlangFacade implements Linlang, Linlang.Configurable, Linlang.Parametric, AutoCloseable {
+public final class BukkitFacadeImpl implements Linlang, Linlang.Configurable, Linlang.Parametric, AutoCloseable {
 
     private final JavaPlugin owner;
-    private final LinlangRuntime runtime;
+    private final BukkitRuntimeImpl runtime;
     private final FacadeCore<JavaPlugin> core;
 
     /**
-     * 创建并注册一个新的 LinlangFacade。
+     * 创建并注册一个新的 BukkitFacadeImpl。
      */
-    public static LinlangFacade create(LinlangRuntime runtime, JavaPlugin owner) {
+    public static BukkitFacadeImpl create(BukkitRuntimeImpl runtime, JavaPlugin owner) {
         Objects.requireNonNull(runtime, "runtime");
         Objects.requireNonNull(owner, "owner bukkit");
-        LinlangFacade f = new LinlangFacade(runtime, owner);
+        BukkitFacadeImpl f = new BukkitFacadeImpl(runtime, owner);
         // 兼容旧逻辑：运行时仍维护一份 facade 集合
         runtime.registerFacade(f);
         return f;
     }
 
-    private LinlangFacade(LinlangRuntime runtime, JavaPlugin owner) {
+    private BukkitFacadeImpl(BukkitRuntimeImpl runtime, JavaPlugin owner) {
         this.runtime = runtime;
         this.owner = owner;
         // core Facade（平台无关逻辑）
@@ -96,7 +96,7 @@ public final class LinlangFacade implements Linlang, Linlang.Configurable, Linla
      * <p>Bukkit 平台下，platformContext 固定为 JavaPlugin；只允许与 owner 一致。</p>
      */
     @Override
-    public LinlangFacade withPlatformContext(Object platformContext) {
+    public BukkitFacadeImpl withPlatformContext(Object platformContext) {
         core.withPlatformContext(platformContext);
         return this;
     }
@@ -105,7 +105,7 @@ public final class LinlangFacade implements Linlang, Linlang.Configurable, Linla
      * 设置全局前缀名（facade 级唯一入口）。
      */
     @Override
-    public LinlangFacade totalPrefix(String prefix) {
+    public BukkitFacadeImpl totalPrefix(String prefix) {
         core.totalPrefix(prefix);
         return this;
     }
@@ -114,7 +114,7 @@ public final class LinlangFacade implements Linlang, Linlang.Configurable, Linla
      * 设置全局前缀名提供函数（facade 级唯一入口）。
      */
     @Override
-    public LinlangFacade totalPrefixProvider(Function<Object, String> provider) {
+    public BukkitFacadeImpl totalPrefixProvider(Function<Object, String> provider) {
         core.totalPrefixProvider(provider);
         return this;
     }
@@ -123,8 +123,8 @@ public final class LinlangFacade implements Linlang, Linlang.Configurable, Linla
      * 设置初始语言（仅记录，需 reload/restart 才会应用）。
      */
     @Override
-    public LinlangFacade withInitialLanguage(String locale) {
-        core.withInitialLanguage(locale);
+    public BukkitFacadeImpl totalLocale(String locale) {
+        core.totalLocale(locale);
         return this;
     }
 
@@ -132,7 +132,7 @@ public final class LinlangFacade implements Linlang, Linlang.Configurable, Linla
      * 配置是否使用插件 logger。
      */
     @Override
-    public LinlangFacade usingPluginLogger(boolean usePluginLogger) {
+    public BukkitFacadeImpl usingPluginLogger(boolean usePluginLogger) {
         core.usingPluginLogger(usePluginLogger);
         return this;
     }
