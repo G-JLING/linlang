@@ -167,12 +167,7 @@ public final class LangServiceImpl implements LangService, LocaleAware {
 
             mergeOverwrite(curr, out);
 
-            Map<String, List<String>> comments = (bm.fmt == FileType.YAML)
-                    ? extractComments(keysClass, loc)
-                    : Collections.emptyMap();
-            ensureCommentAnchors(curr, comments);
-
-            persist(f, bm.fmt, curr, comments);
+            persist(f, bm.fmt, curr);
 
             cache.computeIfAbsent(loc, k -> new LinkedHashMap<>()).putAll(flatten(curr));
         } catch (Exception e) {
@@ -249,15 +244,21 @@ public final class LangServiceImpl implements LangService, LocaleAware {
                 Set<String> missing = new LinkedHashSet<>();
                 mergeDefaultsCollect(defaults, doc, "", missing);
 
-                Map<String, List<String>> comments = (spec.fmt == FileType.YAML)
-                        ? extractComments(keysClass, loc)
-                        : Collections.emptyMap();
-                ensureCommentAnchors(doc, comments);
-
                 if (!missing.isEmpty()) {
                     writeDiff(f, spec.fmt, doc, missing);
                 }
-                persist(f, spec.fmt, doc, comments);
+
+                boolean fileExists = IOs.exists(f);
+                if (!fileExists) {
+                    boolean wrote = writeBuiltinResourceToDisk(spec.filePath, loc, spec.fmt, f);
+                    if (!wrote) {
+                        persist(f, spec.fmt, doc);
+                    }
+                } else {
+                    if (spec.fmt == FileType.JSON) {
+                        persist(f, spec.fmt, doc);
+                    }
+                }
 
                 cache.computeIfAbsent(loc, k -> new LinkedHashMap<>()).putAll(flatten(doc));
             } catch (Throwable t) {
@@ -356,20 +357,20 @@ public final class LangServiceImpl implements LangService, LocaleAware {
 
         // 4) Write back / generate file if allowed
         if (emit && !keysClass.isAnnotationPresent(NoEmit.class)) {
-            Map<String, List<String>> comments = (fmt == FileType.YAML)
-                    ? extractComments(keysClass, loc)
-                    : Collections.emptyMap();
-
-            ensureCommentAnchors(doc, comments);
-
             if (!exists) {
-                persist(f, fmt, doc, comments);
+                // Prefer verbatim builtin resource (preserves YAML comments/format).
+                boolean wrote = writeBuiltinResourceToDisk(filePath, loc, fmt, f);
+                if (!wrote) {
+                    persist(f, fmt, doc);
+                }
             } else {
                 if (!missing.isEmpty()) {
                     writeDiff(f, fmt, doc, missing);
                 }
-                // Keep behavior consistent with old impl: persist to keep comments/format stable.
-                persist(f, fmt, doc, comments);
+                // Preserve YAML formatting/comments by not rewriting user files on load.
+                if (fmt == FileType.JSON) {
+                    persist(f, fmt, doc);
+                }
             }
         }
 
@@ -531,13 +532,27 @@ public final class LangServiceImpl implements LangService, LocaleAware {
 
     private static void persist(java.nio.file.Path file,
                                 FileType fmt,
-                                Map<String, Object> doc,
-                                Map<String, List<String>> comments) {
+                                Map<String, Object> doc) {
         String out = (fmt == FileType.YAML)
-                ? YamlCodec.dumpWithComments(doc, comments)
+                ? YamlCodec.dump(doc)
                 : JsonCodec.dump(doc);
         IOs.writeString(file, out);
         LinLog.debug(LinMsg.k("linFile.lang.langSaved"), "lang", file);
+    }
+
+    private boolean writeBuiltinResourceToDisk(String filePath, String locale, FileType fmt, java.nio.file.Path target) {
+        String ext = extOf(fmt);
+        String p = RESOURCE_ROOT + "/" + stripLeadingSlash(filePath) + "/" + locale + ext;
+        try (InputStream in = LangServiceImpl.class.getClassLoader().getResourceAsStream(p)) {
+            if (in == null) return false;
+            String s = new String(in.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
+            if (s.isBlank()) return false;
+            IOs.ensureDir(target.getParent());
+            IOs.writeString(target, s);
+            return true;
+        } catch (Throwable t) {
+            return false;
+        }
     }
 
     // ------------------------------------------------------------
@@ -559,51 +574,6 @@ public final class LangServiceImpl implements LangService, LocaleAware {
         return defDoc;
     }
 
-    private static Map<String, List<String>> extractComments(Class<?> clz, String locale) {
-        Map<String, List<String>> base = TreeMapper.extractComments(clz);
-        if (base == null) base = new LinkedHashMap<>();
-        Map<String, List<String>> localized = TreeMapper.extractI18nComments(clz, locale);
-        if (localized != null && !localized.isEmpty()) {
-            for (var e : localized.entrySet()) {
-                base.put(e.getKey(), e.getValue());
-            }
-        }
-        return base;
-    }
-
-    private static void ensureCommentAnchors(Map<String, Object> doc, Map<String, List<String>> comments) {
-        if (comments == null || comments.isEmpty()) return;
-        for (String path : comments.keySet()) {
-            if ("__header__".equals(path)) continue;
-            ensurePath(doc, path);
-        }
-    }
-
-    @SuppressWarnings("unchecked")
-    private static void ensurePath(Map<String, Object> root, String dottedPath) {
-        if (dottedPath == null || dottedPath.isBlank()) return;
-        String[] segs = Arrays.stream(dottedPath.split("\\."))
-                .filter(s -> s != null && !s.isBlank())
-                .toArray(String[]::new);
-        if (segs.length == 0) return;
-
-        Map<String, Object> curr = root;
-        for (int i = 0; i < segs.length - 1; i++) {
-            String k = segs[i];
-            Object ex = curr.get(k);
-            if (!(ex instanceof Map)) {
-                Map<String, Object> child = new LinkedHashMap<>();
-                curr.put(k, child);
-                curr = child;
-            } else {
-                curr = (Map<String, Object>) ex;
-            }
-        }
-        String leaf = segs[segs.length - 1];
-        if (!curr.containsKey(leaf)) {
-            curr.put(leaf, "");
-        }
-    }
 
     // ------------------------------------------------------------
     // Flatten + lookup

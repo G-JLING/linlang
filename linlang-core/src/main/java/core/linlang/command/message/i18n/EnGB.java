@@ -8,7 +8,6 @@ import core.linlang.command.message.CommandMessageKeys;
 
 
 @NamingStyle(NamingStyle.Style.KEBAB)
-@LangPack(locale = "en_GB", format = FileType.YAML, path = "linlang/lincommand/message")
 public final class EnGB implements LocaleProvider<CommandMessageKeys> {
 
     @Override public String locale() { return "en_GB"; }
