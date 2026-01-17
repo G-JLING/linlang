@@ -99,8 +99,7 @@ public final class RuntimeCore<P> implements AutoCloseable {
     public CommandMessages createCommandMessages(LangServiceImpl lang) {
         try {
             CommandMessageKeys keys = lang.bind(
-                    CommandMessageKeys.class,
-                    List.of(new ZhCN(), new EnGB())
+                    CommandMessageKeys.class
             );
             return new CommandMessageRouter(keys);
         } catch (Throwable t) {
@@ -182,8 +181,7 @@ public final class RuntimeCore<P> implements AutoCloseable {
 
         try {
             var keys = lang.bind(
-                    LinlangInternalMessageKeys.class,
-                    List.of(new core.linlang.audit.internal.i18n.ZhCN(), new core.linlang.audit.internal.i18n.EnGB())
+                    LinlangInternalMessageKeys.class
             );
             LinMsg.installKeys(() -> keys);
             LinMsg.install(lang::tr);

@@ -1,79 +1,84 @@
 package core.linlang.file.impl;
 
 import api.linlang.audit.LinLog;
-
-// linlang-core/src/main/java/io/linlang/file/impl/LangServiceImpl.java
-
 import api.linlang.file.file.FileType;
 import api.linlang.file.file.LangService;
 import api.linlang.file.file.annotations.LangPack;
 import api.linlang.file.file.annotations.NoEmit;
-import api.linlang.file.file.implement.LocaleProvider;
+import api.linlang.file.file.tool.LocaleId;
 import api.linlang.file.file.path.PathResolver;
 import core.linlang.audit.internal.LinMsg;
-import core.linlang.file.runtime.TreeMapper;
 import core.linlang.file.runtime.LocaleTag;
+import core.linlang.file.runtime.TreeMapper;
 import core.linlang.file.util.IOs;
-import core.linlang.yaml.YamlCodec;
 import core.linlang.json.JsonCodec;
+import core.linlang.total.i18n.LocaleAware;
+import core.linlang.yaml.YamlCodec;
 
-import java.nio.file.Path;
+import java.io.InputStream;
 import java.text.MessageFormat;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
-import core.linlang.total.i18n.LocaleAware;
 
+/**
+ * File-driven language service.
+ *
+ * <p>Each Keys Class is annotated with {@link LangPack}. The annotation declares:</n * <ul>
+ *     <li>filePath: plugin data folder sub-directory to store locale files</li>
+ *     <li>format: YAML or JSON</li>
+ * </ul>
+ *
+ * <p>Default (built-in) language resources are loaded from Java resources:
+ * <pre>
+ *   /langservice/<filePath>/<locale>.yml
+ *   /langservice/<filePath>/<locale>.json
+ * </pre>
+ *
+ * <p>Active locale follows Linlang's global locale model (updated via events). This service simply
+ * reacts to {@link #setLocale(String)} and refreshes all bound holders in-place.</p>
+ */
 public final class LangServiceImpl implements LangService, LocaleAware {
+
+    private static final String RESOURCE_ROOT = "langservice";
+
     private final PathResolver paths;
+
+    /** Currently applied locale (global). */
     private volatile LocaleTag applied = LocaleTag.parse("zh_CN");
 
-    private final Map<String, Map<String, String>> cache = new java.util.concurrent.ConcurrentHashMap<>();
+    /** Flattened cache: locale -> (keyPath -> stringValue). */
+    private final Map<String, Map<String, String>> cache = new ConcurrentHashMap<>();
 
-    // 已绑定对象：用于 reload/saveAll/saveObject 无需外部传参
-    private record BoundKey(Class<?> type, String locale) {
-    }
-
-    private static record PackPath(String path, String name, FileType fmt) {
-    }
-
-    private static <T> PackPath resolvePackPath(Class<T> keysClass, String locale) {
-        LangPack lp = keysClass.getAnnotation(LangPack.class);
-        if (lp == null) {
-            return new PackPath("lang", locale, FileType.YAML);
-        }
-        String name = (lp.name() == null || lp.name().isBlank()) ? locale : lp.name();
-        return new PackPath(lp.path(), name, lp.format());
-    }
-
+    /**
+     * One bound KeysClass keeps one live holder instance.
+     * The holder is updated in-place on reload/locale changes.
+     */
     private static final class BoundMeta {
-        Object holder;
-        Path file;
-        FileType fmt;
-        boolean emit;
-        LocaleProvider<?> provider; // 记录 bind 时选用的 provider，用于 reload 时生成默认值
+        final Class<?> keysClass;
+        final Object holder;
+        final String filePath; // plugin subdir
+        final FileType fmt;
+        final boolean emit;
 
-        BoundMeta(Object h, Path f, FileType fm, boolean em, LocaleProvider<?> prov) {
-            this.holder = h;
-            this.file = f;
-            this.fmt = fm;
-            this.emit = em;
-            this.provider = prov;
+        BoundMeta(Class<?> keysClass, Object holder, String filePath, FileType fmt, boolean emit) {
+            this.keysClass = keysClass;
+            this.holder = holder;
+            this.filePath = filePath;
+            this.fmt = fmt;
+            this.emit = emit;
         }
     }
 
-    private final Map<BoundKey, BoundMeta> bound = new ConcurrentHashMap<>();
-
-    // 每个 keysClass 最近一次返回给调用者的 holder（用于 setLocale/reload 时切换该 holder 的语言内容）
-    private final Map<Class<?>, Object> activeHolders = new ConcurrentHashMap<>();
-
-    // 记录每个 keysClass 在 bind 时传入的 providers，用于 setLocale/ensureLocaleCacheLoaded 生成该 locale 的默认值
-    private final Map<Class<?>, List<LocaleProvider<?>>> providersByKeys = new ConcurrentHashMap<>();
+    /** keysClass -> meta */
+    private final Map<Class<?>, BoundMeta> bound = new ConcurrentHashMap<>();
 
     public LangServiceImpl(PathResolver paths) {
         this.paths = paths;
     }
 
-    // --- LocaleAware ---
+    // ------------------------------------------------------------
+    // LocaleAware
+    // ------------------------------------------------------------
 
     @Override
     public String locale() {
@@ -81,420 +86,191 @@ public final class LangServiceImpl implements LangService, LocaleAware {
         return (l == null ? "zh_CN" : l.tag());
     }
 
-    // —— 对象模式：单一键结构类 + 多语言提供者 —— //
     @Override
-    public <T> T bind(Class<T> keysClass,
-                      List<? extends LocaleProvider<T>> providers,
-                      boolean emit) {
-        // existing bind logic moved here (see below)
-        return bindInternal(keysClass, providers, emit);
+    public void setLocale(String locale) {
+        String normalized = LocaleId.normalize(locale());
+        String next = LocaleId.normalize(locale);
+        if (normalized.equalsIgnoreCase(next)) return;
+
+        this.applied = LocaleTag.parse(next);
+
+        // Switch all bound holders to the new locale, in-place.
+        try {
+            switchAllHoldersTo(next);
+        } catch (Throwable t) {
+            LinLog.warn("LangServiceImpl.setLocale failed: {}", t.getMessage());
+        }
+
+        LinLog.debug(LinMsg.k("linFile.lang.langChangeLocale"), "locale", next);
+    }
+
+    // ------------------------------------------------------------
+    // LangService API (file-driven)
+    // ------------------------------------------------------------
+
+    @Override
+    public <T> T bind(Class<T> keysClass) {
+        return bind(keysClass, true);
     }
 
     @Override
-    public <T> T bind(Class<T> keysClass,
-                      List<? extends LocaleProvider<T>> providers) {
-        return bindInternal(keysClass, providers, true);
-    }
+    public <T> T bind(Class<T> keysClass, boolean emit) {
+        Objects.requireNonNull(keysClass, "keysClass");
 
-    private <T> T bindInternal(Class<T> keysClass,
-                               List<? extends LocaleProvider<T>> providers,
-                               boolean emitFlag) {
-        // Normalize locale and debug entry
-        String locale = safeLocale(this.applied == null ? null : this.applied.tag());
-        LinLog.debug("bindInternal.enter", "keys", keysClass.getName(), "locale", locale);
-
-        // Defensive providers null check, use provList for further usage
-        List<? extends LocaleProvider<T>> provList = providers == null ? Collections.emptyList() : providers;
-        // 记住 providers（用于未来 setLocale 后补齐未 bind 的 locale）
-        if (!provList.isEmpty()) {
-            providersByKeys.putIfAbsent(keysClass, (List) List.copyOf((List) provList));
-        } else {
-            providersByKeys.putIfAbsent(keysClass, List.of());
-        }
-
-        // 1) 选择 provider
-        LocaleProvider<T> prov = null;
-        for (LocaleProvider<T> p : provList) {
-            String pl = (p == null ? null : p.locale());
-            if (pl != null && pl.equalsIgnoreCase(locale)) {
-                prov = p;
-                break;
+        // If already bound, return the same live instance.
+        BoundMeta existing = bound.get(keysClass);
+        if (existing != null && keysClass.isInstance(existing.holder)) {
+            @SuppressWarnings("unchecked")
+            T h = (T) existing.holder;
+            // Ensure it matches current locale content.
+            try {
+                loadAndPopulate(keysClass, h, LocaleId.normalize(locale()), existing.filePath, existing.fmt, existing.emit);
+            } catch (Throwable ignore) {
             }
-        }
-        // 2) 组装默认对象：类字段默认 + provider 默认
-        T defaults = newInstance(keysClass);
-        if (prov != null) prov.define(defaults);
-        Map<String, Object> defDoc = new LinkedHashMap<>();
-        TreeMapper.export(defaults, defDoc);
-
-        // 3) 读取/合并/写回，优先依据 @LangPack(path/name/format)
-        var pp = (prov != null) ? resolvePackPathFromProvider(prov.getClass(), locale) : resolvePackPath(keysClass, locale);
-        Path file = file(pp.path(), pp.name(), pp.fmt());
-        boolean exists = IOs.exists(file);
-        Map<String, Object> doc = exists
-                ? (pp.fmt() == FileType.YAML ? YamlCodec.load(IOs.readString(file)) : JsonCodec.load(IOs.readString(file)))
-                : new LinkedHashMap<>();
-        java.util.Set<String> missing = new java.util.LinkedHashSet<>();
-        mergeDefaultsCollect(defDoc, doc, "", missing);
-
-        Map<String, java.util.List<String>> comments =
-                (pp.fmt() == FileType.YAML) ? extractCommentsByLocale(keysClass, locale) : java.util.Collections.emptyMap();
-        LinLog.debug("comments.size", "n", (comments == null ? 0 : comments.size()));
-        if (comments != null)
-            for (var k : comments.keySet()) LinLog.debug("comment-key", "path", k);
-
-        boolean annotatedNoEmit = keysClass.isAnnotationPresent(NoEmit.class)
-                || (!provList.isEmpty() && provList.stream().anyMatch(p -> p != null && p.getClass().isAnnotationPresent(NoEmit.class)));
-        boolean shouldEmit = emitFlag && !annotatedNoEmit;
-
-        if (!exists) {
-            if (shouldEmit) {
-                ensureCommentAnchors(doc, comments);
-                LinLog.debug("ensured anchors for comments");
-                persist(file, pp.fmt(), doc, comments);
-                LinLog.debug(LinMsg.k("linFile.lang.langChangeLocale"), "locale", locale, "file", file);
-            }
-        } else {
-            if (shouldEmit && !missing.isEmpty()) {
-                writeDiff(file, pp.fmt(), doc, missing);
-            }
-            if (shouldEmit) {
-                ensureCommentAnchors(doc, comments);
-                LinLog.debug("ensured anchors for comments");
-                persist(file, pp.fmt(), doc, comments);
-                LinLog.debug(LinMsg.k("linFile.lang.langChangeLocale"), "locale", locale, "file", file);
-            }
+            return h;
         }
 
-        // 4) 回填到已有 holder（若之前绑定过），否则创建新实例
-        BoundKey bk = new BoundKey(keysClass, locale);
-        T holder;
-        BoundMeta bm = bound.get(bk);
-        if (bm != null && keysClass.isInstance(bm.holder)) {
-            holder = keysClass.cast(bm.holder);
-            TreeMapper.populate(holder, doc);
-            bm.file = file;
-            bm.fmt = pp.fmt();
-            bm.emit = shouldEmit;
-            bm.provider = prov;
-        } else {
-            holder = newInstance(keysClass);
-            TreeMapper.populate(holder, doc);
-            bound.put(bk, new BoundMeta(holder, file, pp.fmt(), shouldEmit, prov));
-        }
+        PackSpec spec = packSpec(keysClass);
+        boolean annotatedNoEmit = keysClass.isAnnotationPresent(NoEmit.class);
+        boolean shouldEmit = emit && spec.emit && !annotatedNoEmit;
 
-        // 5) 缓存扁平化：合并到该 locale 的总键表（避免多次 bind 覆盖之前的键）
-        Map<String, String> flat = flatten(doc);
-        LinLog.debug("cache.merge", "locale", locale, "keys", flat.size());
-        Map<String, String> bucket = cache.get(locale);
-        if (bucket == null) {
-            bucket = new LinkedHashMap<>();
-            cache.put(locale, bucket);
-        }
-        bucket.putAll(flat);
-        // 记录该 keysClass 当前对外暴露的 holder，后续 setLocale/reload 会对它执行语言切换
-        activeHolders.put(keysClass, holder);
-        setLocale(locale);
+        T holder = newInstance(keysClass);
+        String cur = LocaleId.normalize(locale());
+
+        loadAndPopulate(keysClass, holder, cur, spec.filePath, spec.fmt, shouldEmit);
+
+        bound.put(keysClass, new BoundMeta(keysClass, holder, spec.filePath, spec.fmt, shouldEmit));
         return holder;
     }
 
-    public <T> void save(Class<T> keysClass, String locale, boolean emit) {
-        BoundKey bk = new BoundKey(keysClass, locale);
-        BoundMeta bm = bound.get(bk);
+    @Override
+    public <T> void save(Class<T> keysClass, String locale) {
+        Objects.requireNonNull(keysClass, "keysClass");
+        String loc = LocaleId.normalize(locale);
+
+        BoundMeta bm = bound.get(keysClass);
         if (bm == null || bm.holder == null) return;
+
         @SuppressWarnings("unchecked")
         T holder = (T) bm.holder;
+
         Map<String, Object> out = new LinkedHashMap<>();
         TreeMapper.export(holder, out);
-        var pp = (bm != null && bm.provider != null)
-                ? resolvePackPathFromProvider(bm.provider.getClass(), locale)
-                : resolvePackPath(keysClass, locale);
-        Path f = bm.file != null ? bm.file : file(pp.path(), pp.name(), pp.fmt());
+
+        java.nio.file.Path f = diskFile(bm.filePath, loc, bm.fmt);
+        if (!bm.emit) return;
+
         try {
             Map<String, Object> curr = IOs.exists(f)
-                    ? (pp.fmt() == FileType.YAML ? YamlCodec.load(IOs.readString(f)) : JsonCodec.load(IOs.readString(f)))
+                    ? readDoc(f, bm.fmt)
                     : new LinkedHashMap<>();
+
             mergeOverwrite(curr, out);
-            Map<String, java.util.List<String>> comments =
-                    (pp.fmt() == FileType.YAML) ? extractCommentsByLocale(keysClass, locale) : java.util.Collections.emptyMap();
+
+            Map<String, List<String>> comments = (bm.fmt == FileType.YAML)
+                    ? extractComments(keysClass, loc)
+                    : Collections.emptyMap();
             ensureCommentAnchors(curr, comments);
-            if (emit) {
-                persist(f, pp.fmt(), curr, comments);
-            }
-            Map<String, String> flat = flatten(curr);
-            cache.computeIfAbsent(locale, k -> new LinkedHashMap<>()).putAll(flat);
+
+            persist(f, bm.fmt, curr, comments);
+
+            cache.computeIfAbsent(loc, k -> new LinkedHashMap<>()).putAll(flatten(curr));
         } catch (Exception e) {
             LinLog.warn(LinMsg.k("linFile.lang.langSaveFailed"), "lang", f, "reason", e.getMessage());
         }
     }
 
     @Override
-    public <T> void save(Class<T> keysClass, String locale) {
-        BoundKey bk = new BoundKey(keysClass, locale);
-        BoundMeta bm = bound.get(bk);
-        boolean emit = bm != null ? bm.emit : true;
-        save(keysClass, locale, emit);
-    }
-
-    @Override
     public void saveAll() {
-        for (Map.Entry<BoundKey, BoundMeta> e : bound.entrySet()) {
-            BoundKey k = e.getKey();
-            save((Class<Object>) k.type(), k.locale());
+        for (BoundMeta bm : new ArrayList<>(bound.values())) {
+            if (bm == null) continue;
+            save((Class<Object>) bm.keysClass, LocaleId.normalize(locale()));
         }
     }
 
     @Override
     public void reload() {
-        // 基于当前已 bind 的对象进行“就地”重载（不更换 holder 引用）
+        String cur = LocaleId.normalize(locale());
+
+        // Rebuild cache from scratch for the current locale for all bound holders.
         Map<String, Map<String, String>> newCache = new LinkedHashMap<>();
 
-        java.util.List<java.util.Map.Entry<BoundKey, BoundMeta>> snapshot =
-                new java.util.ArrayList<>(bound.entrySet());
-
-        for (var e : snapshot) {
-            BoundKey k = e.getKey();
-            BoundMeta bm = e.getValue();
-            if (k == null || bm == null || bm.holder == null) continue;
-
-            Class<?> keysClass = k.type();
-            String locale = k.locale();
-
+        for (BoundMeta bm : new ArrayList<>(bound.values())) {
+            if (bm == null || bm.holder == null) continue;
             try {
-                reloadOne(keysClass, locale, bm, newCache);
+                Map<String, Object> doc = loadDocFor(bm.keysClass, cur, bm.filePath, bm.fmt, bm.emit);
+                TreeMapper.populate(bm.holder, doc);
+
+                newCache.computeIfAbsent(cur, k -> new LinkedHashMap<>()).putAll(flatten(doc));
             } catch (Exception ex) {
-                Path f = bm.file;
-                LinLog.warn(LinMsg.k("linFile.lang.langReloadLangFailed"), "lang", (f == null ? keysClass : f), "reason", ex.getMessage());
+                LinLog.warn(LinMsg.k("linFile.lang.langReloadLangFailed"), "lang", bm.keysClass, "reason", ex.getMessage());
             }
         }
 
         cache.clear();
         cache.putAll(newCache);
 
-        // reload 会重建 cache（只包含已 bind 的 locale）；这里补齐当前语言，避免 setLocale 后再次 reload 失效
-        LocaleTag cur = this.applied;
-        if (cur != null) {
-            try {
-                ensureLocaleCacheLoaded(cur.tag());
-            } catch (Throwable ignore) {
-            }
-            try {
-                switchActiveHoldersToLocale(cur.tag());
-            } catch (Throwable ignore) {
-            }
-        }
-
         LinLog.info(LinMsg.k("linFile.lang.LangReloaded"));
     }
 
-    /**
-     * 对单个 (keysClass, locale) 执行“就地”重载：读取磁盘 → 合并默认值 → diff/写回（可选）→ populate 到既有 holder → 更新缓存。
-     * <p>
-     * 注意：此方法不会更换 holder 引用；外部持有的 keys 实例将直接看到字段更新。
-     * </p>
-     */
-    @SuppressWarnings({"unchecked", "rawtypes"})
-    private void reloadOne(Class<?> keysClass, String locale, BoundMeta bm, Map<String, Map<String, String>> newCache) {
-        // 解析文件位置与格式：优先使用 bound 时记录的 file/fmt；缺失则按 provider/keysClass 的 @LangPack 推导
-        Path file;
-        FileType fmt;
-        if (bm.file != null && bm.fmt != null) {
-            file = bm.file;
-            fmt = bm.fmt;
-        } else {
-            PackPath pp = (bm.provider != null)
-                    ? resolvePackPathFromProvider(bm.provider.getClass(), locale)
-                    : resolvePackPath(keysClass, locale);
-            file = file(pp.path(), pp.name(), pp.fmt());
-            fmt = pp.fmt();
-            bm.file = file;
-            bm.fmt = fmt;
+    @Override
+    public Set<String> availableLocales() {
+        Set<String> out = new LinkedHashSet<>();
+        for (BoundMeta bm : new ArrayList<>(bound.values())) {
+            if (bm == null) continue;
+            out.addAll(scanLocalesOnDisk(bm.filePath, bm.fmt));
         }
-
-        boolean exists = IOs.exists(file);
-        Map<String, Object> doc = exists
-                ? (fmt == FileType.YAML ? YamlCodec.load(IOs.readString(file)) : JsonCodec.load(IOs.readString(file)))
-                : new LinkedHashMap<>();
-
-        // 构建默认值：类字段默认 + provider 默认（若存在）
-        Object defaults = newInstance((Class) keysClass);
-        if (bm.provider != null) {
-            try {
-                ((LocaleProvider) bm.provider).define(defaults);
-            } catch (Throwable ignore) {
-                // provider 默认值失败不影响 reload 主流程
-            }
-        }
-        Map<String, Object> defDoc = new LinkedHashMap<>();
-        TreeMapper.export(defaults, defDoc);
-
-        // 合并默认值并收集缺失键（让删除字段/缺失字段在 reload 后回到默认值）
-        java.util.Set<String> missing = new java.util.LinkedHashSet<>();
-        mergeDefaultsCollect(defDoc, doc, "", missing);
-
-        // YAML 支持注释：为缺失键确保锚点，再写回
-        Map<String, java.util.List<String>> comments =
-                (fmt == FileType.YAML) ? extractCommentsByLocale(keysClass, locale) : java.util.Collections.emptyMap();
-
-        boolean shouldEmit = bm.emit;
-        if (shouldEmit) {
-            ensureCommentAnchors(doc, comments);
-            if (!missing.isEmpty()) {
-                writeDiff(file, fmt, (Map<String, Object>) doc, missing);
-            }
-            // 即使没有缺失键，也写回一次以保证格式/注释一致（与 bindInternal 行为一致）
-            persist(file, fmt, (Map<String, Object>) doc, comments);
-        }
-
-        // 就地回填到既有 holder
-        TreeMapper.populate(bm.holder, (Map<String, Object>) doc);
-
-        // 更新扁平化缓存
-        Map<String, String> flat = flatten((Map<String, Object>) doc);
-        newCache.computeIfAbsent(locale, l -> new LinkedHashMap<>()).putAll(flat);
+        return out;
     }
 
     @Override
-    public void setLocale(String locale) {
-        String normalized = safeLocale(locale);
-        LocaleTag cur = this.applied;
-        if (cur != null && cur.tag().equalsIgnoreCase(normalized)) return;
-
-        this.applied = LocaleTag.parse(normalized);
-
-        try { ensureLocaleCacheLoaded(normalized); } catch (Throwable ignore) {}
-        try { switchActiveHoldersToLocale(normalized); } catch (Throwable ignore) {}
-
-        LinLog.debug(LinMsg.k("linFile.lang.langChangeLocale"), "locale", normalized);
+    public void ensureAllLocales() {
+        for (BoundMeta bm : new ArrayList<>(bound.values())) {
+            if (bm == null) continue;
+            ensure(bm.keysClass);
+        }
     }
-    /**
-     * 将当前对外暴露的 holder（activeHolders）切换到指定 locale。
-     * <p>
-     * 目的：插件通常会长期持有 bind(...) 返回的 keys 实例（如 LangKeys lang）。
-     * 如果仅切换 current/cache，而不更新该实例字段，则插件直接读 lang.xxx 时仍是旧语言。
-     * </p>
-     * <p>
-     * 此方法会：为每个 keysClass 加载/生成该 locale 的 doc，并 populate 到 active holder；
-     * 同时维护 bound 映射，确保后续 reloadOne 不会因旧 locale 重复覆盖同一个 holder。
-     * </p>
-     */
-    @SuppressWarnings({"unchecked", "rawtypes"})
-    private void switchActiveHoldersToLocale(String locale) {
-        if (locale == null || locale.isBlank()) return;
-        if (activeHolders.isEmpty()) return;
 
-        for (var en : new ArrayList<>(activeHolders.entrySet())) {
-            Class<?> keysClass = en.getKey();
-            Object holder = en.getValue();
-            if (keysClass == null || holder == null) continue;
+    @Override
+    public <T> void ensure(Class<T> keysClass) {
+        BoundMeta bm = bound.get(keysClass);
+        PackSpec spec = bm != null ? new PackSpec(bm.filePath, bm.fmt, bm.emit) : packSpec(keysClass);
+        boolean emit = bm != null ? bm.emit : spec.emit;
 
-            // 选择与 locale 匹配的 provider（如果 bind 时传入过 providers）
-            LocaleProvider<?> prov = null;
-            List<LocaleProvider<?>> provList = (List) providersByKeys.getOrDefault(keysClass, List.of());
-            if (provList != null && !provList.isEmpty()) {
-                for (LocaleProvider<?> p : provList) {
-                    if (p != null && p.locale() != null && p.locale().equalsIgnoreCase(locale)) {
-                        prov = p;
-                        break;
-                    }
-                }
-            }
+        if (!emit) return;
 
-            // 推导 pack 路径：优先 provider 上的 @LangPack，否则 keysClass 上的 @LangPack
-            PackPath pp = (prov != null)
-                    ? resolvePackPathFromProvider(prov.getClass(), locale)
-                    : resolvePackPath(keysClass, locale);
-            Path f = file(pp.path(), pp.name(), pp.fmt());
-            boolean exists = IOs.exists(f);
-
-            // emit 策略：@NoEmit 直接禁用；否则尽量沿用该 keysClass 已 bind 的 emit 偏好
-            boolean annotatedNoEmit = keysClass.isAnnotationPresent(NoEmit.class)
-                    || (prov != null && prov.getClass().isAnnotationPresent(NoEmit.class));
-            boolean emit = !annotatedNoEmit;
-            if (emit) {
-                for (var be : bound.entrySet()) {
-                    BoundKey bk = be.getKey();
-                    BoundMeta bm = be.getValue();
-                    if (bk != null && bm != null && bk.type() == keysClass) {
-                        emit = bm.emit;
-                        break;
-                    }
-                }
-            }
-
-            // 读/生成/合并 defaults
-            Map<String, Object> doc;
+        // For each locale file on disk under this pack, merge defaults and write back.
+        for (String loc : scanLocalesOnDisk(spec.filePath, spec.fmt)) {
             try {
-                Object defaults = newInstance((Class) keysClass);
-                if (prov != null) {
-                    try { ((LocaleProvider) prov).define(defaults); } catch (Throwable ignore) {}
-                }
-                Map<String, Object> defDoc = new LinkedHashMap<>();
-                TreeMapper.export(defaults, defDoc);
+                java.nio.file.Path f = diskFile(spec.filePath, loc, spec.fmt);
+                Map<String, Object> doc = IOs.exists(f) ? readDoc(f, spec.fmt) : new LinkedHashMap<>();
 
-                if (exists) {
-                    doc = (pp.fmt() == FileType.YAML)
-                            ? YamlCodec.load(IOs.readString(f))
-                            : JsonCodec.load(IOs.readString(f));
-                    if (doc == null) doc = new LinkedHashMap<>();
-                } else {
-                    doc = new LinkedHashMap<>();
-                }
-
+                Map<String, Object> defaults = defaultsDoc(keysClass);
                 Set<String> missing = new LinkedHashSet<>();
-                mergeDefaultsCollect(defDoc, doc, "", missing);
+                mergeDefaultsCollect(defaults, doc, "", missing);
 
-                Map<String, List<String>> comments =
-                        (pp.fmt() == FileType.YAML) ? extractCommentsByLocale(keysClass, locale) : Collections.emptyMap();
+                Map<String, List<String>> comments = (spec.fmt == FileType.YAML)
+                        ? extractComments(keysClass, loc)
+                        : Collections.emptyMap();
+                ensureCommentAnchors(doc, comments);
 
-                if (emit) {
-                    ensureCommentAnchors(doc, comments);
-                    if (exists && !missing.isEmpty()) {
-                        writeDiff(f, pp.fmt(), (Map<String, Object>) doc, missing);
-                    }
-                    persist(f, pp.fmt(), (Map<String, Object>) doc, comments);
+                if (!missing.isEmpty()) {
+                    writeDiff(f, spec.fmt, doc, missing);
                 }
-            } catch (Exception ex) {
-                // 单个 keysClass 失败不影响其他
-                continue;
-            }
+                persist(f, spec.fmt, doc, comments);
 
-            // populate 到 active holder（不更换引用）
-            TreeMapper.populate(holder, (Map<String, Object>) doc);
-
-            // 同步 bound：移除该 holder 旧的 boundKey（避免 reload() 多次覆盖同一 holder），并放入新的 (type, locale)
-            BoundMeta existingMeta = null;
-            for (var it = bound.entrySet().iterator(); it.hasNext(); ) {
-                var be = it.next();
-                BoundKey bk = be.getKey();
-                BoundMeta bm = be.getValue();
-                if (bk == null || bm == null) continue;
-                if (bk.type() == keysClass && bm.holder == holder) {
-                    existingMeta = bm;
-                    it.remove();
-                }
+                cache.computeIfAbsent(loc, k -> new LinkedHashMap<>()).putAll(flatten(doc));
+            } catch (Throwable t) {
+                LinLog.warn("ensure failed: keys={}, locale={}, err={}", keysClass.getName(), loc, t.getMessage());
             }
-            if (existingMeta == null) {
-                existingMeta = new BoundMeta(holder, f, pp.fmt(), emit, prov);
-            } else {
-                existingMeta.file = f;
-                existingMeta.fmt = pp.fmt();
-                existingMeta.emit = emit;
-                existingMeta.provider = prov;
-            }
-            bound.put(new BoundKey(keysClass, locale), existingMeta);
-
-            // 更新该 locale 的 cache bucket（若 cache 已存在则 merge）
-            Map<String, String> flat = flatten((Map<String, Object>) doc);
-            cache.computeIfAbsent(locale, k -> new LinkedHashMap<>()).putAll(flat);
         }
     }
 
     @Override
     public String tr(String key, Object... args) {
-        LocaleTag cur = this.applied != null ? this.applied : LocaleTag.parse("en_GB");
+        String cur = LocaleId.normalize(locale());
         String v = val(cur, key);
-        if (v == null) v = val(LocaleTag.parse("en_GB"), key);
+        if (v == null) v = val("en_GB", key);
         if (v == null) v = key;
 
         try {
@@ -506,61 +282,267 @@ public final class LangServiceImpl implements LangService, LocaleAware {
                         v = v.replace("{" + k + "}", val);
                     }
                     return v;
-                } else {
-                    // 位置模式：直接走 MessageFormat（支持 {0} 风格），
-                    // 注意：MessageFormat 会把单引号当作转义，若需要字面量单引号请在文案里写成 ''
-                    return MessageFormat.format(v, args);
                 }
+                return MessageFormat.format(v, args);
             }
             return v;
         } catch (Exception e) {
-            // 容错：格式化失败不抛出，返回未格式化内容并打印调试日志
-            LinLog.debug("tr.format-error ", "key", key, "msg", v, "err", e);
+            LinLog.debug("tr.format-error", "key", key, "msg", v, "err", e);
             return v;
         }
     }
 
-    // —— 私有 —— //
-    private Path file(String path, String name, FileType fmt) {
-        String ext = fmt == FileType.YAML ? ".yml" : ".json";
-        String p = (path == null || path.isBlank()) ? "lang" : path;
-        if (p.startsWith("/")) p = p.substring(1); // normalise
-        Path dir = paths.root().resolve(p);
-        IOs.ensureDir(dir);
-        return dir.resolve(name + ext);
+    // ------------------------------------------------------------
+    // Core loading / switching
+    // ------------------------------------------------------------
+
+    private void switchAllHoldersTo(String locale) {
+        String loc = LocaleId.normalize(locale);
+
+        // Rebuild cache bucket for this locale from all packs.
+        Map<String, String> bucket = new LinkedHashMap<>();
+
+        for (BoundMeta bm : new ArrayList<>(bound.values())) {
+            if (bm == null || bm.holder == null) continue;
+
+            Map<String, Object> doc = loadDocFor(bm.keysClass, loc, bm.filePath, bm.fmt, bm.emit);
+            TreeMapper.populate(bm.holder, doc);
+            bucket.putAll(flatten(doc));
+        }
+
+        if (!bucket.isEmpty()) {
+            cache.put(loc, bucket);
+        }
     }
 
-    private static PackPath resolvePackPathFromProvider(Class<?> providerCls, String locale) {
-        LangPack lp = providerCls.getAnnotation(LangPack.class);
+    private <T> void loadAndPopulate(Class<T> keysClass,
+                                    T holder,
+                                    String locale,
+                                    String filePath,
+                                    FileType fmt,
+                                    boolean emit) {
+        Map<String, Object> doc = loadDocFor(keysClass, LocaleId.normalize(locale), filePath, fmt, emit);
+        TreeMapper.populate(holder, doc);
+
+        cache.computeIfAbsent(LocaleId.normalize(locale), k -> new LinkedHashMap<>()).putAll(flatten(doc));
+    }
+
+    private Map<String, Object> loadDocFor(Class<?> keysClass,
+                                          String locale,
+                                          String filePath,
+                                          FileType fmt,
+                                          boolean emit) {
+        String loc = LocaleId.normalize(locale);
+
+        // 1) Normalize disk filenames in this pack (enGB -> en_GB)
+        normalizeDiskLocales(filePath, fmt);
+
+        java.nio.file.Path f = diskFile(filePath, loc, fmt);
+
+        Map<String, Object> doc;
+        boolean exists = IOs.exists(f);
+        if (exists) {
+            doc = readDoc(f, fmt);
+        } else {
+            // 2) Try built-in resource: /langservice/<filePath>/<locale>.(yml/json)
+            Map<String, Object> fromRes = readBuiltinResource(filePath, loc, fmt);
+            doc = (fromRes != null) ? fromRes : new LinkedHashMap<>();
+        }
+
+        // 3) Merge defaults (schema) and collect missing
+        Map<String, Object> defaults = defaultsDoc(keysClass);
+        Set<String> missing = new LinkedHashSet<>();
+        mergeDefaultsCollect(defaults, doc, "", missing);
+
+        // 4) Write back / generate file if allowed
+        if (emit && !keysClass.isAnnotationPresent(NoEmit.class)) {
+            Map<String, List<String>> comments = (fmt == FileType.YAML)
+                    ? extractComments(keysClass, loc)
+                    : Collections.emptyMap();
+
+            ensureCommentAnchors(doc, comments);
+
+            if (!exists) {
+                persist(f, fmt, doc, comments);
+            } else {
+                if (!missing.isEmpty()) {
+                    writeDiff(f, fmt, doc, missing);
+                }
+                // Keep behavior consistent with old impl: persist to keep comments/format stable.
+                persist(f, fmt, doc, comments);
+            }
+        }
+
+        return doc;
+    }
+
+    private Map<String, Object> readBuiltinResource(String filePath, String locale, FileType fmt) {
+        String ext = extOf(fmt);
+        String p = RESOURCE_ROOT + "/" + stripLeadingSlash(filePath) + "/" + locale + ext;
+
+        try (InputStream in = LangServiceImpl.class.getClassLoader().getResourceAsStream(p)) {
+            if (in == null) return null;
+            String s = new String(in.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
+            if (s.isBlank()) return null;
+            return (fmt == FileType.YAML) ? YamlCodec.load(s) : JsonCodec.load(s);
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    private static String stripLeadingSlash(String s) {
+        if (s == null) return "";
+        String t = s;
+        while (t.startsWith("/")) t = t.substring(1);
+        return t;
+    }
+
+    // ------------------------------------------------------------
+    // Pack spec (annotation)
+    // ------------------------------------------------------------
+
+    private static final class PackSpec {
+        final String filePath;
+        final FileType fmt;
+        final boolean emit;
+
+        PackSpec(String filePath, FileType fmt, boolean emit) {
+            this.filePath = (filePath == null || filePath.isBlank()) ? "lang" : filePath;
+            this.fmt = (fmt == null) ? FileType.YAML : fmt;
+            this.emit = emit;
+        }
+    }
+
+    private static PackSpec packSpec(Class<?> keysClass) {
+        LangPack lp = keysClass.getAnnotation(LangPack.class);
         if (lp == null) {
-            return new PackPath("lang", locale, FileType.YAML);
+            return new PackSpec("lang", FileType.YAML, true);
         }
-        String name = (lp.name() == null || lp.name().isBlank()) ? locale : lp.name();
-        return new PackPath(lp.path(), name, lp.format());
-    }
 
-    private void persist(Path f, FileType fmt, Map<String, Object> doc) {
+        String fp = null;
+        FileType fmt = null;
+        Boolean em = null;
+
+        // Reflective access to tolerate annotation evolution (path vs filePath, emit optional)
         try {
-            IOs.writeString(f, fmt == FileType.YAML ? YamlCodec.dump(doc) : JsonCodec.dump(doc));
-            LinLog.debug(LinMsg.k("linFile.lang.langSaved"), "lang", f);
-        } catch (Exception e) {
-            LinLog.warn(LinMsg.k("linFile.lang.langSaveFailed"), "lang", f, "reason", e.getMessage());
-            throw new RuntimeException(e);
+            var m = lp.annotationType().getMethod("filePath");
+            fp = String.valueOf(m.invoke(lp));
+        } catch (Throwable ignore) {
+            try {
+                var m = lp.annotationType().getMethod("path");
+                fp = String.valueOf(m.invoke(lp));
+            } catch (Throwable ignore2) {
+            }
+        }
+
+        try {
+            var m = lp.annotationType().getMethod("format");
+            Object v = m.invoke(lp);
+            if (v instanceof FileType ft) fmt = ft;
+        } catch (Throwable ignore) {
+        }
+
+        try {
+            var m = lp.annotationType().getMethod("emit");
+            Object v = m.invoke(lp);
+            if (v instanceof Boolean b) em = b;
+        } catch (Throwable ignore) {
+        }
+
+        return new PackSpec(fp, fmt, em == null ? true : em);
+    }
+
+    // ------------------------------------------------------------
+    // Disk helpers: path, scan, normalize
+    // ------------------------------------------------------------
+
+    private java.nio.file.Path diskDir(String filePath) {
+        String p = stripLeadingSlash(filePath);
+        java.nio.file.Path dir = paths.root().resolve(p);
+        IOs.ensureDir(dir);
+        return dir;
+    }
+
+    private java.nio.file.Path diskFile(String filePath, String locale, FileType fmt) {
+        java.nio.file.Path dir = diskDir(filePath);
+        return dir.resolve(LocaleId.normalize(locale) + extOf(fmt));
+    }
+
+    private Set<String> scanLocalesOnDisk(String filePath, FileType fmt) {
+        normalizeDiskLocales(filePath, fmt);
+
+        java.nio.file.Path dir = diskDir(filePath);
+        String ext = extOf(fmt);
+        Set<String> out = new LinkedHashSet<>();
+        try {
+            if (!IOs.exists(dir)) return out;
+            try (var st = java.nio.file.Files.list(dir)) {
+                st.filter(p -> p != null && p.getFileName() != null)
+                        .filter(p -> p.getFileName().toString().endsWith(ext))
+                        .forEach(p -> {
+                            String name = p.getFileName().toString();
+                            String base = name.substring(0, name.length() - ext.length());
+                            out.add(LocaleId.normalize(base));
+                        });
+            }
+        } catch (Throwable ignore) {
+        }
+        return out;
+    }
+
+    private void normalizeDiskLocales(String filePath, FileType fmt) {
+        java.nio.file.Path dir = diskDir(filePath);
+        String ext = extOf(fmt);
+        try {
+            if (!IOs.exists(dir)) return;
+            try (var st = java.nio.file.Files.list(dir)) {
+                st.filter(p -> p != null && p.getFileName() != null)
+                        .filter(p -> p.getFileName().toString().endsWith(ext))
+                        .forEach(p -> {
+                            String name = p.getFileName().toString();
+                            String base = name.substring(0, name.length() - ext.length());
+                            String norm = LocaleId.normalize(base);
+                            if (!base.equals(norm)) {
+                                java.nio.file.Path to = dir.resolve(norm + ext);
+                                try {
+                                    java.nio.file.Files.move(p, to, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+                                } catch (Throwable ignore) {
+                                }
+                            }
+                        });
+            }
+        } catch (Throwable ignore) {
         }
     }
 
-    private void persist(Path file, FileType fmt, Map<String, Object> doc, Map<String, java.util.List<String>> comments) {
+    // ------------------------------------------------------------
+    // Serialization helpers
+    // ------------------------------------------------------------
+
+    private static String extOf(FileType fmt) {
+        return fmt == FileType.YAML ? ".yml" : ".json";
+    }
+
+    private static Map<String, Object> readDoc(java.nio.file.Path file, FileType fmt) {
+        String s = IOs.readString(file);
+        Map<String, Object> m = (fmt == FileType.YAML) ? YamlCodec.load(s) : JsonCodec.load(s);
+        return m == null ? new LinkedHashMap<>() : m;
+    }
+
+    private static void persist(java.nio.file.Path file,
+                                FileType fmt,
+                                Map<String, Object> doc,
+                                Map<String, List<String>> comments) {
         String out = (fmt == FileType.YAML)
                 ? YamlCodec.dumpWithComments(doc, comments)
                 : JsonCodec.dump(doc);
-        try {
-            IOs.writeString(file, out);
-            LinLog.debug(LinMsg.k("linFile.lang.langSaved"), "lang", file);
-        } catch (Exception e) {
-            LinLog.warn(LinMsg.k("linFile.lang.langSaveFailed"), "lang", file, "reason", e.getMessage());
-            throw new RuntimeException(e);
-        }
+        IOs.writeString(file, out);
+        LinLog.debug(LinMsg.k("linFile.lang.langSaved"), "lang", file);
     }
+
+    // ------------------------------------------------------------
+    // Defaults schema + comments
+    // ------------------------------------------------------------
 
     private static <T> T newInstance(Class<T> t) {
         try {
@@ -570,14 +552,71 @@ public final class LangServiceImpl implements LangService, LocaleAware {
         }
     }
 
-    private Map<String, String> flatten(Map<String, Object> doc) {
+    private static Map<String, Object> defaultsDoc(Class<?> keysClass) {
+        Object defaults = newInstance((Class<Object>) keysClass);
+        Map<String, Object> defDoc = new LinkedHashMap<>();
+        TreeMapper.export(defaults, defDoc);
+        return defDoc;
+    }
+
+    private static Map<String, List<String>> extractComments(Class<?> clz, String locale) {
+        Map<String, List<String>> base = TreeMapper.extractComments(clz);
+        if (base == null) base = new LinkedHashMap<>();
+        Map<String, List<String>> localized = TreeMapper.extractI18nComments(clz, locale);
+        if (localized != null && !localized.isEmpty()) {
+            for (var e : localized.entrySet()) {
+                base.put(e.getKey(), e.getValue());
+            }
+        }
+        return base;
+    }
+
+    private static void ensureCommentAnchors(Map<String, Object> doc, Map<String, List<String>> comments) {
+        if (comments == null || comments.isEmpty()) return;
+        for (String path : comments.keySet()) {
+            if ("__header__".equals(path)) continue;
+            ensurePath(doc, path);
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private static void ensurePath(Map<String, Object> root, String dottedPath) {
+        if (dottedPath == null || dottedPath.isBlank()) return;
+        String[] segs = Arrays.stream(dottedPath.split("\\."))
+                .filter(s -> s != null && !s.isBlank())
+                .toArray(String[]::new);
+        if (segs.length == 0) return;
+
+        Map<String, Object> curr = root;
+        for (int i = 0; i < segs.length - 1; i++) {
+            String k = segs[i];
+            Object ex = curr.get(k);
+            if (!(ex instanceof Map)) {
+                Map<String, Object> child = new LinkedHashMap<>();
+                curr.put(k, child);
+                curr = child;
+            } else {
+                curr = (Map<String, Object>) ex;
+            }
+        }
+        String leaf = segs[segs.length - 1];
+        if (!curr.containsKey(leaf)) {
+            curr.put(leaf, "");
+        }
+    }
+
+    // ------------------------------------------------------------
+    // Flatten + lookup
+    // ------------------------------------------------------------
+
+    private static Map<String, String> flatten(Map<String, Object> doc) {
         Map<String, String> out = new LinkedHashMap<>();
         walk(doc, "", out);
         return out;
     }
 
     @SuppressWarnings("unchecked")
-    private void walk(Object node, String prefix, Map<String, String> out) {
+    private static void walk(Object node, String prefix, Map<String, String> out) {
         if (node instanceof Map<?, ?> map) {
             for (var e : map.entrySet()) {
                 String k = String.valueOf(e.getKey());
@@ -600,42 +639,18 @@ public final class LangServiceImpl implements LangService, LocaleAware {
         }
     }
 
-    @SuppressWarnings("unchecked")
-    private static Object readPath(Map<String, Object> root, String path) {
-        String[] ps = path.split("\\.");
-        Map<String, Object> curr = root;
-        for (int i = 0; i < ps.length - 1; i++) {
-            Object n = curr.get(ps[i]);
-            if (!(n instanceof Map)) return null;
-            curr = (Map<String, Object>) n;
-        }
-        return curr.get(ps[ps.length - 1]);
-    }
-
-    @SuppressWarnings("unchecked")
-    private static void writePath(Map<String, Object> root, String path, Object val) {
-        String[] ps = path.split("\\.");
-        Map<String, Object> curr = root;
-        for (int i = 0; i < ps.length - 1; i++) {
-            Object n = curr.get(ps[i]);
-            if (!(n instanceof Map)) {
-                n = new LinkedHashMap<String, Object>();
-                curr.put(ps[i], n);
-            }
-            curr = (Map<String, Object>) n;
-        }
-        curr.put(ps[ps.length - 1], val);
-    }
-
-    private String val(LocaleTag tag, String key) {
-        if (tag == null) return null;
-        Map<String, String> m = cache.get(tag.tag());
+    private String val(String locale, String key) {
+        Map<String, String> m = cache.get(LocaleId.normalize(locale));
         return m == null ? null : m.get(key);
     }
 
+    // ------------------------------------------------------------
+    // Merge helpers (defaults / overwrite)
+    // ------------------------------------------------------------
+
     @SuppressWarnings({"unchecked", "rawtypes"})
     private static void mergeDefaultsCollect(Map<?, ?> defaults, Map<?, ?> doc,
-                                             String prefix, java.util.Set<String> missing) {
+                                             String prefix, Set<String> missing) {
         for (Map.Entry<?, ?> e : defaults.entrySet()) {
             String k = String.valueOf(e.getKey());
             String path = prefix.isEmpty() ? k : prefix + "." + k;
@@ -643,24 +658,20 @@ public final class LangServiceImpl implements LangService, LocaleAware {
 
             Object existingKey = findExistingKey(doc, k);
             if (existingKey == null) {
-                ((Map) doc).put(k, dv); // 以字符串键写回，避免再次产生数字键
+                ((Map) doc).put(k, dv);
                 missing.add(path);
                 continue;
             }
+
             Object cv = ((Map) doc).get(existingKey);
             if (dv instanceof Map && cv instanceof Map) {
                 mergeDefaultsCollect((Map<?, ?>) dv, (Map<?, ?>) cv, path, missing);
             }
-            // 其他类型：保留 doc 值
         }
     }
 
-    /**
-     * 在 doc 中查找与字符串键 k 等价的已存在键；支持数字字符串(如 "1") 匹配 Integer/Long 键。
-     */
     private static Object findExistingKey(Map<?, ?> doc, String k) {
         if (doc.containsKey(k)) return k;
-        // 数字字符串 → Integer/Long
         try {
             int i = Integer.parseInt(k);
             if (doc.containsKey(i)) return i;
@@ -671,7 +682,6 @@ public final class LangServiceImpl implements LangService, LocaleAware {
             if (doc.containsKey(l)) return l;
         } catch (NumberFormatException ignore) {
         }
-        // 布尔
         if ("true".equalsIgnoreCase(k) && doc.containsKey(Boolean.TRUE)) return Boolean.TRUE;
         if ("false".equalsIgnoreCase(k) && doc.containsKey(Boolean.FALSE)) return Boolean.FALSE;
         return null;
@@ -685,13 +695,11 @@ public final class LangServiceImpl implements LangService, LocaleAware {
             Object bv = base.get(k);
 
             if (ov instanceof Map && bv instanceof Map) {
-                // 递归：保证子 Map 的键为字符串视图
                 Map<String, Object> bSub = ensureStringKeyMap((Map<?, ?>) bv);
                 Map<String, Object> oSub = ensureStringKeyMap((Map<?, ?>) ov);
                 mergeOverwrite(bSub, oSub);
                 base.put(k, bSub);
             } else {
-                // 其他类型，直接覆盖
                 base.put(k, ov);
             }
         }
@@ -699,7 +707,6 @@ public final class LangServiceImpl implements LangService, LocaleAware {
 
     @SuppressWarnings({"unchecked", "rawtypes"})
     private static Map<String, Object> ensureStringKeyMap(Map<?, ?> src) {
-        // 若已全部为 String 键，直接视图返回（仍会有一次受检转换）
         boolean allString = true;
         for (Object key : src.keySet()) {
             if (!(key instanceof String)) {
@@ -710,7 +717,6 @@ public final class LangServiceImpl implements LangService, LocaleAware {
         if (allString) {
             return (Map<String, Object>) (Map) src;
         }
-        // 否则拷贝为 String 键 Map
         Map<String, Object> m = new LinkedHashMap<>();
         for (Map.Entry<?, ?> en : src.entrySet()) {
             String k = String.valueOf(en.getKey());
@@ -723,18 +729,20 @@ public final class LangServiceImpl implements LangService, LocaleAware {
         return m;
     }
 
-    private void writeDiff(Path f, FileType fmt, Map<String, Object> fullDoc, java.util.Set<String> missing) {
-        if (missing.isEmpty()) return;
+    // ------------------------------------------------------------
+    // Diff writer (keep old behavior)
+    // ------------------------------------------------------------
+
+    private void writeDiff(java.nio.file.Path f, FileType fmt, Map<String, Object> fullDoc, Set<String> missing) {
+        if (missing == null || missing.isEmpty()) return;
         try {
-            Path diff = f.getParent().resolve(stripExt(f.getFileName().toString()) + "-diff" + extOf(fmt));
+            java.nio.file.Path diff = f.getParent().resolve(stripExt(f.getFileName().toString()) + "-diff" + extOf(fmt));
             if (fmt == FileType.YAML) {
-                // Build a map of missing path -> default value (from merged fullDoc)
                 Map<String, Object> missingVals = new LinkedHashMap<>();
                 for (String path : missing) {
                     Object v = readPath(fullDoc, path);
                     missingVals.put(path, v);
                 }
-                // Remove missing keys from a pruned copy so we don't duplicate keys, then insert with comments+values
                 Map<String, Object> pruned = deepCopyMap(fullDoc);
                 for (String path : missing) {
                     deletePath(pruned, path);
@@ -745,13 +753,15 @@ public final class LangServiceImpl implements LangService, LocaleAware {
                 LinLog.info(LinMsg.k("linFile.lang.langGeneratedDifferent"), "diff", diff);
             } else {
                 Map<String, Object> wrapper = new LinkedHashMap<>();
-                wrapper.put("_missing", new java.util.ArrayList<>(missing));
+                wrapper.put("_missing", new ArrayList<>(missing));
                 wrapper.put("_file", fullDoc);
                 IOs.writeString(diff, JsonCodec.dump(wrapper));
                 LinLog.info(LinMsg.k("linFile.lang.langGeneratedDifferent"), "diff", diff);
             }
             LinLog.warn(LinMsg.k("linFile.lang.langMissingKeys"), "lang", f, "count", missing.size(), "diff", diff);
-        } catch (Exception e) { /* swallow */ }
+        } catch (Exception e) {
+            // ignore
+        }
     }
 
     private static String stripExt(String name) {
@@ -759,8 +769,45 @@ public final class LangServiceImpl implements LangService, LocaleAware {
         return i > 0 ? name.substring(0, i) : name;
     }
 
-    private static String extOf(FileType fmt) {
-        return fmt == FileType.YAML ? ".yml" : ".json";
+    @SuppressWarnings("unchecked")
+    private static Object readPath(Map<String, Object> root, String path) {
+        String[] ps = path.split("\\.");
+        Map<String, Object> curr = root;
+        for (int i = 0; i < ps.length - 1; i++) {
+            Object n = curr.get(ps[i]);
+            if (!(n instanceof Map)) return null;
+            curr = (Map<String, Object>) n;
+        }
+        return curr.get(ps[ps.length - 1]);
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Map<String, Object> deepCopyMap(Map<String, Object> src) {
+        Map<String, Object> out = new LinkedHashMap<>();
+        for (var e : src.entrySet()) {
+            Object v = e.getValue();
+            if (v instanceof Map<?, ?> m) {
+                out.put(e.getKey(), deepCopyMap((Map<String, Object>) (Map<?, ?>) m));
+            } else if (v instanceof List<?> l) {
+                out.put(e.getKey(), new ArrayList<>(l));
+            } else {
+                out.put(e.getKey(), v);
+            }
+        }
+        return out;
+    }
+
+    @SuppressWarnings("unchecked")
+    private static void deletePath(Map<String, Object> root, String dottedPath) {
+        if (dottedPath == null || dottedPath.isBlank()) return;
+        String[] ps = dottedPath.split("\\.");
+        Map<String, Object> curr = root;
+        for (int i = 0; i < ps.length - 1; i++) {
+            Object n = curr.get(ps[i]);
+            if (!(n instanceof Map)) return;
+            curr = (Map<String, Object>) n;
+        }
+        curr.remove(ps[ps.length - 1]);
     }
 
     private static String insertYamlMissingMarkers(String yaml, Map<String, Object> missingWithValues) {
@@ -800,13 +847,13 @@ public final class LangServiceImpl implements LangService, LocaleAware {
         return "";
     }
 
-    private static int ensureParentBlock(java.util.List<String> lines, String[] segs, int depthExclusive) {
+    private static int ensureParentBlock(List<String> lines, String[] segs, int depthExclusive) {
         if (depthExclusive <= 0) {
             return ensureTopLevel(lines, segs[0], 0);
         }
 
         int startIdx = -1;
-        int levelIndent = 0;
+        int levelIndent;
         for (int i = 0; i < depthExclusive; i++) {
             String key = segs[i];
             levelIndent = i * 2;
@@ -842,7 +889,7 @@ public final class LangServiceImpl implements LangService, LocaleAware {
         for (int i = startIdx + 1; i < lines.size(); i++) {
             String ln = lines.get(i);
             String t = ln.stripLeading();
-            if (t.isEmpty() || t.startsWith("#")) continue; // 注释或空行不结束块
+            if (t.isEmpty() || t.startsWith("#")) continue;
             int ind = leadingSpaces(ln);
             if (ind <= parentIndent && t.endsWith(":")) {
                 return i;
@@ -851,10 +898,9 @@ public final class LangServiceImpl implements LangService, LocaleAware {
         return lines.size();
     }
 
-    private static int findDocumentEnd(java.util.List<String> lines) {
+    private static int findDocumentEnd(List<String> lines) {
         int i = 0;
         while (i < lines.size() && (lines.get(i).isBlank() || lines.get(i).trim().startsWith("#"))) i++;
-
         return lines.size();
     }
 
@@ -864,13 +910,7 @@ public final class LangServiceImpl implements LangService, LocaleAware {
         return i;
     }
 
-    private static boolean isKeyLikeLine(String s) {
-        String t = s.stripLeading();
-        if (t.isEmpty() || t.startsWith("#")) return false;
-        return t.contains(":");
-    }
-
-    private static int ensureTopLevel(java.util.List<String> lines, String key, int indent) {
+    private static int ensureTopLevel(List<String> lines, String key, int indent) {
         int found = findKeyAtIndent(lines, key, indent);
         if (found >= 0) return found;
         int anchor = findDocumentEnd(lines);
@@ -878,210 +918,4 @@ public final class LangServiceImpl implements LangService, LocaleAware {
         lines.add(anchor, ind + key + ":");
         return anchor;
     }
-
-    private static int findLineIndex(java.util.List<String> lines, String... patterns) {
-        for (int i = 0; i < lines.size(); i++) {
-            String line = lines.get(i);
-            for (String p : patterns) {
-                if (line.startsWith(p)) return i;
-            }
-        }
-        return -1;
-    }
-
-    private static void ensureCommentAnchors(Map<String, Object> doc, Map<String, java.util.List<String>> comments) {
-        if (comments == null || comments.isEmpty()) return;
-        for (String path : comments.keySet()) {
-            if ("__header__".equals(path)) continue;
-            ensurePath(doc, path);
-        }
-    }
-
-    @SuppressWarnings("unchecked")
-    private static void ensurePath(Map<String, Object> root, String dottedPath) {
-        if (dottedPath == null || dottedPath.isBlank()) return;
-        String[] segs = Arrays.stream(dottedPath.split("\\."))
-                .filter(s -> s != null && !s.isBlank())
-                .toArray(String[]::new);
-        if (segs.length == 0) return;
-
-        Map<String, Object> curr = root;
-        for (int i = 0; i < segs.length - 1; i++) {
-            String k = segs[i];
-            Object ex = curr.get(k);
-            if (!(ex instanceof Map)) {
-                Map<String, Object> child = new LinkedHashMap<>();
-                curr.put(k, child);
-                curr = child;
-            } else {
-                curr = (Map<String, Object>) ex;
-            }
-        }
-        String leaf = segs[segs.length - 1];
-        if (!curr.containsKey(leaf)) {
-            curr.put(leaf, "");
-        }
-    }
-
-    @SuppressWarnings("unchecked")
-    private static Map<String, Object> deepCopyMap(Map<String, Object> src) {
-        Map<String, Object> out = new LinkedHashMap<>();
-        for (var e : src.entrySet()) {
-            Object v = e.getValue();
-            if (v instanceof Map<?, ?> m) {
-                out.put(e.getKey(), deepCopyMap((Map<String, Object>) (Map<?, ?>) m));
-            } else if (v instanceof List<?> l) {
-                out.put(e.getKey(), new ArrayList<>(l));
-            } else {
-                out.put(e.getKey(), v);
-            }
-        }
-        return out;
-    }
-
-    @SuppressWarnings("unchecked")
-    private static void deletePath(Map<String, Object> root, String dottedPath) {
-        if (dottedPath == null || dottedPath.isBlank()) return;
-        String[] ps = dottedPath.split("\\.");
-        Map<String, Object> curr = root;
-        for (int i = 0; i < ps.length - 1; i++) {
-            Object n = curr.get(ps[i]);
-            if (!(n instanceof Map)) return;
-            curr = (Map<String, Object>) n;
-        }
-        curr.remove(ps[ps.length - 1]);
-    }
-
-    private static Map<String, java.util.List<String>> extractCommentsByLocale(Class<?> clz, String locale) {
-        Map<String, java.util.List<String>> base = TreeMapper.extractComments(clz);
-        if (base == null) base = new java.util.LinkedHashMap<>();
-        Map<String, java.util.List<String>> localized = TreeMapper.extractI18nComments(clz, locale);
-        if (localized != null && !localized.isEmpty()) {
-            for (var e : localized.entrySet()) {
-                base.put(e.getKey(), e.getValue());
-            }
-        }
-        return base;
-    }
-
-    /**
-     * 确保指定 locale 的扁平化缓存已加载。
-     *
-     * 说明：tr(...) 依赖 cache。但 reload() 默认只重建“已 bind 的 locale”。
-     * 如果外部 setLocale(...) 切换到一个未 bind 的语言，则 cache 可能缺失该 locale，
-     * 导致看起来语言没有切换（或 reload 后失效）。
-     *
-     * 该方法会基于已绑定的 keysClass（任意 locale）推导该 locale 的文件路径，
-     * 并从磁盘加载内容填充到 cache。不会创建新的 holder，也不会影响 bound；
-     * 仅用于 tr(...) 的即时生效。
-     */
-    private void ensureLocaleCacheLoaded(String locale) {
-        if (locale == null || locale.isBlank()) return;
-        if (cache.containsKey(locale)) return;
-
-        // 每个 keysClass 都尝试加载该 locale 的语言文件；必要时（emit 开启）会自动生成
-        Map<String, String> bucket = new LinkedHashMap<>();
-
-        // 以 bound 中出现过的 keysClass 为基准（意味着系统确实使用过这些 keys）
-        Set<Class<?>> keysClasses = new LinkedHashSet<>();
-        for (var en : bound.entrySet()) {
-            BoundKey k = en.getKey();
-            if (k != null && k.type() != null) keysClasses.add(k.type());
-        }
-
-        for (Class<?> keysClass : keysClasses) {
-            if (keysClass == null) continue;
-
-            // 选择与 locale 匹配的 provider（如果当初 bind 时传入过 providers）
-            LocaleProvider<?> prov = null;
-            List<LocaleProvider<?>> provList = (List) providersByKeys.getOrDefault(keysClass, List.of());
-            if (provList != null && !provList.isEmpty()) {
-                for (LocaleProvider<?> p : provList) {
-                    if (p != null && p.locale() != null && p.locale().equalsIgnoreCase(locale)) {
-                        prov = p;
-                        break;
-                    }
-                }
-            }
-
-            // 推导 pack 路径：优先 provider 上的 @LangPack，否则 keysClass 上的 @LangPack
-            PackPath pp = (prov != null)
-                    ? resolvePackPathFromProvider(prov.getClass(), locale)
-                    : resolvePackPath(keysClass, locale);
-
-            Path f = file(pp.path(), pp.name(), pp.fmt());
-            boolean exists = IOs.exists(f);
-
-            // emit 策略：若 keysClass 或 provider 标了 @NoEmit 则不生成/写回；否则尽量沿用已 bind 的 emit 偏好
-            boolean annotatedNoEmit = keysClass.isAnnotationPresent(NoEmit.class)
-                    || (prov != null && prov.getClass().isAnnotationPresent(NoEmit.class));
-            boolean emit = !annotatedNoEmit;
-            if (emit) {
-                // 若该 keysClass 之前绑定过某个 locale，则沿用其 emit 偏好（取第一个即可）
-                for (var en : bound.entrySet()) {
-                    BoundKey bk = en.getKey();
-                    BoundMeta bm = en.getValue();
-                    if (bk != null && bm != null && bk.type() == keysClass) {
-                        emit = bm.emit;
-                        break;
-                    }
-                }
-            }
-
-            try {
-                // 构建默认值：类字段默认 + provider 默认
-                Object defaults = newInstance((Class) keysClass);
-                if (prov != null) {
-                    try {
-                        ((LocaleProvider) prov).define(defaults);
-                    } catch (Throwable ignore) {
-                    }
-                }
-                Map<String, Object> defDoc = new LinkedHashMap<>();
-                TreeMapper.export(defaults, defDoc);
-
-                Map<String, Object> doc;
-                if (exists) {
-                    doc = (pp.fmt() == FileType.YAML)
-                            ? YamlCodec.load(IOs.readString(f))
-                            : JsonCodec.load(IOs.readString(f));
-                    if (doc == null) doc = new LinkedHashMap<>();
-                } else {
-                    doc = new LinkedHashMap<>();
-                }
-
-                // 合并默认值并收集缺失键（让删除字段/缺失字段能回到默认值）
-                Set<String> missing = new LinkedHashSet<>();
-                mergeDefaultsCollect(defDoc, doc, "", missing);
-
-                Map<String, List<String>> comments =
-                        (pp.fmt() == FileType.YAML) ? extractCommentsByLocale(keysClass, locale) : Collections.emptyMap();
-
-                if (emit) {
-                    ensureCommentAnchors(doc, comments);
-                    if (exists && !missing.isEmpty()) {
-                        writeDiff(f, pp.fmt(), (Map<String, Object>) doc, missing);
-                    }
-                    // 不存在时生成文件；存在时也写回一次，保证注释/格式一致
-                    persist(f, pp.fmt(), (Map<String, Object>) doc, comments);
-                }
-
-                // 加入扁平化缓存
-                bucket.putAll(flatten((Map<String, Object>) doc));
-
-            } catch (Exception ignore) {
-                // 单个文件失败不影响其他 pack
-            }
-        }
-
-        if (!bucket.isEmpty()) {
-            cache.put(locale, bucket);
-        }
-    }
-
-    private static String safeLocale(String locale) {
-        if (locale == null || locale.isBlank()) return "zh_CN";
-        return locale;
-    }
-
 }
