@@ -17,17 +17,60 @@ import core.linlang.command.parser.SpecParser;
 import core.linlang.command.signal.Interact;
 
 import java.util.*;
+import java.util.function.Function;
 import core.linlang.total.i18n.LocaleAware;
 import core.linlang.total.prefix.PrefixAware;
 
 public final class LinCommandImpl implements LinCommand, LocaleAware, PrefixAware {
+    /**
+     * 延迟 i18n 提供者：在渲染 usage/help 时，根据当前语言动态取值。
+     * <p>用于让命令描述/参数标签直接引用语言文件服务 bind 后的字段，而无需重注册命令。</p>
+     */
+    @FunctionalInterface
+    public interface I18nSupplier {
+        String get(String localeTag);
+    }
     // 用于控制 /root help 单页打印的条目刷数量
     private int help_page_size = 8;
     // 命令
     private final List<LinCommand.TypeResolver> resolvers = new ArrayList<>();
     private final List<Model.Node> nodes = new ArrayList<>();
-    // 为每个已注册节点保存参数 i18n 标签映射：paramName -> ( "zh_CN" -> "行号", "en_GB" -> "line number" )
+    // 为每个已注册节点保存参数 i18n 标签映射（立即值）：paramName -> ( "zh_CN" -> "行号", ... )
     public final Map<Model.Node, Map<String, Map<String, String>>> paramI18n = new IdentityHashMap<>();
+
+    // 延迟 i18n：为每个节点保存「描述」的延迟提供者（localeTag -> text）
+    private final Map<Model.Node, I18nSupplier> descLazy = new IdentityHashMap<>();
+
+    // 延迟 i18n：为每个节点保存「参数标签」的延迟提供者（paramName -> (localeTag -> label)）
+    private final Map<Model.Node, Map<String, I18nSupplier>> paramLazy = new IdentityHashMap<>();
+    /**
+     * 注册命令（延迟 i18n 版本）。
+     * <p>与传统的 {@link #register(String, CommandExecutor, Permission, ExecTarget, Desc, Map)} 不同，
+     * 这里的描述与参数标签通过函数延迟取值：当语言变化时无需重注册命令，只要语言对象字段更新即可生效。</p>
+     *
+     * <p>注意：若你仍然需要在切换语言后更新命令框架的内建提示（messages），请继续通过 LocaleChanged 事件或外部逻辑更新 {@link #setLocale(String)}。</p>
+     */
+    public LinCommand registerLazy(
+            String spec,
+            CommandExecutor exec,
+            Permission perm,
+            ExecTarget target,
+            I18nSupplier descProvider,
+            Map<String, I18nSupplier> labelProviders
+    ) {
+        Registration reg = doRegister(spec, exec, perm, target, null);
+        Model.Node n = reg.node;
+
+        if (descProvider != null) {
+            descLazy.put(n, descProvider);
+        }
+        if (labelProviders != null && !labelProviders.isEmpty()) {
+            paramLazy.put(n, new LinkedHashMap<>(labelProviders));
+        }
+
+        n.usage = buildUsage(n);
+        return this;
+    }
     // 实例名字，或者叫命令前缀
     private volatile String prefix = "";
     // 实例根命令
@@ -624,9 +667,20 @@ public final class LinCommandImpl implements LinCommand, LocaleAware, PrefixAwar
         for (int i = from; i < to; i++) {
             var n = nodes.get(i);
             String usagePerSender = buildUsage(n);
-            // Select description from n.descI18n according to locale
             String desc = "";
-            if (n.descI18n != null && !n.descI18n.isEmpty()) {
+
+            // 1) 优先使用延迟描述（动态取值）
+            I18nSupplier lazyDesc = descLazy.get(n);
+            if (lazyDesc != null) {
+                try {
+                    desc = lazyDesc.get(localeTag);
+                } catch (Throwable ignore) {
+                    desc = "";
+                }
+            }
+
+            // 2) 若没有延迟描述，则回退到静态 i18n 映射
+            if ((desc == null || desc.isBlank()) && n.descI18n != null && !n.descI18n.isEmpty()) {
                 desc = n.descI18n.get(localeTag);
                 if (desc == null) desc = n.descI18n.get(localeDash);
                 if (desc == null) desc = n.descI18n.get(langOnly);
@@ -803,6 +857,7 @@ public final class LinCommandImpl implements LinCommand, LocaleAware, PrefixAwar
         if (n.params == null || n.params.isEmpty()) return head;
 
         Map<String, Map<String, String>> labels = paramI18n.get(n);
+        Map<String, I18nSupplier> lazyLabels = paramLazy.get(n);
         java.util.List<String> parts = new java.util.ArrayList<>();
 
         for (var p : n.params) {
@@ -824,9 +879,24 @@ public final class LinCommandImpl implements LinCommand, LocaleAware, PrefixAwar
 
             String displayName = null;
 
-// 1) 若标记了 i18nTag，则从外部映射取（paramI18n）
+            // 1) 若标记了 i18nTag：优先从延迟提供者取值，其次从静态映射取值
             if (p.i18nTag) {
-                if (labels != null) {
+                // 1.1 延迟提供者（动态取值）
+                if (lazyLabels != null) {
+                    I18nSupplier sup = lazyLabels.get(namePart);
+                    if (sup != null) {
+                        try {
+                            String v = sup.get(localeTag);
+                            if (v != null && !v.isBlank()) {
+                                displayName = v;
+                            }
+                        } catch (Throwable ignore) {
+                        }
+                    }
+                }
+
+                // 1.2 静态映射（向后兼容）
+                if ((displayName == null || displayName.isBlank()) && labels != null) {
                     Map<String, String> byLocale = labels.get(namePart);
                     if (byLocale != null && !byLocale.isEmpty()) {
                         // 宽松匹配 zh_CN / zh-CN / zh
