@@ -22,14 +22,7 @@ import core.linlang.total.i18n.LocaleAware;
 import core.linlang.total.prefix.PrefixAware;
 
 public final class LinCommandImpl implements LinCommand, LocaleAware, PrefixAware {
-    /**
-     * 延迟 i18n 提供者：在渲染 usage/help 时，根据当前语言动态取值。
-     * <p>用于让命令描述/参数标签直接引用语言文件服务 bind 后的字段，而无需重注册命令。</p>
-     */
-    @FunctionalInterface
-    public interface I18nSupplier {
-        String get(String localeTag);
-    }
+
     // 用于控制 /root help 单页打印的条目刷数量
     private int help_page_size = 8;
     // 命令
@@ -39,10 +32,10 @@ public final class LinCommandImpl implements LinCommand, LocaleAware, PrefixAwar
     public final Map<Model.Node, Map<String, Map<String, String>>> paramI18n = new IdentityHashMap<>();
 
     // 延迟 i18n：为每个节点保存「描述」的延迟提供者（localeTag -> text）
-    private final Map<Model.Node, I18nSupplier> descLazy = new IdentityHashMap<>();
+    private final Map<Model.Node, LinCommand.I18nSupplier> descLazy = new IdentityHashMap<>();
 
-    // 延迟 i18n：为每个节点保存「参数标签」的延迟提供者（paramName -> (localeTag -> label)）
-    private final Map<Model.Node, Map<String, I18nSupplier>> paramLazy = new IdentityHashMap<>();
+    // 延迟 i18n：为每个节点保存「参数标签」的延迟提供者（paramName -> (localeTag -> label)
+    private final Map<Model.Node, Map<String, LinCommand.I18nSupplier>> paramLazy = new IdentityHashMap<>();
     /**
      * 注册命令（延迟 i18n 版本）。
      * <p>与传统的 {@link #register(String, CommandExecutor, Permission, ExecTarget, Desc, Map)} 不同，
@@ -50,13 +43,14 @@ public final class LinCommandImpl implements LinCommand, LocaleAware, PrefixAwar
      *
      * <p>注意：若你仍然需要在切换语言后更新命令框架的内建提示（messages），请继续通过 LocaleChanged 事件或外部逻辑更新 {@link #setLocale(String)}。</p>
      */
+    @Override
     public LinCommand registerLazy(
             String spec,
             CommandExecutor exec,
             Permission perm,
             ExecTarget target,
-            I18nSupplier descProvider,
-            Map<String, I18nSupplier> labelProviders
+            LinCommand.I18nSupplier descProvider,
+            Map<String, LinCommand.I18nSupplier> labelProviders
     ) {
         Registration reg = doRegister(spec, exec, perm, target, null);
         Model.Node n = reg.node;
@@ -670,7 +664,7 @@ public final class LinCommandImpl implements LinCommand, LocaleAware, PrefixAwar
             String desc = "";
 
             // 1) 优先使用延迟描述（动态取值）
-            I18nSupplier lazyDesc = descLazy.get(n);
+            LinCommand.I18nSupplier lazyDesc = descLazy.get(n);
             if (lazyDesc != null) {
                 try {
                     desc = lazyDesc.get(localeTag);
@@ -857,7 +851,7 @@ public final class LinCommandImpl implements LinCommand, LocaleAware, PrefixAwar
         if (n.params == null || n.params.isEmpty()) return head;
 
         Map<String, Map<String, String>> labels = paramI18n.get(n);
-        Map<String, I18nSupplier> lazyLabels = paramLazy.get(n);
+        Map<String, LinCommand.I18nSupplier> lazyLabels = paramLazy.get(n);
         java.util.List<String> parts = new java.util.ArrayList<>();
 
         for (var p : n.params) {
@@ -883,7 +877,7 @@ public final class LinCommandImpl implements LinCommand, LocaleAware, PrefixAwar
             if (p.i18nTag) {
                 // 1.1 延迟提供者（动态取值）
                 if (lazyLabels != null) {
-                    I18nSupplier sup = lazyLabels.get(namePart);
+                    LinCommand.I18nSupplier sup = lazyLabels.get(namePart);
                     if (sup != null) {
                         try {
                             String v = sup.get(localeTag);
