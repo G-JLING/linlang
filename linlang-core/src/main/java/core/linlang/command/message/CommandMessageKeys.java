@@ -1,7 +1,6 @@
 package core.linlang.command.message;
 
 import api.linlang.file.file.FileType;
-import api.linlang.file.file.annotations.I18nComment;
 import api.linlang.file.file.annotations.LangPack;
 import api.linlang.file.file.annotations.NamingStyle;
 
