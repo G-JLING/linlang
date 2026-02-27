@@ -22,7 +22,7 @@ public final class Model {
         public boolean i18nTag;
     }
     public static final class TypeSpec {
-        public String id;                        // enum / int / double / string / regex / minecraft:item / click:block
+        public String id;                        // enum / int / double / string / regex / minecraft:item / event:block
         public Map<String,String> meta = new LinkedHashMap<>(); // enum 值/范围/regex 等
     }
     public static final class Exec {

@@ -16,10 +16,10 @@ public final class InteractiveResolvers {
     }
 
     public static final class ClickBlock implements LinCommand.TypeResolver {
-        public boolean supports(String id){ return id.equalsIgnoreCase("click:block"); }
+        public boolean supports(String id){ return id.equalsIgnoreCase("event:block"); }
         public Object parse(LinCommand.ParseCtx c, String t){
             requirePlayer(c);
-            throw new Interact.Signal("Kind.CLICK_BLOCK", "prompt.click.block", 20_000);
+            throw new Interact.Signal("Kind.CLICK_BLOCK", "prompt.event.block", 20_000);
         }
         public List<String> complete(LinCommand.ParseCtx c, String p){ return List.of("点击一个方块以继续"); }
     }
@@ -43,10 +43,10 @@ public final class InteractiveResolvers {
     }
 
     public static final class ClickEntity implements LinCommand.TypeResolver {
-        public boolean supports(String id){ return id.equalsIgnoreCase("click:entity"); }
+        public boolean supports(String id){ return id.equalsIgnoreCase("event:entity"); }
         public Object parse(LinCommand.ParseCtx c, String t){
             requirePlayer(c);
-            throw new Interact.Signal("Kind.CLICK_ENTITY", "prompt.click.entity", 20_000);
+            throw new Interact.Signal("Kind.CLICK_ENTITY", "prompt.event.entity", 20_000);
         }
         public List<String> complete(LinCommand.ParseCtx c, String p){ return List.of("点击一个实体以继续"); }
     }
@@ -70,10 +70,10 @@ public final class InteractiveResolvers {
     }
 
     public static final class ClickItemStack implements LinCommand.TypeResolver {
-        public boolean supports(String id){ return id.equalsIgnoreCase("click:item"); }
+        public boolean supports(String id){ return id.equalsIgnoreCase("event:item"); }
         public Object parse(LinCommand.ParseCtx c, String t){
             requirePlayer(c);
-            throw new Interact.Signal("Kind.CLICK_ITEMSTACK", "prompt.click.item", 20_000);
+            throw new Interact.Signal("Kind.CLICK_ITEMSTACK", "prompt.event.item", 20_000);
         }
         public List<String> complete(LinCommand.ParseCtx c, String p){ return List.of("点击一个物品以继续"); }
     }

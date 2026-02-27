@@ -2,6 +2,7 @@ package me.jling.facade;
 
 import api.linlang.command.LinCommand;
 import api.linlang.file.LinFile;
+import api.linlang.interact.LinInteract;
 import api.linlang.messenger.LinMessenger;
 import api.linlang.runtime.Linlang;
 import core.linlang.event.api.LinEventBus;
@@ -89,6 +90,11 @@ public final class BukkitFacadeImpl implements Linlang, Linlang.Configurable, Li
     @Override
     public LinMessenger linMessenger() {
         return core.linMessenger();
+    }
+
+    @Override
+    public LinInteract linInteract() {
+        return core.linInteract();
     }
 
     /**

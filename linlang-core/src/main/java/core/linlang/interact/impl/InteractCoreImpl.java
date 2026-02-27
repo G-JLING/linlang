@@ -34,7 +34,7 @@ public final class InteractCoreImpl implements LinInteract {
     private final Map<Object, DefaultGuiSession> sessions = new ConcurrentHashMap<>();
 
     public InteractCoreImpl(PathResolver paths, InteractPlatformAdapter adapter, LinEventBus bus) {
-        this(paths, "ui", adapter, bus);
+        this(paths, "gui", adapter, bus);
     }
 
     public InteractCoreImpl(PathResolver paths, String uiRoot, InteractPlatformAdapter adapter, LinEventBus bus) {
@@ -130,7 +130,7 @@ public final class InteractCoreImpl implements LinInteract {
         }
     }
 
-    // 供 adapter 的 click bridge 调用：执行 action/hook 并刷新
+    // 供 adapter 的 event bridge 调用：执行 action/hook 并刷新
     public void execute(Object viewer, int slotIndex, core.linlang.interact.render.ClickRoute route) {
         DefaultGuiSession s = sessions.get(viewer);
         if (s == null || route == null || route.action() == null) return;

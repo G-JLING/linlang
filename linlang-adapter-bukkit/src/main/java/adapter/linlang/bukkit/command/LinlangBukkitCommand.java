@@ -214,7 +214,7 @@ public final class LinlangBukkitCommand implements LinCommand, CommandExecutor, 
         return core.tab(sender, alias, args, bridge);
     }
 
-    // —— 额外注入 Bukkit 解析器：minecraft:item / minecraft:player / click:block —— //
+    // —— 额外注入 Bukkit 解析器：minecraft:item / minecraft:player / event:block —— //
     public LinlangBukkitCommand withDefaultResolvers(){
         core.addResolver(new BukkitResolvers.ItemResolver());
         core.addResolver(new BukkitResolvers.PlayerResolver());

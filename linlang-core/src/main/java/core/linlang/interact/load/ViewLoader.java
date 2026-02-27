@@ -9,11 +9,11 @@ import java.nio.file.Path;
 public final class ViewLoader {
 
     private final PathResolver paths;
-    private final String uiRoot; // e.g. "ui"
+    private final String uiRoot; // e.g. "gui"
 
     public ViewLoader(PathResolver paths, String uiRoot) {
         this.paths = paths;
-        this.uiRoot = (uiRoot == null || uiRoot.isBlank()) ? "ui" : uiRoot;
+        this.uiRoot = (uiRoot == null || uiRoot.isBlank()) ? "gui" : uiRoot;
     }
 
     public ViewSpec load(String viewId) {

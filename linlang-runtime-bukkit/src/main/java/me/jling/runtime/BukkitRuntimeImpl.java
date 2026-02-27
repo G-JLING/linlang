@@ -6,6 +6,7 @@ import api.linlang.command.LinCommand;
 import api.linlang.command.message.CommandMessages;
 import api.linlang.file.database.DataService;
 import api.linlang.messenger.LinMessenger;
+import api.linlang.interact.LinInteract;
 import core.linlang.event.api.LinEventBus;
 import core.linlang.event.dispatcher.EventDispatcher;
 import core.linlang.file.impl.ConfigServiceImpl;
@@ -150,6 +151,21 @@ public final class BukkitRuntimeImpl implements AutoCloseable {
      */
     public LinMessenger createMessenger(LangServiceImpl lang) {
         return core.createMessenger(lang);
+    }
+
+    /**
+     * 为指定插件创建/获取交互服务（GUI/交互服务）。
+     * <p>该服务为每个插件独立分发，视图文件默认位于 plugins/&lt;plugin&gt;/gui 目录。</p>
+     */
+    public LinInteract createInteract(JavaPlugin owner) {
+        return core.createInteract(owner);
+    }
+
+    /**
+     * 获取运行时插件自身的交互服务实例。
+     */
+    public LinInteract interact() {
+        return core.createInteract(runtimePlugin);
     }
 
     /**

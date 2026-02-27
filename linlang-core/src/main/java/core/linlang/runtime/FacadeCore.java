@@ -1,6 +1,7 @@
 // core/linlang/runtime/FacadeCore.java
 package core.linlang.runtime;
 
+import api.linlang.interact.LinInteract;
 import api.linlang.command.LinCommand;
 import api.linlang.file.LinFile;
 import api.linlang.file.file.ConfigService;
@@ -45,6 +46,7 @@ public final class FacadeCore<P> implements Linlang, Linlang.Configurable, Linla
 
     private volatile LinCommand command;
     private volatile LinMessenger messenger;
+    private volatile LinInteract interact;
 
     private volatile Function<P, String> prefixFn;
     private volatile String preferredLocale;
@@ -101,6 +103,9 @@ public final class FacadeCore<P> implements Linlang, Linlang.Configurable, Linla
         this.command = runtime.createCommands(owner, this.language, locale, () -> this.prefixController.prefix());
         this.messenger = runtime.createMessenger(this.language);
 
+        // 初始化交互服务（每个 facade 独享）
+        this.interact = runtime.createInteract(owner);
+
         // 前缀接线
         wirePrefix(this.command);
         wirePrefix(this.messenger);
@@ -144,6 +149,11 @@ public final class FacadeCore<P> implements Linlang, Linlang.Configurable, Linla
         return messenger;
     }
 
+    @Override
+    public LinInteract linInteract() {
+        return interact;
+    }
+
     /** facade 级语言控制器 */
     public LocaleController locale() {
         return localeController;
@@ -164,6 +174,8 @@ public final class FacadeCore<P> implements Linlang, Linlang.Configurable, Linla
 
             try { if (command instanceof AutoCloseable c) c.close(); } catch (Throwable ignore) {}
             try { if (messenger instanceof AutoCloseable c) c.close(); } catch (Throwable ignore) {}
+
+            try { interact = null; } catch (Throwable ignore) {}
 
             try {
                 events.unregisterAll(this);
@@ -237,6 +249,7 @@ public final class FacadeCore<P> implements Linlang, Linlang.Configurable, Linla
                 this.localeController.setLocale(locale, "facade.restart");
 
                 rebuildCommands(locale);
+                try { this.interact = runtime.createInteract(owner); } catch (Throwable ignore) {}
             } catch (Throwable ignore) {}
         }
     }
