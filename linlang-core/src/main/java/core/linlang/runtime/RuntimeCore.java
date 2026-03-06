@@ -7,22 +7,20 @@ import api.linlang.command.message.CommandMessages;
 import api.linlang.file.database.DataService;
 import api.linlang.file.file.path.PathResolver;
 import api.linlang.messenger.LinMessenger;
-import api.linlang.interact.LinInteract;
+import api.linlang.view.LinView;
 import core.linlang.audit.AbstractAuditProvider;
 import core.linlang.audit.config.AuditConfig;
 import core.linlang.audit.internal.LinMsg;
 import core.linlang.audit.internal.LinlangInternalMessageKeys;
 import core.linlang.command.message.CommandMessageKeys;
 import core.linlang.command.message.CommandMessageRouter;
-import core.linlang.command.message.i18n.EnGB;
-import core.linlang.command.message.i18n.ZhCN;
 import core.linlang.database.impl.DataServiceImpl;
 import core.linlang.event.api.LinEventBus;
 import core.linlang.event.impl.DefaultEventBus;
 import core.linlang.file.impl.ConfigServiceImpl;
 import core.linlang.file.impl.LangServiceImpl;
-import core.linlang.interact.impl.InteractCoreImpl;
-import core.linlang.interact.platform.InteractPlatformAdapter;
+import core.linlang.view.impl.ViewCoreImpl;
+import core.linlang.view.platform.InteractPlatformAdapter;
 import core.linlang.platform.PlatformAdapter;
 
 import java.util.*;
@@ -40,7 +38,7 @@ public final class RuntimeCore<P> implements AutoCloseable {
     private final PlatformAdapter<P> adapter;
 
     // 每个 owner 一个交互服务核心（独立 gui 目录、独立 registry、独立 session）
-    private final Map<P, InteractCoreImpl> interactCores = new ConcurrentHashMap<>();
+    private final Map<P, ViewCoreImpl> interactCores = new ConcurrentHashMap<>();
 
     private final LinEventBus runtimeBus;
 
@@ -109,7 +107,7 @@ public final class RuntimeCore<P> implements AutoCloseable {
         } catch (Throwable ignore) {
         }
 
-        throw new IllegalStateException("PlatformAdapter does not provide interactAdapter() for LinInteract");
+        throw new IllegalStateException("PlatformAdapter does not provide interactAdapter() for LinView");
     }
 
     /** 为指定 owner 创建独立配置服务实例 */
@@ -146,21 +144,21 @@ public final class RuntimeCore<P> implements AutoCloseable {
     }
 
     /**
-     * 为指定 owner 创建/获取交互服务（LinInteract）。
+     * 为指定 owner 创建/获取交互服务（LinView）。
      *
      * <p>每个 owner 独享：gui 视图目录、hook/source 注册表、session 与 state。</p>
      * <p>uiRoot 固定为 "gui"，文件路径为 plugins/&lt;owner&gt;/gui/*.yml（由 PathResolver 决定根目录）。</p>
      */
-    public LinInteract createInteract(P owner) {
+    public LinView createView(P owner) {
         if (owner == null) throw new IllegalArgumentException("owner");
 
-        InteractCoreImpl core = interactCores.computeIfAbsent(owner, o -> {
+        ViewCoreImpl core = interactCores.computeIfAbsent(owner, o -> {
             // 每个 owner 一个独立的事件总线（避免相互干扰）
             var bus = newFacadeBus();
-            return new InteractCoreImpl(resolver(o), "gui", interactAdapter(), bus);
+            return new ViewCoreImpl(resolver(o), "gui", interactAdapter(), bus);
         });
 
-        // InteractCoreImpl 已实现 LinInteract
+        // ViewCoreImpl 已实现 LinView
         return core;
     }
 

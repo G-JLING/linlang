@@ -1,7 +1,7 @@
 // core/linlang/runtime/FacadeCore.java
 package core.linlang.runtime;
 
-import api.linlang.interact.LinInteract;
+import api.linlang.view.LinView;
 import api.linlang.command.LinCommand;
 import api.linlang.file.LinFile;
 import api.linlang.file.file.ConfigService;
@@ -46,7 +46,7 @@ public final class FacadeCore<P> implements Linlang, Linlang.Configurable, Linla
 
     private volatile LinCommand command;
     private volatile LinMessenger messenger;
-    private volatile LinInteract interact;
+    private volatile LinView interact;
 
     private volatile Function<P, String> prefixFn;
     private volatile String preferredLocale;
@@ -150,7 +150,7 @@ public final class FacadeCore<P> implements Linlang, Linlang.Configurable, Linla
     }
 
     @Override
-    public LinInteract linInteract() {
+    public LinView linInteract() {
         return interact;
     }
 
