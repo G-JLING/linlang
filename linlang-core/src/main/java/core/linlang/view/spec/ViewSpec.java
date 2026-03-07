@@ -5,6 +5,7 @@ import java.util.*;
 public record ViewSpec(
         String id,
         String type,              // inventory
+        boolean allowManualClose,
         int rows,
         String title,
         List<String> layout,

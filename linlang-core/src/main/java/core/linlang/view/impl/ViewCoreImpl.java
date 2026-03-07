@@ -61,6 +61,16 @@ public final class ViewCoreImpl implements LinView {
         if (patch != null) patch.accept(s.state());
         sessions.put(viewer, s);
 
+        /*
+         * allowManualClose 默认来自资源文件（ViewSpec.allowManualClose）。
+         * 若调用方未显式覆盖，则把默认值写入 state，便于调试与旧逻辑兼容。
+         */
+        if (!s.state().containsKey("_allowManualClose")
+                && !s.state().containsKey("allowManualClose")
+                && !s.state().containsKey("view.allowManualClose")) {
+            s.state().put("view.allowManualClose", cv.spec().allowManualClose());
+        }
+
         // load dynamic areas from sources once (MVP: sync)
         loadAllAreas(s);
 

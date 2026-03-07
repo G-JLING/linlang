@@ -26,6 +26,7 @@ public final class ViewSpecParser {
 
         String id = str(root.get("id"), "");
         String type = str(root.get("type"), "inventory");
+        boolean allowManualClose = boolObj(root.get("allowManualClose"));
         int rows = integer(root.get("rows"), 6);
         String title = str(root.get("title"), "");
 
@@ -57,7 +58,7 @@ public final class ViewSpecParser {
             }
         }
 
-        return new ViewSpec(id, type, rows, title, layout, legend, areas);
+        return new ViewSpec(id, type, allowManualClose, rows, title, layout, legend, areas);
     }
 
     private static LegendEntrySpec parseLegendEntry(Map<String, Object> ent) {

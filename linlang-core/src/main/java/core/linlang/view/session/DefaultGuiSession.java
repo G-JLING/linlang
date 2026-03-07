@@ -13,6 +13,8 @@ public final class DefaultGuiSession implements GuiSession {
 
     private final Object viewer;
     private final CompiledView view;
+    private final boolean allowManualClose;
+
 
     private final StateImpl state = new StateImpl();
 
@@ -28,6 +30,9 @@ public final class DefaultGuiSession implements GuiSession {
     public DefaultGuiSession(Object viewer, CompiledView view) {
         this.viewer = viewer;
         this.view = view;
+
+        this.allowManualClose = view.spec().allowManualClose();
+
         this.statics = new StaticViewImpl(view);
         this.dynamics = new DynamicAreasImpl(view, areaRows, bindings);
         for (String areaId : view.dynamicSlots().keySet()) {
@@ -44,6 +49,21 @@ public final class DefaultGuiSession implements GuiSession {
     @Override public void refresh() { /* core impl calls renderer+adapter */ }
     @Override public void refreshArea(String areaId) { /* core impl calls renderer+adapter */ }
     @Override public void close() { /* core impl calls adapter */ }
+
+    /*
+     * 是否允许玩家手动关闭该界面。
+     * 优先读取会话状态中的覆盖值（_allowManualClose），否则使用视图资源文件的默认值。
+     */
+    public boolean allowManualClose() {
+        Object v = state.get("_allowManualClose");
+        if (v instanceof Boolean b) return b;
+        if (v != null) {
+            String s = String.valueOf(v);
+            if ("true".equalsIgnoreCase(s)) return true;
+            if ("false".equalsIgnoreCase(s)) return false;
+        }
+        return allowManualClose;
+    }
 
     // ---- internal helpers ----
 
