@@ -183,10 +183,17 @@ public final class ViewCoreImpl implements LinView {
     }
 
     private static api.linlang.view.model.GuiRow resolveRow(DefaultGuiSession s, core.linlang.view.render.ClickRoute r) {
-        if (r.areaId() == null) return null;
-        DefaultGuiSession.Binding b = s.bindingAtSlot(
-                s.compiled().dynamicSlots().getOrDefault(r.areaId(), new int[0])[Math.max(0, r.areaIndex())]
-        );
+        if (s == null || r == null) return null;
+        String areaId = r.areaId();
+        if (areaId == null || areaId.isBlank()) return null;
+
+        int[] slots = s.compiled().dynamicSlots().get(areaId);
+        if (slots == null || slots.length == 0) return null;
+
+        int idx = r.areaIndex();
+        if (idx < 0 || idx >= slots.length) return null;
+
+        DefaultGuiSession.Binding b = s.bindingAtSlot(slots[idx]);
         return b == null ? null : b.row();
     }
 }
