@@ -46,7 +46,7 @@ public final class FacadeCore<P> implements Linlang, Linlang.Configurable, Linla
 
     private volatile LinCommand command;
     private volatile LinMessenger messenger;
-    private volatile LinView interact;
+    private volatile LinView view;
 
     private volatile Function<P, String> prefixFn;
     private volatile String preferredLocale;
@@ -104,7 +104,7 @@ public final class FacadeCore<P> implements Linlang, Linlang.Configurable, Linla
         this.messenger = runtime.createMessenger(this.language);
 
         // 初始化交互服务（每个 facade 独享）
-        this.interact = runtime.createInteract(owner);
+        this.view = runtime.createView(owner);
 
         // 前缀接线
         wirePrefix(this.command);
@@ -150,8 +150,8 @@ public final class FacadeCore<P> implements Linlang, Linlang.Configurable, Linla
     }
 
     @Override
-    public LinView linInteract() {
-        return interact;
+    public LinView linView() {
+        return view;
     }
 
     /** facade 级语言控制器 */
@@ -175,7 +175,8 @@ public final class FacadeCore<P> implements Linlang, Linlang.Configurable, Linla
             try { if (command instanceof AutoCloseable c) c.close(); } catch (Throwable ignore) {}
             try { if (messenger instanceof AutoCloseable c) c.close(); } catch (Throwable ignore) {}
 
-            try { interact = null; } catch (Throwable ignore) {}
+            view = null;
+            runtime.releaseOwner(owner);
 
             try {
                 events.unregisterAll(this);
@@ -249,7 +250,7 @@ public final class FacadeCore<P> implements Linlang, Linlang.Configurable, Linla
                 this.localeController.setLocale(locale, "facade.restart");
 
                 rebuildCommands(locale);
-                try { this.interact = runtime.createInteract(owner); } catch (Throwable ignore) {}
+                this.view = runtime.createView(owner);
             } catch (Throwable ignore) {}
         }
     }

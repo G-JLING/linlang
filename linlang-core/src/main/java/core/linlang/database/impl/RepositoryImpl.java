@@ -59,50 +59,60 @@ public final class RepositoryImpl<T, ID> implements Repository<T, ID> {
 
     @Override
     public T save(T e) {
-        try {
-            Object idVal = idField == null ? null : idField.get(e);
-            if (idVal == null || (idVal instanceof Number && ((Number) idVal).longValue() == 0L)) {
-                // insert
-                String cols = fields.stream().filter(f -> f != idField).map(colName::get).collect(Collectors.joining(","));
-                String qs = fields.stream().filter(f -> f != idField).map(f -> "?").collect(Collectors.joining(","));
-                String sql = "INSERT INTO `" + table + "`(" + cols + ") VALUES(" + qs + ")";
-                try (Connection c = ds.getConnection();
-                     PreparedStatement ps = c.prepareStatement(sql, Statement.RETURN_GENERATED_KEYS)) {
-                    int i = 1;
-                    for (Field f : fields) {
-                        if (f == idField) continue;
-                        ps.setObject(i++, toDb(f.get(e)));
-                    }
-                    ps.executeUpdate();
-                    if (idField != null) {
-                        try (ResultSet rs = ps.getGeneratedKeys()) {
-                            if (rs.next()) {
-                                Object gen = rs.getObject(1);
-                                if (idField.getType() == Long.class || idField.getType() == long.class)
-                                    idField.set(e, ((Number) gen).longValue());
-                                else idField.set(e, gen);
-                            }
-                        }
-                    }
-                }
-            } else {
-                // update
-                String sets = fields.stream().filter(f -> f != idField)
-                        .map(f -> "`" + colName.get(f) + "`=?").collect(Collectors.joining(","));
-                String sql = "UPDATE `" + table + "` SET " + sets + " WHERE `" + colName.get(idField) + "`=?";
-                try (Connection c = ds.getConnection(); PreparedStatement ps = c.prepareStatement(sql)) {
-                    int i = 1;
-                    for (Field f : fields) {
-                        if (f == idField) continue;
-                        ps.setObject(i++, toDb(f.get(e)));
-                    }
-                    ps.setObject(i, idField.get(e));
-                    ps.executeUpdate();
-                }
-            }
-            return e;
+        Objects.requireNonNull(e, "entity");
+        try (Connection connection = ds.getConnection()) {
+            return save(connection, e);
         } catch (Exception ex) {
             throw new RuntimeException(ex);
+        }
+    }
+
+    private T save(Connection connection, T entity) throws Exception {
+        Object idVal = idField == null ? null : idField.get(entity);
+        if (idVal == null || (idVal instanceof Number && ((Number) idVal).longValue() == 0L)) {
+            String cols = fields.stream().filter(f -> f != idField)
+                    .map(f -> "`" + colName.get(f) + "`").collect(Collectors.joining(","));
+            String qs = fields.stream().filter(f -> f != idField).map(f -> "?").collect(Collectors.joining(","));
+            String sql = "INSERT INTO `" + table + "`(" + cols + ") VALUES(" + qs + ")";
+            try (PreparedStatement statement = connection.prepareStatement(sql, Statement.RETURN_GENERATED_KEYS)) {
+                int i = 1;
+                for (Field field : fields) {
+                    if (field == idField) continue;
+                    statement.setObject(i++, toDb(field.get(entity)));
+                }
+                statement.executeUpdate();
+                assignGeneratedId(entity, statement);
+            }
+            return entity;
+        }
+
+        String sets = fields.stream().filter(f -> f != idField)
+                .map(f -> "`" + colName.get(f) + "`=?").collect(Collectors.joining(","));
+        String sql = "UPDATE `" + table + "` SET " + sets + " WHERE `" + colName.get(idField) + "`=?";
+        try (PreparedStatement statement = connection.prepareStatement(sql)) {
+            int i = 1;
+            for (Field field : fields) {
+                if (field == idField) continue;
+                statement.setObject(i++, toDb(field.get(entity)));
+            }
+            statement.setObject(i, idField.get(entity));
+            statement.executeUpdate();
+        }
+        return entity;
+    }
+
+    private void assignGeneratedId(T entity, PreparedStatement statement) throws Exception {
+        if (idField == null) return;
+        try (ResultSet result = statement.getGeneratedKeys()) {
+            if (!result.next()) return;
+            Object generated = result.getObject(1);
+            if (idField.getType() == Long.class || idField.getType() == long.class) {
+                idField.set(entity, ((Number) generated).longValue());
+            } else if (idField.getType() == Integer.class || idField.getType() == int.class) {
+                idField.set(entity, ((Number) generated).intValue());
+            } else {
+                idField.set(entity, generated);
+            }
         }
     }
 
@@ -153,7 +163,9 @@ public final class RepositoryImpl<T, ID> implements Repository<T, ID> {
         String cols = fields.stream().map(f -> "`" + colName.get(f) + "`").collect(Collectors.joining(","));
         StringBuilder sql = new StringBuilder("SELECT ").append(cols).append(" FROM `").append(table).append("`");
         if (spec.where() != null && !spec.where().isBlank()) sql.append(" WHERE ").append(spec.where());
-        if (spec.orderBy() != null && !spec.orderBy().isBlank()) sql.append(" ORDER BY ").append(spec.orderBy());
+        if (spec.orderBy() != null && !spec.orderBy().isBlank()) {
+            sql.append(" ORDER BY ").append(safeOrderBy(spec.orderBy()));
+        }
         if (spec.limit() > 0) sql.append(" LIMIT ").append(spec.limit());
         if (spec.offset() > 0) sql.append(" OFFSET ").append(spec.offset());
         try (Connection c = ds.getConnection(); PreparedStatement ps = c.prepareStatement(sql.toString())) {
@@ -219,8 +231,9 @@ public final class RepositoryImpl<T, ID> implements Repository<T, ID> {
      * 按指定列查找单条记录
      */
     public Optional<T> findOneWhere(String column, Object value) {
+        String mappedColumn = requireColumn(column);
         String cols = fields.stream().map(f -> "`" + colName.get(f) + "`").collect(Collectors.joining(","));
-        String sql = "SELECT " + cols + " FROM `" + table + "` WHERE `" + column + "`=? LIMIT 1";
+        String sql = "SELECT " + cols + " FROM `" + table + "` WHERE `" + mappedColumn + "`=? LIMIT 1";
         try (Connection c = ds.getConnection(); PreparedStatement ps = c.prepareStatement(sql)) {
             ps.setObject(1, value);
             try (ResultSet rs = ps.executeQuery()) {
@@ -280,7 +293,7 @@ public final class RepositoryImpl<T, ID> implements Repository<T, ID> {
             c.setAutoCommit(false);
             try {
                 for (T e : entities) {
-                    save(e);
+                    save(c, Objects.requireNonNull(e, "entity"));
                 }
                 c.commit();
             } catch (Exception ex) {
@@ -349,5 +362,34 @@ public final class RepositoryImpl<T, ID> implements Repository<T, ID> {
         } catch (SQLException e) {
             throw new RuntimeException(e);
         }
+    }
+
+    private String requireColumn(String column) {
+        if (column == null || column.isBlank()) throw new IllegalArgumentException("column");
+        String value = column.trim();
+        if (!colName.containsValue(value)) {
+            throw new IllegalArgumentException("Unknown mapped column: " + value);
+        }
+        return value;
+    }
+
+    private String safeOrderBy(String orderBy) {
+        List<String> terms = new ArrayList<>();
+        for (String rawTerm : orderBy.split(",")) {
+            String[] parts = rawTerm.trim().split("\\s+");
+            if (parts.length < 1 || parts.length > 2) {
+                throw new IllegalArgumentException("Invalid orderBy term: " + rawTerm);
+            }
+            String column = requireColumn(parts[0]);
+            String direction = "";
+            if (parts.length == 2) {
+                if (!parts[1].equalsIgnoreCase("ASC") && !parts[1].equalsIgnoreCase("DESC")) {
+                    throw new IllegalArgumentException("Invalid orderBy direction: " + parts[1]);
+                }
+                direction = " " + parts[1].toUpperCase(Locale.ROOT);
+            }
+            terms.add("`" + column + "`" + direction);
+        }
+        return String.join(",", terms);
     }
 }

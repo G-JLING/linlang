@@ -39,6 +39,7 @@ public final class RuntimeCore<P> implements AutoCloseable {
 
     // 每个 owner 一个交互服务核心（独立 gui 目录、独立 registry、独立 session）
     private final Map<P, ViewCoreImpl> interactCores = new ConcurrentHashMap<>();
+    private final Map<P, DataServiceImpl> dataServices = new ConcurrentHashMap<>();
 
     private final LinEventBus runtimeBus;
 
@@ -85,31 +86,6 @@ public final class RuntimeCore<P> implements AutoCloseable {
         return adapter.pathResolver(owner);
     }
 
-    /**
-     * 获取交互服务的平台适配器（由 PlatformAdapter 提供）。
-     */
-    private InteractPlatformAdapter interactAdapter() {
-        try {
-            // 优先查找无参 interactAdapter()
-            var m0 = adapter.getClass().getMethod("interactAdapter");
-            Object out = m0.invoke(adapter);
-            if (out instanceof InteractPlatformAdapter ipa) return ipa;
-        } catch (NoSuchMethodException ignore) {
-        } catch (Throwable ignore) {
-        }
-
-        try {
-            // 兼容：interactAdapter(runtimeHost)
-            var m1 = adapter.getClass().getMethod("interactAdapter", Object.class);
-            Object out = m1.invoke(adapter, runtimeHost);
-            if (out instanceof InteractPlatformAdapter ipa) return ipa;
-        } catch (NoSuchMethodException ignore) {
-        } catch (Throwable ignore) {
-        }
-
-        throw new IllegalStateException("PlatformAdapter does not provide interactAdapter() for LinView");
-    }
-
     /** 为指定 owner 创建独立配置服务实例 */
     public ConfigServiceImpl createConfigService(P owner) {
         return new ConfigServiceImpl(resolver(owner), List.of());
@@ -122,7 +98,8 @@ public final class RuntimeCore<P> implements AutoCloseable {
 
     /** 为指定 owner 创建独立数据服务实例 */
     public DataService createDataService(P owner) {
-        return new DataServiceImpl(resolver(owner));
+        if (owner == null) throw new IllegalArgumentException("owner");
+        return dataServices.computeIfAbsent(owner, value -> new DataServiceImpl(resolver(value)));
     }
 
     /** 用 facade 的 LangService 创建命令消息路由（避免再 new 一套 lang） */
@@ -153,9 +130,16 @@ public final class RuntimeCore<P> implements AutoCloseable {
         if (owner == null) throw new IllegalArgumentException("owner");
 
         ViewCoreImpl core = interactCores.computeIfAbsent(owner, o -> {
-            // 每个 owner 一个独立的事件总线（避免相互干扰）
             var bus = newFacadeBus();
-            return new ViewCoreImpl(resolver(o), "gui", interactAdapter(), bus);
+            InteractPlatformAdapter viewAdapter = adapter.createViewAdapter(o);
+            ViewCoreImpl created = new ViewCoreImpl(resolver(o), "gui", viewAdapter, bus);
+            try {
+                adapter.registerViewEvents(o, viewAdapter, created);
+                return created;
+            } catch (RuntimeException exception) {
+                created.close();
+                throw exception;
+            }
         });
 
         // ViewCoreImpl 已实现 LinView
@@ -182,6 +166,24 @@ public final class RuntimeCore<P> implements AutoCloseable {
     public void unregisterFacade(FacadeCore<P> facade) {
         synchronized (facades) {
             facades.remove(facade);
+        }
+    }
+
+    void releaseOwner(P owner) {
+        synchronized (facades) {
+            boolean stillUsed = facades.stream().anyMatch(facade -> Objects.equals(facade.getOwner(), owner));
+            if (stillUsed) return;
+        }
+
+        ViewCoreImpl view = interactCores.remove(owner);
+        if (view != null) {
+            try { view.close(); } catch (Throwable ignore) {}
+        }
+        try { adapter.closeView(owner); } catch (Throwable ignore) {}
+
+        DataServiceImpl data = dataServices.remove(owner);
+        if (data != null) {
+            try { data.close(); } catch (Throwable ignore) {}
         }
     }
 
@@ -286,7 +288,14 @@ public final class RuntimeCore<P> implements AutoCloseable {
                 m.invoke(globalAudit);
             } catch (Throwable ignore) {}
         }
-        try { interactCores.clear(); } catch (Throwable ignore) {}
+        for (P owner : new ArrayList<>(interactCores.keySet())) {
+            releaseOwner(owner);
+        }
+        for (DataServiceImpl data : dataServices.values()) {
+            try { data.close(); } catch (Throwable ignore) {}
+        }
+        dataServices.clear();
+        try { runtimeBus.shutdown(); } catch (Throwable ignore) {}
         LinLog.info("[linlang] RuntimeCore closed.");
     }
 }

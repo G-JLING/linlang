@@ -8,7 +8,6 @@ import api.linlang.file.file.annotations.NoEmit;
 import api.linlang.file.file.tool.LocaleId;
 import api.linlang.file.file.path.PathResolver;
 import core.linlang.audit.internal.LinMsg;
-import core.linlang.file.runtime.LocaleTag;
 import core.linlang.file.runtime.TreeMapper;
 import core.linlang.file.util.IOs;
 import core.linlang.json.JsonCodec;
@@ -43,8 +42,8 @@ public final class LangServiceImpl implements LangService, LocaleAware {
 
     private final PathResolver paths;
 
-    /** Currently applied locale (global). */
-    private volatile LocaleTag applied = LocaleTag.parse("zh_CN");
+    /** 当前应用的全局语言代码。 */
+    private volatile String appliedLocale = "zh_CN";
 
     /** Flattened cache: locale -> (keyPath -> stringValue). */
     private final Map<String, Map<String, String>> cache = new ConcurrentHashMap<>();
@@ -59,13 +58,24 @@ public final class LangServiceImpl implements LangService, LocaleAware {
         final String filePath; // plugin subdir
         final FileType fmt;
         final boolean emit;
+        final String defaultLocale;
+        final boolean normalizeLocale;
+        final Map<String, Object> defaults;
 
-        BoundMeta(Class<?> keysClass, Object holder, String filePath, FileType fmt, boolean emit) {
+        BoundMeta(Class<?> keysClass, Object holder, PackSpec spec, boolean emit,
+                  Map<String, Object> defaults) {
             this.keysClass = keysClass;
             this.holder = holder;
-            this.filePath = filePath;
-            this.fmt = fmt;
+            this.filePath = spec.filePath;
+            this.fmt = spec.fmt;
             this.emit = emit;
+            this.defaultLocale = spec.defaultLocale;
+            this.normalizeLocale = spec.normalizeLocale;
+            this.defaults = defaults;
+        }
+
+        PackSpec spec() {
+            return new PackSpec(filePath, fmt, emit, defaultLocale, normalizeLocale);
         }
     }
 
@@ -82,17 +92,16 @@ public final class LangServiceImpl implements LangService, LocaleAware {
 
     @Override
     public String locale() {
-        LocaleTag l = this.applied;
-        return (l == null ? "zh_CN" : l.tag());
+        return appliedLocale;
     }
 
     @Override
     public void setLocale(String locale) {
-        String normalized = LocaleId.normalize(locale());
-        String next = LocaleId.normalize(locale);
-        if (normalized.equalsIgnoreCase(next)) return;
+        if (locale == null || locale.isBlank()) return;
+        String next = locale.trim();
+        if (appliedLocale.equalsIgnoreCase(next)) return;
 
-        this.applied = LocaleTag.parse(next);
+        this.appliedLocale = next;
 
         // Switch all bound holders to the new locale, in-place.
         try {
@@ -122,9 +131,8 @@ public final class LangServiceImpl implements LangService, LocaleAware {
         if (existing != null && keysClass.isInstance(existing.holder)) {
             @SuppressWarnings("unchecked")
             T h = (T) existing.holder;
-            // Ensure it matches current locale content.
             try {
-                loadAndPopulate(keysClass, h, LocaleId.normalize(locale()), existing.filePath, existing.fmt, existing.emit);
+                loadAndPopulate(existing, h, locale());
             } catch (Throwable ignore) {
             }
             return h;
@@ -135,21 +143,22 @@ public final class LangServiceImpl implements LangService, LocaleAware {
         boolean shouldEmit = emit && spec.emit && !annotatedNoEmit;
 
         T holder = newInstance(keysClass);
-        String cur = LocaleId.normalize(locale());
+        Map<String, Object> defaults = defaultSnapshot(holder);
+        BoundMeta meta = new BoundMeta(keysClass, holder, spec, shouldEmit, defaults);
 
-        loadAndPopulate(keysClass, holder, cur, spec.filePath, spec.fmt, shouldEmit);
+        loadAndPopulate(meta, holder, locale());
 
-        bound.put(keysClass, new BoundMeta(keysClass, holder, spec.filePath, spec.fmt, shouldEmit));
+        bound.put(keysClass, meta);
         return holder;
     }
 
     @Override
     public <T> void save(Class<T> keysClass, String locale) {
         Objects.requireNonNull(keysClass, "keysClass");
-        String loc = LocaleId.normalize(locale);
 
         BoundMeta bm = bound.get(keysClass);
         if (bm == null || bm.holder == null) return;
+        String loc = localeFor(bm.normalizeLocale, locale);
 
         @SuppressWarnings("unchecked")
         T holder = (T) bm.holder;
@@ -157,7 +166,7 @@ public final class LangServiceImpl implements LangService, LocaleAware {
         Map<String, Object> out = new LinkedHashMap<>();
         TreeMapper.export(holder, out);
 
-        java.nio.file.Path f = diskFile(bm.filePath, loc, bm.fmt);
+        java.nio.file.Path f = diskFile(bm.filePath, loc, bm.fmt, false);
         if (!bm.emit) return;
 
         try {
@@ -179,13 +188,13 @@ public final class LangServiceImpl implements LangService, LocaleAware {
     public void saveAll() {
         for (BoundMeta bm : new ArrayList<>(bound.values())) {
             if (bm == null) continue;
-            save((Class<Object>) bm.keysClass, LocaleId.normalize(locale()));
+            save((Class<Object>) bm.keysClass, locale());
         }
     }
 
     @Override
     public void reload() {
-        String cur = LocaleId.normalize(locale());
+        String cur = locale();
 
         // Rebuild cache from scratch for the current locale for all bound holders.
         Map<String, Map<String, String>> newCache = new LinkedHashMap<>();
@@ -193,10 +202,11 @@ public final class LangServiceImpl implements LangService, LocaleAware {
         for (BoundMeta bm : new ArrayList<>(bound.values())) {
             if (bm == null || bm.holder == null) continue;
             try {
-                Map<String, Object> doc = loadDocFor(bm.keysClass, cur, bm.filePath, bm.fmt, bm.emit);
+                Map<String, Object> doc = loadDocFor(bm, cur);
                 TreeMapper.populate(bm.holder, doc);
 
-                newCache.computeIfAbsent(cur, k -> new LinkedHashMap<>()).putAll(flatten(doc));
+                String cacheLocale = localeFor(bm.normalizeLocale, cur);
+                newCache.computeIfAbsent(cacheLocale, k -> new LinkedHashMap<>()).putAll(flatten(doc));
             } catch (Exception ex) {
                 LinLog.warn(LinMsg.k("linFile.lang.langReloadLangFailed"), "lang", bm.keysClass, "reason", ex.getMessage());
             }
@@ -213,7 +223,7 @@ public final class LangServiceImpl implements LangService, LocaleAware {
         Set<String> out = new LinkedHashSet<>();
         for (BoundMeta bm : new ArrayList<>(bound.values())) {
             if (bm == null) continue;
-            out.addAll(scanLocalesOnDisk(bm.filePath, bm.fmt));
+            out.addAll(scanLocalesOnDisk(bm.spec()));
         }
         return out;
     }
@@ -229,18 +239,20 @@ public final class LangServiceImpl implements LangService, LocaleAware {
     @Override
     public <T> void ensure(Class<T> keysClass) {
         BoundMeta bm = bound.get(keysClass);
-        PackSpec spec = bm != null ? new PackSpec(bm.filePath, bm.fmt, bm.emit) : packSpec(keysClass);
+        PackSpec spec = bm != null ? bm.spec() : packSpec(keysClass);
         boolean emit = bm != null ? bm.emit : spec.emit;
+        Map<String, Object> defaults = bm != null
+                ? bm.defaults
+                : defaultSnapshot(newInstance(keysClass));
 
         if (!emit) return;
 
         // For each locale file on disk under this pack, merge defaults and write back.
-        for (String loc : scanLocalesOnDisk(spec.filePath, spec.fmt)) {
+        for (String loc : scanLocalesOnDisk(spec)) {
             try {
-                java.nio.file.Path f = diskFile(spec.filePath, loc, spec.fmt);
+                java.nio.file.Path f = diskFile(spec.filePath, loc, spec.fmt, false);
                 Map<String, Object> doc = IOs.exists(f) ? readDoc(f, spec.fmt) : new LinkedHashMap<>();
 
-                Map<String, Object> defaults = defaultsDoc(keysClass);
                 Set<String> missing = new LinkedHashSet<>();
                 mergeDefaultsCollect(defaults, doc, "", missing);
 
@@ -269,9 +281,17 @@ public final class LangServiceImpl implements LangService, LocaleAware {
 
     @Override
     public String tr(String key, Object... args) {
-        String cur = LocaleId.normalize(locale());
-        String v = val(cur, key);
-        if (v == null) v = val("en_GB", key);
+        String v = null;
+        for (BoundMeta bm : bound.values()) {
+            v = val(localeFor(bm.normalizeLocale, locale()), key);
+            if (v != null) break;
+        }
+        if (v == null) {
+            for (BoundMeta bm : bound.values()) {
+                v = val(localeFor(bm.normalizeLocale, bm.defaultLocale), key);
+                if (v != null) break;
+            }
+        }
         if (v == null) v = key;
 
         try {
@@ -298,83 +318,94 @@ public final class LangServiceImpl implements LangService, LocaleAware {
     // ------------------------------------------------------------
 
     private void switchAllHoldersTo(String locale) {
-        String loc = LocaleId.normalize(locale);
-
-        // Rebuild cache bucket for this locale from all packs.
-        Map<String, String> bucket = new LinkedHashMap<>();
+        Map<String, Map<String, String>> buckets = new LinkedHashMap<>();
 
         for (BoundMeta bm : new ArrayList<>(bound.values())) {
             if (bm == null || bm.holder == null) continue;
 
-            Map<String, Object> doc = loadDocFor(bm.keysClass, loc, bm.filePath, bm.fmt, bm.emit);
+            String loc = localeFor(bm.normalizeLocale, locale);
+            Map<String, Object> doc = loadDocFor(bm, locale);
             TreeMapper.populate(bm.holder, doc);
-            bucket.putAll(flatten(doc));
+            buckets.computeIfAbsent(loc, key -> new LinkedHashMap<>()).putAll(flatten(doc));
         }
 
-        if (!bucket.isEmpty()) {
-            cache.put(loc, bucket);
+        for (var entry : buckets.entrySet()) {
+            if (!entry.getValue().isEmpty()) {
+                cache.put(entry.getKey(), entry.getValue());
+            }
         }
     }
 
-    private <T> void loadAndPopulate(Class<T> keysClass,
-                                    T holder,
-                                    String locale,
-                                    String filePath,
-                                    FileType fmt,
-                                    boolean emit) {
-        Map<String, Object> doc = loadDocFor(keysClass, LocaleId.normalize(locale), filePath, fmt, emit);
+    private <T> void loadAndPopulate(BoundMeta meta, T holder, String locale) {
+        String loc = localeFor(meta.normalizeLocale, locale);
+        Map<String, Object> doc = loadDocFor(meta, locale);
         TreeMapper.populate(holder, doc);
 
-        cache.computeIfAbsent(LocaleId.normalize(locale), k -> new LinkedHashMap<>()).putAll(flatten(doc));
+        cache.computeIfAbsent(loc, k -> new LinkedHashMap<>()).putAll(flatten(doc));
     }
 
-    private Map<String, Object> loadDocFor(Class<?> keysClass,
-                                          String locale,
-                                          String filePath,
-                                          FileType fmt,
-                                          boolean emit) {
-        String loc = LocaleId.normalize(locale);
+    private Map<String, Object> loadDocFor(BoundMeta meta, String locale) {
+        PackSpec spec = meta.spec();
+        String loc = localeFor(spec.normalizeLocale, locale);
 
-        // 1) Normalize disk filenames in this pack (enGB -> en_GB)
-        normalizeDiskLocales(filePath, fmt);
+        normalizeDiskLocales(spec);
 
-        java.nio.file.Path f = diskFile(filePath, loc, fmt);
+        java.nio.file.Path f = diskFile(spec.filePath, loc, spec.fmt, false);
 
         Map<String, Object> doc;
         boolean exists = IOs.exists(f);
+        boolean activeResource = false;
         if (exists) {
-            doc = readDoc(f, fmt);
+            doc = readDoc(f, spec.fmt);
         } else {
-            // 2) Try built-in resource: /langservice/<filePath>/<locale>.(yml/json)
-            Map<String, Object> fromRes = readBuiltinResource(filePath, loc, fmt);
-            doc = (fromRes != null) ? fromRes : new LinkedHashMap<>();
+            Map<String, Object> fromRes = readBuiltinResource(spec.filePath, loc, spec.fmt);
+            if (fromRes != null) {
+                doc = fromRes;
+                activeResource = true;
+            } else {
+                String fallback = localeFor(spec.normalizeLocale, spec.defaultLocale);
+                Map<String, Object> fallbackDoc = readLocaleDocument(spec, fallback);
+                doc = fallbackDoc == null ? new LinkedHashMap<>() : fallbackDoc;
+            }
         }
 
-        // 3) Merge defaults (schema) and collect missing
-        Map<String, Object> defaults = defaultsDoc(keysClass);
         Set<String> missing = new LinkedHashSet<>();
-        mergeDefaultsCollect(defaults, doc, "", missing);
+        mergeDefaultsCollect(meta.defaults, doc, "", missing);
 
-        // 4) Write back / generate file if allowed
-        if (emit && !keysClass.isAnnotationPresent(NoEmit.class)) {
+        if (meta.emit && !meta.keysClass.isAnnotationPresent(NoEmit.class)) {
+            ensureDefaultLocaleFile(spec, meta.defaults);
             if (!exists) {
-                // Prefer verbatim builtin resource (preserves YAML comments/format).
-                boolean wrote = writeBuiltinResourceToDisk(filePath, loc, fmt, f);
-                if (!wrote) {
-                    persist(f, fmt, doc);
+                if (activeResource) {
+                    writeBuiltinResourceToDisk(spec.filePath, loc, spec.fmt, f);
+                } else if (loc.equalsIgnoreCase(localeFor(spec.normalizeLocale, spec.defaultLocale))) {
+                    persist(f, spec.fmt, doc);
                 }
             } else {
                 if (!missing.isEmpty()) {
-                    writeDiff(f, fmt, doc, missing);
+                    writeDiff(f, spec.fmt, doc, missing);
                 }
-                // Preserve YAML formatting/comments by not rewriting user files on load.
-                if (fmt == FileType.JSON) {
-                    persist(f, fmt, doc);
+                if (spec.fmt == FileType.JSON) {
+                    persist(f, spec.fmt, doc);
                 }
             }
         }
 
         return doc;
+    }
+
+    private Map<String, Object> readLocaleDocument(PackSpec spec, String locale) {
+        java.nio.file.Path disk = diskFile(spec.filePath, locale, spec.fmt, false);
+        if (IOs.exists(disk)) return readDoc(disk, spec.fmt);
+        return readBuiltinResource(spec.filePath, locale, spec.fmt);
+    }
+
+    private void ensureDefaultLocaleFile(PackSpec spec, Map<String, Object> defaults) {
+        String locale = localeFor(spec.normalizeLocale, spec.defaultLocale);
+        java.nio.file.Path file = diskFile(spec.filePath, locale, spec.fmt, false);
+        if (IOs.exists(file)) return;
+        if (!writeBuiltinResourceToDisk(spec.filePath, locale, spec.fmt, file)) {
+            persist(file, spec.fmt, mutableDeepCopy(defaults));
+        }
     }
 
     private Map<String, Object> readBuiltinResource(String filePath, String locale, FileType fmt) {
@@ -406,33 +437,44 @@ public final class LangServiceImpl implements LangService, LocaleAware {
         final String filePath;
         final FileType fmt;
         final boolean emit;
+        final String defaultLocale;
+        final boolean normalizeLocale;
 
-        PackSpec(String filePath, FileType fmt, boolean emit) {
+        PackSpec(String filePath, FileType fmt, boolean emit,
+                 String defaultLocale, boolean normalizeLocale) {
             this.filePath = (filePath == null || filePath.isBlank()) ? "lang" : filePath;
             this.fmt = (fmt == null) ? FileType.YAML : fmt;
             this.emit = emit;
+            this.defaultLocale = (defaultLocale == null || defaultLocale.isBlank())
+                    ? "en_GB" : defaultLocale.trim();
+            this.normalizeLocale = normalizeLocale;
         }
     }
 
     private static PackSpec packSpec(Class<?> keysClass) {
         LangPack lp = keysClass.getAnnotation(LangPack.class);
         if (lp == null) {
-            return new PackSpec("lang", FileType.YAML, true);
+            return new PackSpec("lang", FileType.YAML, true, "en_GB", true);
         }
 
         String fp = null;
         FileType fmt = null;
         Boolean em = null;
+        String defaultLocale = "en_GB";
+        boolean normalizeLocale = true;
 
-        // Reflective access to tolerate annotation evolution (path vs filePath, emit optional)
         try {
             var m = lp.annotationType().getMethod("filePath");
             fp = String.valueOf(m.invoke(lp));
         } catch (Throwable ignore) {
+        }
+
+        if (fp == null || fp.isBlank() || "lang".equals(fp)) {
             try {
                 var m = lp.annotationType().getMethod("path");
-                fp = String.valueOf(m.invoke(lp));
-            } catch (Throwable ignore2) {
+                String legacyPath = String.valueOf(m.invoke(lp));
+                if (legacyPath != null && !legacyPath.isBlank()) fp = legacyPath;
+            } catch (Throwable ignore) {
             }
         }
 
@@ -450,7 +492,13 @@ public final class LangServiceImpl implements LangService, LocaleAware {
         } catch (Throwable ignore) {
         }
 
-        return new PackSpec(fp, fmt, em == null ? true : em);
+        try {
+            defaultLocale = lp.defaultLocale();
+            normalizeLocale = lp.normalizeLocale();
+        } catch (Throwable ignore) {
+        }
+
+        return new PackSpec(fp, fmt, em == null || em, defaultLocale, normalizeLocale);
     }
 
     // ------------------------------------------------------------
@@ -464,16 +512,17 @@ public final class LangServiceImpl implements LangService, LocaleAware {
         return dir;
     }
 
-    private java.nio.file.Path diskFile(String filePath, String locale, FileType fmt) {
+    private java.nio.file.Path diskFile(String filePath, String locale, FileType fmt,
+                                        boolean normalizeLocale) {
         java.nio.file.Path dir = diskDir(filePath);
-        return dir.resolve(LocaleId.normalize(locale) + extOf(fmt));
+        return dir.resolve(localeFor(normalizeLocale, locale) + extOf(fmt));
     }
 
-    private Set<String> scanLocalesOnDisk(String filePath, FileType fmt) {
-        normalizeDiskLocales(filePath, fmt);
+    private Set<String> scanLocalesOnDisk(PackSpec spec) {
+        normalizeDiskLocales(spec);
 
-        java.nio.file.Path dir = diskDir(filePath);
-        String ext = extOf(fmt);
+        java.nio.file.Path dir = diskDir(spec.filePath);
+        String ext = extOf(spec.fmt);
         Set<String> out = new LinkedHashSet<>();
         try {
             if (!IOs.exists(dir)) return out;
@@ -483,7 +532,7 @@ public final class LangServiceImpl implements LangService, LocaleAware {
                         .forEach(p -> {
                             String name = p.getFileName().toString();
                             String base = name.substring(0, name.length() - ext.length());
-                            out.add(LocaleId.normalize(base));
+                            out.add(localeFor(spec.normalizeLocale, base));
                         });
             }
         } catch (Throwable ignore) {
@@ -491,9 +540,10 @@ public final class LangServiceImpl implements LangService, LocaleAware {
         return out;
     }
 
-    private void normalizeDiskLocales(String filePath, FileType fmt) {
-        java.nio.file.Path dir = diskDir(filePath);
-        String ext = extOf(fmt);
+    private void normalizeDiskLocales(PackSpec spec) {
+        if (!spec.normalizeLocale) return;
+        java.nio.file.Path dir = diskDir(spec.filePath);
+        String ext = extOf(spec.fmt);
         try {
             if (!IOs.exists(dir)) return;
             try (var st = java.nio.file.Files.list(dir)) {
@@ -516,6 +566,11 @@ public final class LangServiceImpl implements LangService, LocaleAware {
         }
     }
 
+    private static String localeFor(boolean normalizeLocale, String locale) {
+        String value = (locale == null || locale.isBlank()) ? "zh_CN" : locale.trim();
+        return normalizeLocale ? LocaleId.normalize(value) : value;
+    }
+
     // ------------------------------------------------------------
     // Serialization helpers
     // ------------------------------------------------------------
@@ -533,9 +588,17 @@ public final class LangServiceImpl implements LangService, LocaleAware {
     private static void persist(java.nio.file.Path file,
                                 FileType fmt,
                                 Map<String, Object> doc) {
-        String out = (fmt == FileType.YAML)
-                ? YamlCodec.dump(doc)
-                : JsonCodec.dump(doc);
+        String out;
+        if (fmt == FileType.YAML) {
+            Map<String, List<String>> comments = IOs.exists(file)
+                    ? YamlCodec.extractComments(IOs.readString(file))
+                    : Map.of();
+            out = comments.isEmpty()
+                    ? YamlCodec.dump(doc)
+                    : YamlCodec.dumpWithComments(doc, comments);
+        } else {
+            out = JsonCodec.dump(doc);
+        }
         IOs.writeString(file, out);
         LinLog.debug(LinMsg.k("linFile.lang.langSaved"), "lang", file);
     }
@@ -567,11 +630,10 @@ public final class LangServiceImpl implements LangService, LocaleAware {
         }
     }
 
-    private static Map<String, Object> defaultsDoc(Class<?> keysClass) {
-        Object defaults = newInstance((Class<Object>) keysClass);
+    private static Map<String, Object> defaultSnapshot(Object holder) {
         Map<String, Object> defDoc = new LinkedHashMap<>();
-        TreeMapper.export(defaults, defDoc);
-        return defDoc;
+        TreeMapper.export(holder, defDoc);
+        return immutableDeepCopy(defDoc);
     }
 
 
@@ -610,7 +672,11 @@ public final class LangServiceImpl implements LangService, LocaleAware {
     }
 
     private String val(String locale, String key) {
-        Map<String, String> m = cache.get(LocaleId.normalize(locale));
+        Map<String, String> m = cache.get(locale);
+        if (m == null) {
+            String normalized = LocaleId.normalize(locale);
+            if (!normalized.equals(locale)) m = cache.get(normalized);
+        }
         return m == null ? null : m.get(key);
     }
 
@@ -628,7 +694,7 @@ public final class LangServiceImpl implements LangService, LocaleAware {
 
             Object existingKey = findExistingKey(doc, k);
             if (existingKey == null) {
-                ((Map) doc).put(k, dv);
+                ((Map) doc).put(k, mutableDeepCopyValue(dv));
                 missing.add(path);
                 continue;
             }
@@ -753,18 +819,55 @@ public final class LangServiceImpl implements LangService, LocaleAware {
 
     @SuppressWarnings("unchecked")
     private static Map<String, Object> deepCopyMap(Map<String, Object> src) {
+        return mutableDeepCopy(src);
+    }
+
+    private static Map<String, Object> mutableDeepCopy(Map<String, Object> src) {
         Map<String, Object> out = new LinkedHashMap<>();
         for (var e : src.entrySet()) {
-            Object v = e.getValue();
-            if (v instanceof Map<?, ?> m) {
-                out.put(e.getKey(), deepCopyMap((Map<String, Object>) (Map<?, ?>) m));
-            } else if (v instanceof List<?> l) {
-                out.put(e.getKey(), new ArrayList<>(l));
-            } else {
-                out.put(e.getKey(), v);
-            }
+            out.put(e.getKey(), mutableDeepCopyValue(e.getValue()));
         }
         return out;
+    }
+
+    private static Object mutableDeepCopyValue(Object value) {
+        if (value instanceof Map<?, ?> map) {
+            Map<String, Object> copy = new LinkedHashMap<>();
+            for (var entry : map.entrySet()) {
+                copy.put(String.valueOf(entry.getKey()), mutableDeepCopyValue(entry.getValue()));
+            }
+            return copy;
+        }
+        if (value instanceof Collection<?> collection) {
+            List<Object> copy = new ArrayList<>(collection.size());
+            for (Object element : collection) copy.add(mutableDeepCopyValue(element));
+            return copy;
+        }
+        return value;
+    }
+
+    private static Map<String, Object> immutableDeepCopy(Map<String, Object> src) {
+        Map<String, Object> out = new LinkedHashMap<>();
+        for (var entry : src.entrySet()) {
+            out.put(entry.getKey(), immutableDeepCopyValue(entry.getValue()));
+        }
+        return Collections.unmodifiableMap(out);
+    }
+
+    private static Object immutableDeepCopyValue(Object value) {
+        if (value instanceof Map<?, ?> map) {
+            Map<String, Object> copy = new LinkedHashMap<>();
+            for (var entry : map.entrySet()) {
+                copy.put(String.valueOf(entry.getKey()), immutableDeepCopyValue(entry.getValue()));
+            }
+            return Collections.unmodifiableMap(copy);
+        }
+        if (value instanceof Collection<?> collection) {
+            List<Object> copy = new ArrayList<>(collection.size());
+            for (Object element : collection) copy.add(immutableDeepCopyValue(element));
+            return Collections.unmodifiableList(copy);
+        }
+        return value;
     }
 
     @SuppressWarnings("unchecked")

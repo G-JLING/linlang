@@ -18,7 +18,7 @@ import api.linlang.file.file.annotations.NamingStyle;
  * 2) 使用占位符 {name} 形式传参
  * 常用占位：{file}、{path}、{count}、{diff}、{reason}、{locale}。
  */
-@LangPack(path = "linlang/linlog/message", format = FileType.YAML, normalizeLocale = true)
+@LangPack(filePath = "linlang/linlog/message", format = FileType.YAML, normalizeLocale = true)
 @NamingStyle(value = NamingStyle.Style.KEBAB)
 public class LinlangInternalMessageKeys {
 

@@ -26,7 +26,7 @@ public final class ViewSpecParser {
 
         String id = str(root.get("id"), "");
         String type = str(root.get("type"), "inventory");
-        boolean allowManualClose = boolObj(root.get("allowManualClose"));
+        boolean allowManualClose = bool(root.get("allowManualClose"), true);
         int rows = integer(root.get("rows"), 6);
         String title = str(root.get("title"), "");
 
@@ -42,7 +42,8 @@ public final class ViewSpecParser {
         if (legendObj instanceof Map<?, ?> m) {
             for (var e : m.entrySet()) {
                 String ch = String.valueOf(e.getKey());
-                Map<String, Object> ent = (Map<String, Object>) e.getValue();
+                if (!(e.getValue() instanceof Map<?, ?> value)) continue;
+                Map<String, Object> ent = (Map<String, Object>) value;
                 LegendEntrySpec spec = parseLegendEntry(ent);
                 legend.put(ch, spec);
             }
@@ -192,5 +193,10 @@ public final class ViewSpecParser {
         if ("true".equalsIgnoreCase(s)) return true;
         if ("false".equalsIgnoreCase(s)) return false;
         return null;
+    }
+
+    private static boolean bool(Object o, boolean def) {
+        Boolean value = boolObj(o);
+        return value == null ? def : value;
     }
 }

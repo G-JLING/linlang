@@ -9,6 +9,8 @@ import core.linlang.audit.AbstractAuditProvider;
 import core.linlang.audit.config.AuditConfig;
 import core.linlang.event.dispatcher.EventDispatcher;
 import core.linlang.file.impl.LangServiceImpl;
+import core.linlang.view.platform.InteractPlatformAdapter;
+import core.linlang.view.platform.ViewEventBridge;
 
 import java.util.function.Supplier;
 
@@ -30,6 +32,15 @@ public interface PlatformAdapter<P> {
 
     /** 创建消息服务（通常与平台无关，但可注入平台特性） */
     LinMessenger createMessenger(LangServiceImpl lang);
+
+    /** 为指定 owner 创建界面平台适配器 */
+    InteractPlatformAdapter createViewAdapter(P owner);
+
+    /** 注册界面事件桥接 */
+    default void registerViewEvents(P owner, InteractPlatformAdapter viewAdapter, ViewEventBridge bridge) {}
+
+    /** 释放界面事件桥接 */
+    default void closeView(P owner) {}
 
     /** 创建运行时全局审计/日志 provider */
     AbstractAuditProvider createGlobalAudit(P runtimeHost, AuditConfig cfg, boolean usePluginLogger);

@@ -5,7 +5,7 @@ import api.linlang.file.file.annotations.LangPack;
 import api.linlang.file.file.annotations.NamingStyle;
 
 @NamingStyle(NamingStyle.Style.KEBAB)
-@LangPack(path = "linlang/lincommand/message", format = FileType.YAML, normalizeLocale = true)
+@LangPack(filePath = "linlang/lincommand/message", format = FileType.YAML, normalizeLocale = true)
 public class CommandMessageKeys {
     public Prompt prompt = new Prompt();
     public Error error = new Error();

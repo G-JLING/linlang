@@ -51,36 +51,74 @@ public final class SpecParser {
 
     /** 把 spec 按空白切分，但保留 <> 或 [] 内的空白；支持 `...` 作为字面量整体。 */
     private static List<String> tokenize(String spec){
+        if (spec == null) throw new IllegalArgumentException("spec");
         List<String> out = new ArrayList<>();
         StringBuilder cur = new StringBuilder();
-        int depth = 0; // 0=外部；1=尖括号<>；2=中括号[]；3=反引号`...`
+        char paramClose = 0;
+        int squareDepth = 0;
+        int braceDepth = 0;
+        boolean quoted = false;
         for (int i=0;i<spec.length();i++){
             char c = spec.charAt(i);
-            if (depth == 0){
+            if (quoted) {
+                cur.append(c);
+                if (c == '`') {
+                    out.add(cur.toString());
+                    cur.setLength(0);
+                    quoted = false;
+                }
+                continue;
+            }
+
+            if (paramClose == 0){
                 if (c == '`'){
-                    // 开始反引号字面量，保存起始反引号
                     if (cur.length() > 0){ out.add(cur.toString()); cur.setLength(0); }
                     cur.append('`');
-                    depth = 3;
+                    quoted = true;
                     continue;
                 }
                 if (Character.isWhitespace(c)){
                     if (cur.length()>0){ out.add(cur.toString()); cur.setLength(0);}
                     continue;
                 }
-                if (c == '<'){ depth = 1; cur.append(c); continue; }
-                if (c == '['){ depth = 2; cur.append(c); continue; }
+                if (c == '<' || c == '['){
+                    if (cur.length() > 0) {
+                        out.add(cur.toString());
+                        cur.setLength(0);
+                    }
+                    paramClose = c == '<' ? '>' : ']';
+                    squareDepth = 0;
+                    braceDepth = 0;
+                    cur.append(c);
+                    continue;
+                }
                 cur.append(c);
-            } else if (depth == 1){ // <> 中
-                cur.append(c);
-                if (c == '>'){ out.add(cur.toString()); cur.setLength(0); depth = 0; }
-            } else if (depth == 2){ // [] 中
-                cur.append(c);
-                if (c == ']'){ out.add(cur.toString()); cur.setLength(0); depth = 0; }
-            } else { // 反引号 `...` 中
-                cur.append(c);
-                if (c == '`'){ out.add(cur.toString()); cur.setLength(0); depth = 0; }
+                continue;
             }
+
+            cur.append(c);
+            if (c == '{') {
+                braceDepth++;
+            } else if (c == '}' && braceDepth > 0) {
+                braceDepth--;
+            } else if (braceDepth == 0 && c == '[') {
+                squareDepth++;
+            } else if (braceDepth == 0 && c == ']') {
+                if (paramClose == ']' && squareDepth == 0) {
+                    out.add(cur.toString());
+                    cur.setLength(0);
+                    paramClose = 0;
+                } else if (squareDepth > 0) {
+                    squareDepth--;
+                }
+            } else if (braceDepth == 0 && squareDepth == 0 && c == paramClose) {
+                out.add(cur.toString());
+                cur.setLength(0);
+                paramClose = 0;
+            }
+        }
+        if (quoted || paramClose != 0) {
+            throw new IllegalArgumentException("unclosed token in command spec: " + spec);
         }
         if (cur.length()>0) out.add(cur.toString());
         return out;
@@ -97,7 +135,7 @@ public final class SpecParser {
         // 提取 @描述（若存在）
         String desc = null;
         boolean i18nTag = false;
-        int at = body.indexOf('@');
+        int at = findTopLevel(body, '@');
         if (at >= 0) {
             desc = body.substring(at + 1).trim();
             body = body.substring(0, at).trim();
@@ -112,14 +150,58 @@ public final class SpecParser {
         Model.Param p = new Model.Param();
         p.optional = optional;
 
-        // 参数主体可能是 "name:type{rules}" 或仅 "name"
-        // 这里只抽取 *纯参数名*（用于 i18n labels 命中）
-        String nameOnly = body;
-        int colon = body.indexOf(':');
+        String defVal = null;
+        int equals = findTopLevel(body, '=');
+        if (equals >= 0) {
+            defVal = body.substring(equals + 1).trim();
+            body = body.substring(0, equals).trim();
+        }
+
+        String nameOnly;
+        String typeUnion;
+        int colon = findTopLevel(body, ':');
         if (colon >= 0) {
             nameOnly = body.substring(0, colon).trim();
+            typeUnion = body.substring(colon + 1).trim();
+        } else {
+            nameOnly = body.trim();
+            typeUnion = "string";
         }
+        if (nameOnly.isEmpty()) throw new IllegalArgumentException("parameter name is empty: " + tok);
+        if (typeUnion.isEmpty()) throw new IllegalArgumentException("parameter type is empty: " + tok);
+
         p.name = nameOnly;
+        p.defVal = defVal;
+
+        for (String rawType : splitTopLevel(typeUnion, '|')) {
+            String type = rawType.trim();
+            if (type.isEmpty()) throw new IllegalArgumentException("parameter type is empty: " + tok);
+
+            Model.TypeSpec typeSpec = new Model.TypeSpec();
+            int leftBrace = type.indexOf('{');
+            if (leftBrace >= 0) {
+                if (!type.endsWith("}")) throw new IllegalArgumentException("bad type rule: " + type);
+                typeSpec.id = type.substring(0, leftBrace).trim();
+                typeSpec.meta.put("body", type.substring(leftBrace + 1, type.length() - 1));
+            } else {
+                int leftBracket = type.indexOf('[');
+                if (leftBracket >= 0) {
+                    if (!type.endsWith("]")) throw new IllegalArgumentException("bad type range: " + type);
+                    typeSpec.id = type.substring(0, leftBracket).trim();
+                    String range = type.substring(leftBracket + 1, type.length() - 1);
+                    String[] limits = range.split("\\.\\.", -1);
+                    if (limits.length != 2) throw new IllegalArgumentException("bad type range: " + type);
+                    typeSpec.meta.put("min", limits[0].trim());
+                    typeSpec.meta.put("max", limits[1].trim());
+                } else {
+                    typeSpec.id = type;
+                }
+            }
+            if (typeSpec.id == null || typeSpec.id.isBlank()) {
+                throw new IllegalArgumentException("parameter type is empty: " + tok);
+            }
+            p.types.add(typeSpec);
+        }
 
         // 若用户直接在 spec 中写了 @描述，则优先采用该描述；
         // 否则在渲染时若 i18nTag 为 true，则从外部 labelsI18n 查找
@@ -127,6 +209,40 @@ public final class SpecParser {
         p.i18nTag = i18nTag;  // 标记此参数说明需从 i18n map 查
 
         return p;
+    }
+
+    private static int findTopLevel(String value, char target) {
+        int braces = 0;
+        int brackets = 0;
+        for (int i = 0; i < value.length(); i++) {
+            char c = value.charAt(i);
+            if (c == '{') braces++;
+            else if (c == '}' && braces > 0) braces--;
+            else if (c == '[') brackets++;
+            else if (c == ']' && brackets > 0) brackets--;
+            else if (c == target && braces == 0 && brackets == 0) return i;
+        }
+        return -1;
+    }
+
+    private static List<String> splitTopLevel(String value, char separator) {
+        List<String> out = new ArrayList<>();
+        int start = 0;
+        int braces = 0;
+        int brackets = 0;
+        for (int i = 0; i < value.length(); i++) {
+            char c = value.charAt(i);
+            if (c == '{') braces++;
+            else if (c == '}' && braces > 0) braces--;
+            else if (c == '[') brackets++;
+            else if (c == ']' && brackets > 0) brackets--;
+            else if (c == separator && braces == 0 && brackets == 0) {
+                out.add(value.substring(start, i));
+                start = i + 1;
+            }
+        }
+        out.add(value.substring(start));
+        return out;
     }
 
     // 判断是否为反引号字面量

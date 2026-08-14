@@ -7,6 +7,7 @@ import api.linlang.file.file.ConfigService;
 import api.linlang.file.file.LangService;
 import api.linlang.messenger.LinMessenger;
 import api.linlang.runtime.Linlang;
+import api.linlang.view.LinView;
 
 import core.linlang.file.impl.ConfigServiceImpl;
 import core.linlang.file.impl.LangServiceImpl;
@@ -156,6 +157,11 @@ public final class LinlangBukkitBootstrap implements AutoCloseable, Linlang, Lin
     @Override
     public LinMessenger linMessenger() {
         return messenger;
+    }
+
+    @Override
+    public LinView linView() {
+        return runtime.createView(runtimePlugin);
     }
 
     @Override

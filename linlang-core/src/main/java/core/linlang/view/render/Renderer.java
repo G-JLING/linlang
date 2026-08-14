@@ -9,17 +9,22 @@ import core.linlang.view.spec.*;
 import java.util.*;
 
 import static core.linlang.view.render.Placeholders.apply;
+import static core.linlang.view.render.Placeholders.applyValue;
 
 public final class Renderer {
 
     public RenderModel render(DefaultGuiSession session) {
+        return render(session, Map.of());
+    }
+
+    public RenderModel render(DefaultGuiSession session, Map<String, Object> platformVars) {
         CompiledView cv = session.compiled();
         int size = cv.rows() * cv.cols();
 
         ItemModel[] items = new ItemModel[size];
         ClickRoute[] routes = new ClickRoute[size];
 
-        Map<String, Object> vars = baseVars(session);
+        Map<String, Object> vars = baseVars(session, platformVars);
 
         // title
         String title = apply(cv.spec().title(), vars);
@@ -32,11 +37,13 @@ public final class Renderer {
 
             String uid = le.uid();
             GuiWidget override = ((DefaultGuiSession.StaticViewImpl) session.statics()).overrideOrNull(uid);
+            Map<String, Object> widgetVars = new LinkedHashMap<>(vars);
+            widgetVars.put("widget.uid", uid == null ? "" : uid);
 
             if (override != null) {
-                // override widget uses API model, convert to ItemModel
-                items[slot] = new ItemModel(toIconSpec(override, vars), override.visible(), override.enabled());
-                routes[slot] = override.action() == null ? null : new ClickRoute(uid, null, -1, toActionSpec(override.action(), vars));
+                items[slot] = new ItemModel(toIconSpec(override, widgetVars), override.visible(), override.enabled());
+                routes[slot] = override.action() == null ? null
+                        : new ClickRoute(uid, null, -1, toActionSpec(override.action(), widgetVars));
                 continue;
             }
 
@@ -48,9 +55,10 @@ public final class Renderer {
             boolean enabled = ((DefaultGuiSession.StaticViewImpl) session.statics()).enabledOverride(uid) == null
                     ? true : ((DefaultGuiSession.StaticViewImpl) session.statics()).enabledOverride(uid);
 
-            IconSpec renderedIcon = renderIcon(icon, vars);
+            IconSpec renderedIcon = renderIcon(icon, widgetVars);
             items[slot] = new ItemModel(renderedIcon, visible, enabled);
-            routes[slot] = (act == null || !enabled || !visible) ? null : new ClickRoute(uid, null, -1, renderAction(act, vars));
+            routes[slot] = (act == null || !enabled || !visible) ? null
+                    : new ClickRoute(uid, null, -1, renderAction(act, widgetVars));
         }
 
         // 2) render dynamic areas
@@ -59,10 +67,11 @@ public final class Renderer {
             DynamicAreaSpec da = areaEntry.getValue();
             int[] slots = cv.dynamicSlots().get(areaId);
             if (slots == null) continue;
+            Map<String, Object> areaVars = new LinkedHashMap<>(vars);
+            areaVars.put("area.id", areaId);
 
-            // empty fill
             IconSpec emptyIcon = da.emptyFill() == null ? null : da.emptyFill().icon();
-            IconSpec renderedEmpty = emptyIcon == null ? null : renderIcon(emptyIcon, vars);
+            IconSpec renderedEmpty = emptyIcon == null ? null : renderIcon(emptyIcon, areaVars);
 
             for (int i = 0; i < slots.length; i++) {
                 int slot = slots[i];
@@ -75,17 +84,28 @@ public final class Renderer {
                 }
 
                 GuiRow row = b.row();
-                Map<String, Object> rowVars = new LinkedHashMap<>(vars);
-                rowVars.putAll(prefixRow(row.data()));
+                Map<String, Object> rowVars = new LinkedHashMap<>(areaVars);
+                addNamespace(rowVars, "row", row.data());
 
-                TemplateSpec tpl = da.template();
-                VariantSelector.Selected sel = VariantSelector.select(tpl, row.data(), session.state());
+                IconSpec icon;
+                ActionSpec act;
+                boolean visible;
+                boolean enabled;
 
-                IconSpec icon = renderIcon(sel.icon(), rowVars);
-                ActionSpec act = sel.action() == null ? null : renderAction(sel.action(), rowVars);
-
-                boolean visible = sel.visibleOverride() == null ? true : sel.visibleOverride();
-                boolean enabled = sel.enabledOverride() == null ? true : sel.enabledOverride();
+                GuiWidget widget = row.widget();
+                if (widget != null) {
+                    icon = toIconSpec(widget, rowVars);
+                    act = toActionSpec(widget.action(), rowVars);
+                    visible = widget.visible();
+                    enabled = widget.enabled();
+                } else {
+                    TemplateSpec tpl = da.template();
+                    VariantSelector.Selected sel = VariantSelector.select(tpl, row.data(), session.state());
+                    icon = renderIcon(sel.icon(), rowVars);
+                    act = sel.action() == null ? null : renderAction(sel.action(), rowVars);
+                    visible = sel.visibleOverride() == null || sel.visibleOverride();
+                    enabled = sel.enabledOverride() == null || sel.enabledOverride();
+                }
 
                 items[slot] = new ItemModel(icon, visible, enabled);
                 routes[slot] = (act == null || !enabled || !visible)
@@ -97,20 +117,30 @@ public final class Renderer {
         return new RenderModel(title, items, routes);
     }
 
-    private static Map<String, Object> baseVars(DefaultGuiSession session) {
+    private static Map<String, Object> baseVars(DefaultGuiSession session,
+                                                Map<String, Object> platformVars) {
         Map<String, Object> m = new LinkedHashMap<>();
-        // state.xxx
-        for (var e : session.state().entrySet()) {
-            m.put("state." + e.getKey(), e.getValue());
-        }
+        if (platformVars != null) m.putAll(platformVars);
+        m.put("view.id", session.viewId());
+        addNamespace(m, "state", session.state());
         return m;
     }
 
-    private static Map<String, Object> prefixRow(Map<String, Object> row) {
-        Map<String, Object> m = new LinkedHashMap<>();
-        if (row == null) return m;
-        for (var e : row.entrySet()) m.put("row." + e.getKey(), e.getValue());
-        return m;
+    private static void addNamespace(Map<String, Object> vars, String prefix,
+                                     Map<String, ?> values) {
+        if (values == null) return;
+        for (var entry : values.entrySet()) {
+            String path = prefix + "." + entry.getKey();
+            Object value = entry.getValue();
+            vars.put(path, value);
+            if (value instanceof Map<?, ?> nested) {
+                Map<String, Object> normalized = new LinkedHashMap<>();
+                for (var nestedEntry : nested.entrySet()) {
+                    normalized.put(String.valueOf(nestedEntry.getKey()), nestedEntry.getValue());
+                }
+                addNamespace(vars, path, normalized);
+            }
+        }
     }
 
     private static IconSpec renderIcon(IconSpec icon, Map<String, Object> vars) {
@@ -121,17 +151,15 @@ public final class Renderer {
         List<String> lore = new ArrayList<>();
         for (String s : icon.lore()) lore.add(apply(s, vars));
 
-        return new IconSpec(icon.kind(), key, icon.amount(), name, lore, icon.meta());
+        @SuppressWarnings("unchecked")
+        Map<String, Object> meta = (Map<String, Object>) applyValue(icon.meta(), vars);
+        return new IconSpec(icon.kind(), key, icon.amount(), name, lore, meta);
     }
 
     private static ActionSpec renderAction(ActionSpec act, Map<String, Object> vars) {
         if (act == null) return null;
-        Map<String, Object> args = new LinkedHashMap<>();
-        for (var e : act.args().entrySet()) {
-            Object v = e.getValue();
-            if (v instanceof String s) args.put(e.getKey(), apply(s, vars));
-            else args.put(e.getKey(), v);
-        }
+        @SuppressWarnings("unchecked")
+        Map<String, Object> args = (Map<String, Object>) applyValue(act.args(), vars);
         String refresh = apply(act.refresh(), vars);
         return new ActionSpec(act.type(), args, refresh);
     }
@@ -143,17 +171,15 @@ public final class Renderer {
         String key = apply(i.key(), vars);
         String name = apply(i.name(), vars);
         List<String> lore = i.lore() == null ? List.of() : i.lore().stream().map(s -> apply(s, vars)).toList();
-        return new IconSpec(i.kind(), key, i.amount(), name, lore, i.meta());
+        @SuppressWarnings("unchecked")
+        Map<String, Object> meta = (Map<String, Object>) applyValue(i.meta(), vars);
+        return new IconSpec(i.kind(), key, i.amount(), name, lore, meta);
     }
 
     private static ActionSpec toActionSpec(api.linlang.view.model.GuiAction a, Map<String, Object> vars) {
         if (a == null) return null;
-        Map<String, Object> args = new LinkedHashMap<>();
-        for (var e : a.args().entrySet()) {
-            Object v = e.getValue();
-            if (v instanceof String s) args.put(e.getKey(), apply(s, vars));
-            else args.put(e.getKey(), v);
-        }
-        return new ActionSpec(a.type(), args, a.refresh());
+        @SuppressWarnings("unchecked")
+        Map<String, Object> args = (Map<String, Object>) applyValue(a.args(), vars);
+        return new ActionSpec(a.type(), args, apply(a.refresh(), vars));
     }
 }

@@ -12,7 +12,30 @@ public interface InteractPlatformAdapter {
 
     void apply(Object viewer, RenderModel model);
 
+    /**
+     * 只应用指定槽位。
+     *
+     * <p>不支持局部更新的平台可以回退为完整应用。</p>
+     */
+    default void applySlots(Object viewer, RenderModel model, int[] slots) {
+        apply(viewer, model);
+    }
+
     void close(Object viewer);
+
+    /**
+     * 提供平台相关的渲染变量。
+     */
+    default Map<String, Object> viewerVariables(Object viewer) {
+        return Map.of();
+    }
+
+    /**
+     * 以当前观众身份执行命令。
+     */
+    default boolean executeCommand(Object viewer, String command) {
+        return false;
+    }
 
     /**
      * 平台解析 icon -> 平台物品（Bukkit ItemStack 等）。

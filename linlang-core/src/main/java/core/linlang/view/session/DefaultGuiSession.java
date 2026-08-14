@@ -1,19 +1,29 @@
 package core.linlang.view.session;
 
 import api.linlang.view.model.GuiRow;
+import api.linlang.view.model.GuiAction;
 import api.linlang.view.model.GuiWidget;
+import api.linlang.view.model.dto.GuiIcon;
 import api.linlang.view.session.*;
 import api.linlang.view.state.GuiState;
 import core.linlang.view.compile.CompiledView;
+import core.linlang.view.spec.ActionSpec;
+import core.linlang.view.spec.IconSpec;
+import core.linlang.view.spec.LegendEntrySpec;
 
 import java.util.*;
 import java.util.function.BiConsumer;
+import java.util.function.Consumer;
 
 public final class DefaultGuiSession implements GuiSession {
 
     private final Object viewer;
     private final CompiledView view;
     private final boolean allowManualClose;
+    private final Runnable refreshAction;
+    private final Consumer<String> refreshAreaAction;
+    private final Runnable closeAction;
+    private final Runnable backAction;
 
 
     private final StateImpl state = new StateImpl();
@@ -28,13 +38,28 @@ public final class DefaultGuiSession implements GuiSession {
     private final Map<String, List<GuiRow>> areaRows = new LinkedHashMap<>();
 
     public DefaultGuiSession(Object viewer, CompiledView view) {
+        this(viewer, view, () -> {}, areaId -> {}, () -> {}, () -> {});
+    }
+
+    public DefaultGuiSession(Object viewer, CompiledView view, Runnable refreshAction,
+                             Consumer<String> refreshAreaAction, Runnable closeAction) {
+        this(viewer, view, refreshAction, refreshAreaAction, closeAction, () -> {});
+    }
+
+    public DefaultGuiSession(Object viewer, CompiledView view, Runnable refreshAction,
+                             Consumer<String> refreshAreaAction, Runnable closeAction,
+                             Runnable backAction) {
         this.viewer = viewer;
         this.view = view;
+        this.refreshAction = Objects.requireNonNull(refreshAction, "refreshAction");
+        this.refreshAreaAction = Objects.requireNonNull(refreshAreaAction, "refreshAreaAction");
+        this.closeAction = Objects.requireNonNull(closeAction, "closeAction");
+        this.backAction = Objects.requireNonNull(backAction, "backAction");
 
         this.allowManualClose = view.spec().allowManualClose();
 
         this.statics = new StaticViewImpl(view);
-        this.dynamics = new DynamicAreasImpl(view, areaRows, bindings);
+        this.dynamics = new DynamicAreasImpl(view, areaRows, bindings, state);
         for (String areaId : view.dynamicSlots().keySet()) {
             areaRows.put(areaId, new ArrayList<>());
         }
@@ -46,9 +71,10 @@ public final class DefaultGuiSession implements GuiSession {
     @Override public StaticView statics() { return statics; }
     @Override public DynamicAreas dynamics() { return dynamics; }
 
-    @Override public void refresh() { /* core impl calls renderer+adapter */ }
-    @Override public void refreshArea(String areaId) { /* core impl calls renderer+adapter */ }
-    @Override public void close() { /* core impl calls adapter */ }
+    @Override public void refresh() { refreshAction.run(); }
+    @Override public void refreshArea(String areaId) { refreshAreaAction.accept(areaId); }
+    @Override public void close() { closeAction.run(); }
+    @Override public void back() { backAction.run(); }
 
     /*
      * 是否允许玩家手动关闭该界面。
@@ -56,6 +82,8 @@ public final class DefaultGuiSession implements GuiSession {
      */
     public boolean allowManualClose() {
         Object v = state.get("_allowManualClose");
+        if (v == null) v = state.get("allowManualClose");
+        if (v == null) v = state.get("view.allowManualClose");
         if (v instanceof Boolean b) return b;
         if (v != null) {
             String s = String.valueOf(v);
@@ -90,11 +118,20 @@ public final class DefaultGuiSession implements GuiSession {
 
         @Override public Set<String> ids() { return view.staticSlotOfUid().keySet(); }
 
-        @Override public GuiWidget get(String uid) { return overrides.get(uid); }
+        @Override public GuiWidget get(String uid) {
+            GuiWidget override = overrides.get(uid);
+            if (override != null) return override;
+            Integer slot = view.staticSlotOfUid().get(uid);
+            if (slot == null) return null;
+            LegendEntrySpec entry = view.staticDefaults().get(slot);
+            if (entry == null) return null;
+            return GuiWidget.of(toIcon(entry.icon()), toAction(entry.action()));
+        }
 
         @Override public StaticView set(String uid, GuiWidget widget) {
             if (uid == null) return this;
-            overrides.put(uid, widget);
+            if (widget == null) overrides.remove(uid);
+            else overrides.put(uid, widget);
             return this;
         }
 
@@ -116,6 +153,17 @@ public final class DefaultGuiSession implements GuiSession {
         public GuiWidget overrideOrNull(String uid) { return overrides.get(uid); }
         public Boolean visibleOverride(String uid) { return visible.get(uid); }
         public Boolean enabledOverride(String uid) { return enabled.get(uid); }
+
+        private static GuiIcon toIcon(IconSpec icon) {
+            if (icon == null) return null;
+            return new GuiIcon(icon.kind(), icon.key(), icon.amount(), icon.name(),
+                    icon.lore(), icon.meta());
+        }
+
+        private static GuiAction toAction(ActionSpec action) {
+            if (action == null) return null;
+            return new GuiAction.Simple(action.type(), action.args(), action.refresh());
+        }
     }
 
     // ---- dynamic ----
@@ -125,18 +173,23 @@ public final class DefaultGuiSession implements GuiSession {
         private final CompiledView view;
         private final Map<String, List<GuiRow>> areaRows;
         private final Map<Integer, Binding> bindings;
+        private final GuiState state;
 
-        DynamicAreasImpl(CompiledView view, Map<String, List<GuiRow>> areaRows, Map<Integer, Binding> bindings) {
+        DynamicAreasImpl(CompiledView view, Map<String, List<GuiRow>> areaRows,
+                         Map<Integer, Binding> bindings, GuiState state) {
             this.view = view;
             this.areaRows = areaRows;
             this.bindings = bindings;
+            this.state = state;
         }
 
         @Override public DynamicAreaView area(String areaId) {
             if (areaId == null) return null;
             int[] slots = view.dynamicSlots().get(areaId);
             if (slots == null) return null;
-            return new DynamicAreaViewImpl(areaId, slots, areaRows, bindings);
+            String overflow = view.dynamicSpecs().get(areaId) == null
+                    ? "truncate" : view.dynamicSpecs().get(areaId).overflow();
+            return new DynamicAreaViewImpl(areaId, slots, areaRows, bindings, state, overflow);
         }
     }
 
@@ -146,12 +199,17 @@ public final class DefaultGuiSession implements GuiSession {
         private final int[] slots;
         private final Map<String, List<GuiRow>> areaRows;
         private final Map<Integer, Binding> bindings;
+        private final GuiState state;
+        private final String overflow;
 
-        DynamicAreaViewImpl(String id, int[] slots, Map<String, List<GuiRow>> areaRows, Map<Integer, Binding> bindings) {
+        DynamicAreaViewImpl(String id, int[] slots, Map<String, List<GuiRow>> areaRows,
+                            Map<Integer, Binding> bindings, GuiState state, String overflow) {
             this.id = id;
             this.slots = slots;
             this.areaRows = areaRows;
             this.bindings = bindings;
+            this.state = state;
+            this.overflow = overflow;
         }
 
         @Override public String id() { return id; }
@@ -169,9 +227,17 @@ public final class DefaultGuiSession implements GuiSession {
             clear();
             if (rows == null) return this;
             List<GuiRow> dst = areaRows.get(id);
-            int n = Math.min(rows.size(), slots.length);
+            int from = 0;
+            if ("pagination".equalsIgnoreCase(overflow)) {
+                int page = Math.max(0, state.integer(id + ".page", state.integer("page", 0)));
+                from = Math.min(rows.size(), page * slots.length);
+                state.put(id + ".pageCount",
+                        Math.max(1, (rows.size() + slots.length - 1) / slots.length));
+                state.put(id + ".total", rows.size());
+            }
+            int n = Math.min(slots.length, rows.size() - from);
             for (int i = 0; i < n; i++) {
-                GuiRow r = rows.get(i);
+                GuiRow r = rows.get(from + i);
                 dst.add(r);
                 bindings.put(slots[i], new Binding(id, i, r));
             }
@@ -191,7 +257,7 @@ public final class DefaultGuiSession implements GuiSession {
         @Override public DynamicAreaView push(GuiRow row) {
             List<GuiRow> dst = areaRows.get(id);
             int idx = dst.size();
-            if (idx >= slots.length) return this; // overflow 先 MVP：丢弃
+            if (idx >= slots.length) return this;
             dst.add(row);
             bindings.put(slots[idx], new Binding(id, idx, row));
             return this;

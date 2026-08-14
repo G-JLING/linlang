@@ -20,16 +20,19 @@ import core.linlang.yaml.YamlCodec;
 import java.lang.reflect.Field;
 import java.nio.file.Path;
 import java.util.*;
+import java.util.concurrent.CopyOnWriteArrayList;
 
 public final class ConfigServiceImpl implements ConfigService {
     private final PathResolver paths;
     private final List<Migrator> migrators;
     private final java.util.Map<Class<?>, Object> liveConfigs = new java.util.LinkedHashMap<>();
     private final java.util.Map<Class<?>, Boolean> emitFlags = new java.util.LinkedHashMap<>();
+    private final java.util.Map<Class<?>, Map<String, Object>> defaultSnapshots = new java.util.LinkedHashMap<>();
 
     public ConfigServiceImpl(PathResolver paths, List<Migrator> migrators) {
         this.paths = paths;
-        this.migrators = migrators == null ? List.of() : migrators;
+        this.migrators = new CopyOnWriteArrayList<>();
+        if (migrators != null) this.migrators.addAll(migrators);
     }
 
     @Override
@@ -44,32 +47,27 @@ public final class ConfigServiceImpl implements ConfigService {
         Path file = toFile(meta.path(), meta.name(), meta.fmt());
         boolean exists = IOs.exists(file);
 
-        Map<String, Object> doc = loadOrInit(file, type, meta);
+        T inst = newInstance(type);
+        Map<String, Object> defaults = exportSnapshot(inst, meta.keyMap());
+        Map<String, Object> doc = loadOrInit(file, meta, defaults);
+        if (!exists) writeCurrentVersion(type, doc);
         applyMigrations(type, doc);
 
-        Map<String, Object> defaults = new LinkedHashMap<>();
-        try {
-            Object defInst = type.getDeclaredConstructor().newInstance();
-            export(defInst, meta.keyMap(), defaults);
-        } catch (Exception e) {
-            throw new RuntimeException(e);
-        }
         java.util.Set<String> missing = new java.util.LinkedHashSet<>();
         if (exists) mergeDefaultsCollect(defaults, doc, "", missing);
 
-        // 实例化并填充
-        T inst = newInstance(type);
         populate(inst, meta.keyMap(), doc);
 
+        boolean annotatedNoEmit = type.isAnnotationPresent(NoEmit.class);
+        boolean shouldEmit = emit && !annotatedNoEmit;
+
         // 生成 diff（缺失键旁插入注释+默认值）
-        if (!missing.isEmpty()) {
+        if (shouldEmit && !missing.isEmpty()) {
             writeDiff(file, meta.fmt(), doc, missing);
         }
 
         // 写回文件（是否落盘受 emit 和 @NoEmit 控制）
         Map<String, List<String>> comments = TreeMapper.extractComments(type);
-        boolean annotatedNoEmit = type.isAnnotationPresent(NoEmit.class);
-        boolean shouldEmit = emit && !annotatedNoEmit;
         if (shouldEmit) {
             persist(file, meta.fmt(), doc, comments);
         }
@@ -77,7 +75,19 @@ public final class ConfigServiceImpl implements ConfigService {
         // 记录实例与落盘偏好
         synchronized (liveConfigs) { liveConfigs.put(type, inst); }
         synchronized (emitFlags)   { emitFlags.put(type, shouldEmit); }
+        synchronized (defaultSnapshots) { defaultSnapshots.put(type, defaults); }
         return inst;
+    }
+
+    @Override
+    public ConfigService registerMigrator(Migrator migrator) {
+        Objects.requireNonNull(migrator, "migrator");
+        if (migrator.to() <= migrator.from()) {
+            throw new IllegalArgumentException("Migration must advance the config version: "
+                    + migrator.from() + " -> " + migrator.to());
+        }
+        migrators.add(migrator);
+        return this;
     }
 
     @Override
@@ -90,6 +100,7 @@ public final class ConfigServiceImpl implements ConfigService {
 
         Map<String, Object> doc = new LinkedHashMap<>();
         export(config, meta.keyMap(), doc);
+        writeCurrentVersion(type, doc);
 
         Map<String, List<String>> comments = TreeMapper.extractComments(type);
 
@@ -111,6 +122,7 @@ public final class ConfigServiceImpl implements ConfigService {
 
         Map<String, Object> doc = new LinkedHashMap<>();
         export(config, meta.keyMap(), doc);
+        writeCurrentVersion(type, doc);
 
         Map<String, List<String>> comments = TreeMapper.extractComments(type);
 
@@ -143,6 +155,7 @@ public final class ConfigServiceImpl implements ConfigService {
 
                 Map<String, Object> doc = new LinkedHashMap<>();
                 export(config, meta.keyMap(), doc);
+                writeCurrentVersion(type, doc);
 
                 Map<String, List<String>> comments = TreeMapper.extractComments(type);
                 if (shouldEmit) persist(file, meta.fmt(), doc, comments);
@@ -181,38 +194,40 @@ public final class ConfigServiceImpl implements ConfigService {
                 .orElseThrow(() -> new IllegalArgumentException("[linlang] missing @ConfigFile on " + type));
         Path file = toFile(meta.path(), meta.name(), meta.fmt());
 
-        // 读取或初始化文件（若不存在则按默认值生成）
-        boolean exists = IOs.exists(file);
-        Map<String, Object> doc = loadOrInit(file, type, meta);
-
-        // 迁移
-        applyMigrations(type, doc);
-
-        // 合并默认值并收集缺失键，保证“删除字段/缺失字段”在 reload 后能回到默认值
-        Map<String, Object> defaults = new LinkedHashMap<>();
-        try {
-            Object defInst = type.getDeclaredConstructor().newInstance();
-            export(defInst, meta.keyMap(), defaults);
-        } catch (Exception e) {
-            throw new RuntimeException(e);
+        Map<String, Object> defaults;
+        synchronized (defaultSnapshots) {
+            defaults = defaultSnapshots.get(type);
+        }
+        if (defaults == null) {
+            throw new IllegalStateException("Missing default snapshot for bound config: " + type.getName());
         }
 
+        // 读取或初始化文件（若不存在则按绑定时快照生成）
+        boolean exists = IOs.exists(file);
+        Map<String, Object> doc = loadOrInit(file, meta, defaults);
+
+        // 迁移
+        if (!exists) writeCurrentVersion(type, doc);
+        applyMigrations(type, doc);
+
+        // 合并默认值并收集缺失键，保证删除字段在 reload 后回到绑定时默认值
         java.util.Set<String> missing = new java.util.LinkedHashSet<>();
         if (exists) mergeDefaultsCollect(defaults, doc, "", missing);
 
-        // 缺失键 diff（缺失键旁插入注释+默认值）
-        if (!missing.isEmpty()) {
-            writeDiff(file, meta.fmt(), doc, missing);
-        }
-
-        // 按既有 emit 偏好写回（受 @NoEmit 控制）
-        Map<String, List<String>> comments = TreeMapper.extractComments(type);
         boolean annotatedNoEmit = type.isAnnotationPresent(NoEmit.class);
         boolean shouldEmit;
         synchronized (emitFlags) {
             Boolean flag = emitFlags.get(type);
             shouldEmit = (flag != null ? flag : true) && !annotatedNoEmit;
         }
+
+        // 缺失键 diff（缺失键旁插入注释+默认值）
+        if (shouldEmit && !missing.isEmpty()) {
+            writeDiff(file, meta.fmt(), doc, missing);
+        }
+
+        // 按既有 emit 偏好写回（受 @NoEmit 控制）
+        Map<String, List<String>> comments = TreeMapper.extractComments(type);
         if (shouldEmit) {
             persist(file, meta.fmt(), doc, comments);
         }
@@ -235,18 +250,10 @@ public final class ConfigServiceImpl implements ConfigService {
         return dir.resolve(name + ext);
     }
 
-    private Map<String, Object> loadOrInit(Path file, Class<?> type, Binder.BoundConfig meta) {
+    private Map<String, Object> loadOrInit(Path file, Binder.BoundConfig meta,
+                                           Map<String, Object> defaults) {
         if (!IOs.exists(file)) {
-            Map<String, Object> doc = new LinkedHashMap<>();
-            try {
-                Object inst = type.getDeclaredConstructor().newInstance();
-                export(inst, meta.keyMap(), doc);
-                Map<String,List<String>> comments = TreeMapper.extractComments(type);
-                persist(file, meta.fmt(), doc, comments);
-            } catch (Exception e) {
-                throw new RuntimeException(e);
-            }
-            return doc;
+            return mutableDeepCopy(defaults);
         }
         String raw = IOs.readString(file);
         return meta.fmt() == FileType.YAML ? YamlCodec.load(raw) : JsonCodec.load(raw);
@@ -266,18 +273,63 @@ public final class ConfigServiceImpl implements ConfigService {
     private void applyMigrations(Class<?> type, Map<String, Object> doc) {
         ConfigVersion ver = type.getAnnotation(ConfigVersion.class);
         if (ver == null) return;
-        int target = ver.value();
-        Migrator next;
-        boolean moved = true;
-        while (moved) {
-            moved = false;
-            for (Migrator mig : migrators) {
-                if (mig.from() < target) { // 宽松：只要阶梯往前
-                    mig.migrate(new MutableDocument(doc));
-                    moved = true;
-                }
-            }
+
+        String versionKey = ver.key();
+        if (versionKey == null || versionKey.isBlank()) {
+            throw new IllegalArgumentException("ConfigVersion key must not be blank: " + type.getName());
         }
+
+        int target = ver.value();
+        int current = readVersion(doc.get(versionKey));
+        if (current > target) {
+            throw new IllegalStateException("Config version " + current + " is newer than supported version "
+                    + target + ": " + type.getName());
+        }
+
+        MutableDocument mutable = new MutableDocument(doc);
+        while (current < target) {
+            Migrator next = null;
+            for (Migrator mig : migrators) {
+                if (!mig.supports(type) || mig.from() != current || mig.to() > target) continue;
+                if (mig.to() <= current) {
+                    throw new IllegalStateException("Migration must advance the config version: "
+                            + mig.from() + " -> " + mig.to());
+                }
+                if (next != null) {
+                    throw new IllegalStateException("Multiple migrations start at version " + current
+                            + ": " + type.getName());
+                }
+                next = mig;
+            }
+            if (next == null) {
+                throw new IllegalStateException("Missing config migration " + current + " -> " + target
+                        + ": " + type.getName());
+            }
+
+            next.migrate(mutable);
+            current = next.to();
+            doc.put(versionKey, current);
+        }
+        doc.put(versionKey, target);
+    }
+
+    private static int readVersion(Object value) {
+        if (value == null) return 0;
+        if (value instanceof Number number) return number.intValue();
+        try {
+            return Integer.parseInt(String.valueOf(value));
+        } catch (NumberFormatException e) {
+            throw new IllegalStateException("Invalid config version: " + value, e);
+        }
+    }
+
+    private static void writeCurrentVersion(Class<?> type, Map<String, Object> doc) {
+        ConfigVersion version = type.getAnnotation(ConfigVersion.class);
+        if (version == null) return;
+        if (version.key() == null || version.key().isBlank()) {
+            throw new IllegalArgumentException("ConfigVersion key must not be blank: " + type.getName());
+        }
+        doc.put(version.key(), version.value());
     }
 
     private static <T> T newInstance(Class<T> type) {
@@ -294,6 +346,12 @@ public final class ConfigServiceImpl implements ConfigService {
 
     static void export(Object inst, Map<Field, String> ignored, Map<String, Object> doc) {
         TreeMapper.export(inst, doc);
+    }
+
+    private static Map<String, Object> exportSnapshot(Object instance, Map<Field, String> keyMap) {
+        Map<String, Object> defaults = new LinkedHashMap<>();
+        export(instance, keyMap, defaults);
+        return immutableDeepCopy(defaults);
     }
 
     // 简易路径读写
@@ -342,7 +400,7 @@ public final class ConfigServiceImpl implements ConfigService {
             String path = prefix.isEmpty() ? k : prefix + "." + k;
             Object dv = e.getValue();
             if (!doc.containsKey(k)) {
-                doc.put(k, dv);
+                doc.put(k, mutableDeepCopyValue(dv));
                 missing.add(path);
                 continue;
             }
@@ -523,18 +581,56 @@ public final class ConfigServiceImpl implements ConfigService {
 
     @SuppressWarnings("unchecked")
     private static Map<String, Object> deepCopyMap(Map<String, Object> src) {
+        return mutableDeepCopy(src);
+    }
+
+    private static Map<String, Object> mutableDeepCopy(Map<String, Object> src) {
         Map<String, Object> out = new LinkedHashMap<>();
         for (var e : src.entrySet()) {
-            Object v = e.getValue();
-            if (v instanceof Map<?,?> m) {
-                out.put(e.getKey(), deepCopyMap((Map<String,Object>)(Map<?,?>)m));
-            } else if (v instanceof List<?> l) {
-                out.put(e.getKey(), new ArrayList<>(l));
-            } else {
-                out.put(e.getKey(), v);
-            }
+            out.put(e.getKey(), mutableDeepCopyValue(e.getValue()));
         }
         return out;
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Object mutableDeepCopyValue(Object value) {
+        if (value instanceof Map<?, ?> map) {
+            Map<String, Object> copy = new LinkedHashMap<>();
+            for (var entry : map.entrySet()) {
+                copy.put(String.valueOf(entry.getKey()), mutableDeepCopyValue(entry.getValue()));
+            }
+            return copy;
+        }
+        if (value instanceof Collection<?> collection) {
+            List<Object> copy = new ArrayList<>(collection.size());
+            for (Object element : collection) copy.add(mutableDeepCopyValue(element));
+            return copy;
+        }
+        return value;
+    }
+
+    private static Map<String, Object> immutableDeepCopy(Map<String, Object> src) {
+        Map<String, Object> out = new LinkedHashMap<>();
+        for (var entry : src.entrySet()) {
+            out.put(entry.getKey(), immutableDeepCopyValue(entry.getValue()));
+        }
+        return Collections.unmodifiableMap(out);
+    }
+
+    private static Object immutableDeepCopyValue(Object value) {
+        if (value instanceof Map<?, ?> map) {
+            Map<String, Object> copy = new LinkedHashMap<>();
+            for (var entry : map.entrySet()) {
+                copy.put(String.valueOf(entry.getKey()), immutableDeepCopyValue(entry.getValue()));
+            }
+            return Collections.unmodifiableMap(copy);
+        }
+        if (value instanceof Collection<?> collection) {
+            List<Object> copy = new ArrayList<>(collection.size());
+            for (Object element : collection) copy.add(immutableDeepCopyValue(element));
+            return Collections.unmodifiableList(copy);
+        }
+        return value;
     }
 
     @SuppressWarnings("unchecked")

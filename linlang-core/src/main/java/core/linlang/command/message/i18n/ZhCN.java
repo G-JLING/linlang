@@ -1,14 +1,11 @@
 package core.linlang.command.message.i18n;
 
-import api.linlang.file.file.FileType;
-import api.linlang.file.file.annotations.LangPack;
 import api.linlang.file.file.annotations.NamingStyle;
 import api.linlang.file.file.implement.LocaleProvider;
 import core.linlang.command.message.CommandMessageKeys;
 
 
 @NamingStyle(NamingStyle.Style.KEBAB)
-@LangPack(locale = "zh_CN", format = FileType.YAML, path = "linlang/lincommand/message")
 public final class ZhCN implements LocaleProvider<CommandMessageKeys> {
 
     @Override public String locale() { return "zh_CN"; }

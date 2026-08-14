@@ -39,15 +39,19 @@ public final class DataServiceImpl implements DataService {
         this.dataDocRoot = resolver.sub("data");
         try {
             Files.createDirectories(this.dataDocRoot);
-        } catch (Exception ignore) {
+        } catch (Exception e) {
+            throw new IllegalStateException("Cannot create database directory: " + this.dataDocRoot, e);
         }
     }
 
     @Override
-    public void init(DbType type, DbConfig cfg) {
+    public synchronized void init(DbType type, DbConfig cfg) {
+        Objects.requireNonNull(type, "type");
+        Objects.requireNonNull(cfg, "cfg");
         if (type != DbType.H2 && type != DbType.MYSQL) {
             throw new IllegalArgumentException("Unsupported DbType: " + type);
         }
+        closeResources(false);
         this.mode = type;
         HikariConfig hc = new HikariConfig();
         hc.setJdbcUrl(cfg.url());
@@ -65,12 +69,13 @@ public final class DataServiceImpl implements DataService {
     }
 
     @Override
-    public void migrate() {
+    public synchronized void migrate() {
+        HikariDataSource dataSource = requireDataSource();
         for (Class<?> et : registeredEntities) {
             Binder.BoundTable t = Binder.tableOf(et).orElse(null);
             if (t == null) continue;
             ensureTable(et, t.name());
-            try (Connection c = ds.getConnection()) {
+            try (Connection c = dataSource.getConnection()) {
                 DatabaseMetaData md = c.getMetaData();
                 Set<String> existing = new HashSet<>();
                 try (ResultSet rs = md.getColumns(c.getCatalog(), null, t.name(), null)) {
@@ -92,7 +97,9 @@ public final class DataServiceImpl implements DataService {
     }
 
     @Override
-    public <T, ID> Repository<T, ID> repo(Class<T> entityType) {
+    public synchronized <T, ID> Repository<T, ID> repo(Class<T> entityType) {
+        Objects.requireNonNull(entityType, "entityType");
+        HikariDataSource dataSource = requireDataSource();
         Binder.BoundTable t = Binder.tableOf(entityType)
                 .orElseThrow(() -> new IllegalArgumentException("@Table missing on " + entityType));
         @SuppressWarnings("unchecked")
@@ -101,17 +108,18 @@ public final class DataServiceImpl implements DataService {
         registeredEntities.add(entityType);
         final Repository<T, ID> repo;
         ensureTable(entityType, t.name());
-        repo = new RepositoryImpl<>(ds, entityType, t.name());
+        repo = new RepositoryImpl<>(dataSource, entityType, t.name());
         openRepos.put(entityType, repo);
         return repo;
     }
 
     private <T> void ensureTable(Class<T> type, String table) {
+        HikariDataSource dataSource = requireDataSource();
         List<Col> cols = columns(type);
         String pk = cols.stream().filter(c -> c.id).map(c -> c.name).findFirst().orElse(null);
         String colDefs = cols.stream().map(Col::ddl).collect(Collectors.joining(", "));
         String ddl = "CREATE TABLE IF NOT EXISTS `" + table + "` (" + colDefs + (pk != null ? ", PRIMARY KEY(`" + pk + "`)" : "") + ")";
-        try (Connection c = ds.getConnection(); Statement s = c.createStatement()) {
+        try (Connection c = dataSource.getConnection(); Statement s = c.createStatement()) {
             s.execute(ddl);
         } catch (SQLException e) {
             throw new RuntimeException(e);
@@ -199,9 +207,12 @@ public final class DataServiceImpl implements DataService {
     }
 
     @Override
-    public void close() {
-        flushAll();
-        try { LinLog.info(LinMsg.k("linData.flushOk"), "data", "close()"); } catch (Throwable ignore) {}
+    public synchronized void close() {
+        closeResources(true);
+    }
+
+    private void closeResources(boolean flush) {
+        if (flush) flushAll();
         for (Repository<?, ?> r : openRepos.values()) {
             try {
                 r.close();
@@ -209,5 +220,21 @@ public final class DataServiceImpl implements DataService {
             }
         }
         openRepos.clear();
+        HikariDataSource dataSource = this.ds;
+        this.ds = null;
+        if (dataSource != null) {
+            dataSource.close();
+        }
+        if (flush) {
+            try { LinLog.info(LinMsg.k("linData.flushOk"), "data", "close()"); } catch (Throwable ignore) {}
+        }
+    }
+
+    private HikariDataSource requireDataSource() {
+        HikariDataSource dataSource = this.ds;
+        if (dataSource == null || dataSource.isClosed()) {
+            throw new IllegalStateException("DataService has not been initialized or is already closed");
+        }
+        return dataSource;
     }
 }

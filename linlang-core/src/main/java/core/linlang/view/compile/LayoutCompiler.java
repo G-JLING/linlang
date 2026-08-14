@@ -9,7 +9,14 @@ public final class LayoutCompiler {
     private LayoutCompiler() {}
 
     public static CompiledView compile(ViewSpec spec) {
+        Objects.requireNonNull(spec, "spec");
+        if (!"inventory".equalsIgnoreCase(spec.type())) {
+            throw new IllegalArgumentException("Unsupported view type: " + spec.type());
+        }
         int rows = spec.rows();
+        if (rows < 1 || rows > 6) {
+            throw new IllegalArgumentException("Inventory rows must be between 1 and 6: " + rows);
+        }
         int cols = 9;
 
         // uid -> slot
@@ -23,6 +30,18 @@ public final class LayoutCompiler {
 
         for (DynamicAreaSpec da : spec.dynamicAreas()) {
             if (da == null) continue;
+            if (da.id() == null || da.id().isBlank()) {
+                throw new IllegalArgumentException("Dynamic area id must not be blank");
+            }
+            if (da.areaChar() == null || da.areaChar().length() != 1) {
+                throw new IllegalArgumentException("Dynamic area character must contain one character: " + da.id());
+            }
+            if (areaSlots.containsKey(da.id())) {
+                throw new IllegalArgumentException("Duplicate dynamic area id: " + da.id());
+            }
+            if (spec.legend().containsKey(da.areaChar())) {
+                throw new IllegalArgumentException("Layout character is both static and dynamic: " + da.areaChar());
+            }
             areaSlots.put(da.id(), new ArrayList<>());
             areaSpecs.put(da.id(), da);
         }
@@ -70,7 +89,9 @@ public final class LayoutCompiler {
         Map<String, int[]> dyn = new LinkedHashMap<>();
         for (var e : areaSlots.entrySet()) {
             List<Integer> s = e.getValue();
-            // row-major already; keep as-is
+            if (s.isEmpty()) {
+                throw new IllegalArgumentException("Dynamic area has no slots in layout: " + e.getKey());
+            }
             int[] arr = new int[s.size()];
             for (int i = 0; i < s.size(); i++) arr[i] = s.get(i);
             dyn.put(e.getKey(), arr);

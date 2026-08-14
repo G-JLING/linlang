@@ -112,9 +112,9 @@ public final class YamlCodec {
             int currIndent = m.group(1).length();
             String key = m.group(2);
 
-            while (!ind.isEmpty() && currIndent <= ind.peek()) {
-                ind.pop();
-                path.pop();
+            while (!ind.isEmpty() && currIndent <= ind.peekLast()) {
+                ind.removeLast();
+                path.removeLast();
             }
 
             String parent = String.join(".", path);
@@ -128,10 +128,58 @@ public final class YamlCodec {
 
             out.add(line);
 
-            ind.push(currIndent);
-            path.push(key);
+            ind.addLast(currIndent);
+            path.addLast(key);
         }
 
         return String.join("\n", out);
+    }
+
+    /**
+     * 从 YAML 文本中提取文件级和键前注释
+     */
+    public static Map<String, java.util.List<String>> extractComments(String yaml) {
+        Map<String, java.util.List<String>> comments = new LinkedHashMap<>();
+        if (yaml == null || yaml.isBlank()) return comments;
+
+        Deque<String> path = new ArrayDeque<>();
+        Deque<Integer> indents = new ArrayDeque<>();
+        List<String> pending = new ArrayList<>();
+        boolean sawKey = false;
+
+        for (String line : yaml.split("\\R", -1)) {
+            String trimmed = line.stripLeading();
+            if (trimmed.startsWith("#")) {
+                String value = trimmed.substring(1);
+                if (value.startsWith(" ")) value = value.substring(1);
+                pending.add(value);
+                continue;
+            }
+
+            java.util.regex.Matcher matcher = KEY_LINE.matcher(line);
+            if (!matcher.find()) {
+                if (!line.isBlank()) pending.clear();
+                continue;
+            }
+
+            int currentIndent = matcher.group(1).length();
+            while (!indents.isEmpty() && currentIndent <= indents.peekLast()) {
+                indents.removeLast();
+                path.removeLast();
+            }
+
+            String key = matcher.group(2);
+            String parent = String.join(".", path);
+            String fullPath = parent.isEmpty() ? key : parent + "." + key;
+            if (!pending.isEmpty()) {
+                comments.put(sawKey ? fullPath : "", List.copyOf(pending));
+                pending.clear();
+            }
+
+            sawKey = true;
+            indents.addLast(currentIndent);
+            path.addLast(key);
+        }
+        return comments;
     }
 }

@@ -10,28 +10,39 @@ import core.linlang.event.api.LinEventBus; // 复用现有（本实现先不强�
 import core.linlang.view.compile.CompiledView;
 import core.linlang.view.load.ViewLoader;
 import core.linlang.view.platform.InteractPlatformAdapter;
+import core.linlang.view.platform.ViewEventBridge;
 import core.linlang.view.registry.HookRegistry;
 import core.linlang.view.registry.SourceRegistry;
 import core.linlang.view.registry.ViewRegistry;
 import core.linlang.view.render.RenderModel;
 import core.linlang.view.render.Renderer;
 import core.linlang.view.session.DefaultGuiSession;
+import core.linlang.view.spec.ActionSpec;
+import core.linlang.view.spec.DynamicAreaSpec;
 
+import java.util.ArrayList;
+import java.util.ArrayDeque;
+import java.util.Deque;
+import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Consumer;
 
-public final class ViewCoreImpl implements LinView {
+public final class ViewCoreImpl implements LinView, ViewEventBridge, AutoCloseable {
 
     private final InteractPlatformAdapter adapter;
-    private final LinEventBus bus; // 可为 null，后续你可订阅 LocaleChanged/PrefixChanged
+    private final LinEventBus bus; // 事件总线
     private final HookRegistry hooks = new HookRegistry();
     private final SourceRegistry sources = new SourceRegistry();
     private final ViewRegistry views;
     private final Renderer renderer = new Renderer();
 
-    // viewer -> session（MVP：每人一个）
+    // viewer -> session
     private final Map<Object, DefaultGuiSession> sessions = new ConcurrentHashMap<>();
+    private final Map<Object, Deque<NavigationEntry>> navigation = new ConcurrentHashMap<>();
+
+    private record NavigationEntry(String viewId, Map<String, Object> state) {}
 
     public ViewCoreImpl(PathResolver paths, InteractPlatformAdapter adapter, LinEventBus bus) {
         this(paths, "gui", adapter, bus);
@@ -50,6 +61,11 @@ public final class ViewCoreImpl implements LinView {
 
     @Override
     public GuiSession open(Object viewer, String viewId, Consumer<GuiState> patch) {
+        return openInternal(viewer, viewId, patch, false);
+    }
+
+    private GuiSession openInternal(Object viewer, String viewId, Consumer<GuiState> patch,
+                                    boolean preserveCurrent) {
         if (!adapter.supportsViewer(viewer)) {
             throw new IllegalArgumentException("Unsupported viewer: " + viewer);
         }
@@ -57,12 +73,20 @@ public final class ViewCoreImpl implements LinView {
         CompiledView cv = views.get(viewId);
         if (cv == null) throw new IllegalStateException("View not found: " + viewId);
 
-        DefaultGuiSession s = new DefaultGuiSession(viewer, cv);
+        DefaultGuiSession s = new DefaultGuiSession(
+                viewer,
+                cv,
+                () -> refreshView(viewer),
+                areaId -> refreshArea(viewer, areaId),
+                () -> close(viewer),
+                () -> navigateBack(viewer)
+        );
         if (patch != null) patch.accept(s.state());
+        if (!preserveCurrent) navigation.remove(viewer);
         sessions.put(viewer, s);
 
         /*
-         * allowManualClose 默认来自资源文件（ViewSpec.allowManualClose）。
+         * allowManualClose 应来自资源文件（ViewSpec.allowManualClose）。
          * 若调用方未显式覆盖，则把默认值写入 state，便于调试与旧逻辑兼容。
          */
         if (!s.state().containsKey("_allowManualClose")
@@ -71,10 +95,9 @@ public final class ViewCoreImpl implements LinView {
             s.state().put("view.allowManualClose", cv.spec().allowManualClose());
         }
 
-        // load dynamic areas from sources once (MVP: sync)
         loadAllAreas(s);
 
-        RenderModel model = renderer.render(s);
+        RenderModel model = render(s);
 
         adapter.runMain(() -> {
             adapter.open(viewer, model.title(), cv.rows());
@@ -93,18 +116,45 @@ public final class ViewCoreImpl implements LinView {
     public void close(Object viewer) {
         DefaultGuiSession s = sessions.remove(viewer);
         if (s == null) return;
+        navigation.remove(viewer);
         adapter.runMain(() -> adapter.close(viewer));
+    }
+
+    @Override
+    public boolean allowManualClose(Object viewer) {
+        DefaultGuiSession session = sessions.get(viewer);
+        return session == null || session.allowManualClose();
+    }
+
+    @Override
+    public void closed(Object viewer) {
+        sessions.remove(viewer);
+        navigation.remove(viewer);
+    }
+
+    @Override
+    public void close() {
+        for (Object viewer : new ArrayList<>(sessions.keySet())) {
+            close(viewer);
+        }
+        sessions.clear();
+        bus.shutdown();
     }
 
     @Override
     public void reload() {
         views.reload();
-        // 可选：对已打开会话刷新（MVP：不自动刷新，避免闪）
+        for (DefaultGuiSession session : new ArrayList<>(sessions.values())) {
+            reopen(session);
+        }
     }
 
     @Override
     public void reload(String viewId) {
         views.reload(viewId);
+        for (DefaultGuiSession session : new ArrayList<>(sessions.values())) {
+            if (session.viewId().equals(viewId)) reopen(session);
+        }
     }
 
     @Override
@@ -124,62 +174,168 @@ public final class ViewCoreImpl implements LinView {
     private void loadAllAreas(DefaultGuiSession s) {
         var cv = s.compiled();
         for (var e : cv.dynamicSpecs().entrySet()) {
-            String areaId = e.getKey();
-            var spec = e.getValue();
-            if (spec.source() == null) continue;
-
-            GuiSource src = sources.get(spec.source().id());
-            if (src == null) continue;
-
-            try {
-                var rows = src.load(new SimpleContext(this, s, areaId, null, null, Map.of()));
-                s.dynamics().area(areaId).fill(rows);
-            } catch (Exception ex) {
-                // MVP：吞掉；后续接 LinLog
-            }
+            loadArea(s, e.getKey(), e.getValue());
         }
     }
 
-    // 供 adapter 的 event bridge 调用：执行 action/hook 并刷新
+    private void loadArea(DefaultGuiSession session, String areaId, DynamicAreaSpec spec) {
+        if (spec == null || spec.source() == null) return;
+        GuiSource source = sources.get(spec.source().id());
+        if (source == null) return;
+
+        Map<String, Object> vars = renderVars(session, areaId, null, null);
+        @SuppressWarnings("unchecked")
+        Map<String, Object> args = (Map<String, Object>)
+                core.linlang.view.render.Placeholders.applyValue(spec.source().args(), vars);
+        try {
+            List<? extends api.linlang.view.model.GuiRow> rows =
+                    source.load(new SimpleContext(this, session, areaId, null, null, args));
+            session.dynamics().area(areaId).fill(rows);
+        } catch (Exception exception) {
+            throw new IllegalStateException("Failed to load GUI source: " + spec.source().id(), exception);
+        }
+    }
+
     public void execute(Object viewer, int slotIndex, core.linlang.view.render.ClickRoute route) {
         DefaultGuiSession s = sessions.get(viewer);
         if (s == null || route == null || route.action() == null) return;
 
-        String type = route.action().type();
+        ActionSpec action = route.action();
+        String type = action.type();
         if ("hook".equalsIgnoreCase(type)) {
-            String hookId = String.valueOf(route.action().args().getOrDefault("hookId", ""));
+            String hookId = String.valueOf(action.args().getOrDefault("hookId", ""));
             GuiHook hook = hooks.get(hookId);
             if (hook != null) {
                 try {
                     api.linlang.view.context.GuiContext ctx =
-                            new SimpleContext(this, s, route.areaId(), route.uid(), resolveRow(s, route), route.action().args());
+                            new SimpleContext(this, s, route.areaId(), route.uid(), resolveRow(s, route), action.args());
                     hook.handle(ctx);
-                } catch (Exception ignore) {}
+                } catch (Exception exception) {
+                    throw new IllegalStateException("Failed to execute GUI hook: " + hookId, exception);
+                }
             }
+        } else if ("open".equalsIgnoreCase(type)) {
+            openFromAction(viewer, s, action);
+            return;
         } else if ("back".equalsIgnoreCase(type)) {
-            // MVP: no nav stack
+            navigateBack(viewer);
+            return;
         } else if ("close".equalsIgnoreCase(type)) {
             close(viewer);
             return;
+        } else if ("state".equalsIgnoreCase(type)) {
+            applyState(s, action.args());
+        } else if ("command".equalsIgnoreCase(type)) {
+            adapter.executeCommand(viewer,
+                    String.valueOf(action.args().getOrDefault("command", "")));
         }
 
-        // refresh
-        String r = route.action().refresh();
+        String r = action.refresh();
         if (r == null || r.isBlank()) return;
-        if ("view".equalsIgnoreCase(r)) refreshView(viewer);
+        if ("view".equalsIgnoreCase(r) || "session".equalsIgnoreCase(r)) refreshView(viewer);
         else if (r.startsWith("area:")) refreshArea(viewer, r.substring("area:".length()));
+        else if (r.startsWith("widget:")) refreshWidget(viewer, r.substring("widget:".length()));
     }
 
     public void refreshView(Object viewer) {
         DefaultGuiSession s = sessions.get(viewer);
         if (s == null) return;
-        RenderModel model = renderer.render(s);
+        loadAllAreas(s);
+        RenderModel model = render(s);
         adapter.runMain(() -> adapter.apply(viewer, model));
     }
 
     public void refreshArea(Object viewer, String areaId) {
-        // MVP：先整页刷（后续你再做 patch & area-only）
-        refreshView(viewer);
+        DefaultGuiSession session = sessions.get(viewer);
+        if (session == null || areaId == null) return;
+        DynamicAreaSpec spec = session.compiled().dynamicSpecs().get(areaId);
+        if (spec == null) return;
+        loadArea(session, areaId, spec);
+        RenderModel model = render(session);
+        int[] slots = session.compiled().dynamicSlots().get(areaId);
+        adapter.runMain(() -> adapter.applySlots(viewer, model, slots));
+    }
+
+    private void refreshWidget(Object viewer, String uid) {
+        DefaultGuiSession session = sessions.get(viewer);
+        if (session == null || uid == null) return;
+        Integer slot = session.compiled().staticSlotOfUid().get(uid);
+        if (slot == null) return;
+        RenderModel model = render(session);
+        adapter.runMain(() -> adapter.applySlots(viewer, model, new int[]{slot}));
+    }
+
+    private RenderModel render(DefaultGuiSession session) {
+        return renderer.render(session, adapter.viewerVariables(session.viewer()));
+    }
+
+    private Map<String, Object> renderVars(DefaultGuiSession session, String areaId,
+                                           String uid, api.linlang.view.model.GuiRow row) {
+        Map<String, Object> vars = new LinkedHashMap<>(adapter.viewerVariables(session.viewer()));
+        vars.put("view.id", session.viewId());
+        if (areaId != null) vars.put("area.id", areaId);
+        if (uid != null) vars.put("widget.uid", uid);
+        addVariables(vars, "state", session.state());
+        if (row != null) {
+            addVariables(vars, "row", row.data());
+        }
+        return vars;
+    }
+
+    private static void addVariables(Map<String, Object> vars, String prefix, Map<?, ?> values) {
+        for (var entry : values.entrySet()) {
+            String path = prefix + "." + entry.getKey();
+            Object value = entry.getValue();
+            if (value instanceof Map<?, ?> nested) {
+                addVariables(vars, path, nested);
+            } else {
+                vars.put(path, value);
+            }
+        }
+    }
+
+    private void openFromAction(Object viewer, DefaultGuiSession current, ActionSpec action) {
+        String viewId = String.valueOf(action.args().getOrDefault("viewId", ""));
+        if (viewId.isBlank()) return;
+        Map<String, Object> nextState = actionState(action.args());
+        navigation.computeIfAbsent(viewer, key -> new ArrayDeque<>())
+                .push(new NavigationEntry(current.viewId(),
+                        java.util.Collections.unmodifiableMap(new LinkedHashMap<>(current.state()))));
+        openInternal(viewer, viewId, state -> state.putAll(nextState), true);
+    }
+
+    private void navigateBack(Object viewer) {
+        Deque<NavigationEntry> stack = navigation.get(viewer);
+        if (stack == null || stack.isEmpty()) return;
+        NavigationEntry previous = stack.pop();
+        openInternal(viewer, previous.viewId(), state -> state.putAll(previous.state()), true);
+        if (stack.isEmpty()) navigation.remove(viewer);
+    }
+
+    private void reopen(DefaultGuiSession session) {
+        Map<String, Object> state = new LinkedHashMap<>(session.state());
+        openInternal(session.viewer(), session.viewId(), next -> next.putAll(state), true);
+    }
+
+    private static Map<String, Object> actionState(Map<String, Object> args) {
+        Object nested = args.get("state");
+        Map<String, Object> state = new LinkedHashMap<>();
+        if (nested instanceof Map<?, ?> map) {
+            for (var entry : map.entrySet()) {
+                state.put(String.valueOf(entry.getKey()), entry.getValue());
+            }
+        }
+        return state;
+    }
+
+    private static void applyState(DefaultGuiSession session, Map<String, Object> args) {
+        Map<String, Object> patch = actionState(args);
+        if (!(args.get("state") instanceof Map<?, ?>)) patch.putAll(args);
+        patch.remove("hookId");
+        for (var entry : patch.entrySet()) {
+            if (entry.getValue() == null) session.state().remove(entry.getKey());
+            else session.state().put(entry.getKey(), entry.getValue());
+        }
     }
 
     private static api.linlang.view.model.GuiRow resolveRow(DefaultGuiSession s, core.linlang.view.render.ClickRoute r) {

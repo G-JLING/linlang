@@ -21,11 +21,6 @@
     <dependencies>
         <dependency>
             <groupId>me.jling</groupId>
-            <artifactId>linlang-adapter-bukkit</artifactId>
-            <version>${project.version}</version>
-        </dependency>
-        <dependency>
-            <groupId>me.jling</groupId>
             <artifactId>linlang-core</artifactId>
             <version>${project.version}</version>
         </dependency>
@@ -33,6 +28,16 @@
             <groupId>me.jling</groupId>
             <artifactId>linlang-api</artifactId>
             <version>${linlang.api.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>com.h2database</groupId>
+            <artifactId>h2</artifactId>
+            <version>2.4.240</version>
+        </dependency>
+        <dependency>
+            <groupId>com.mysql</groupId>
+            <artifactId>mysql-connector-j</artifactId>
+            <version>9.7.0</version>
         </dependency>
         <dependency>
             <groupId>org.spigotmc</groupId>
@@ -45,19 +50,13 @@
             <artifactId>lombok</artifactId>
             <scope>provided</scope>
         </dependency>
-        <dependency>
-            <groupId>org.spigotmc</groupId>
-            <artifactId>spigot-api</artifactId>
-            <version>1.21.5-R0.1-SNAPSHOT</version>
-            <scope>compile</scope>
-        </dependency>
     </dependencies>
 
     <build>
         <resources>
             <resource>
                 <directory>src/main/resources</directory>
-                <filtering>false</filtering>
+                <filtering>true</filtering>
             </resource>
         </resources>
 
@@ -86,6 +85,10 @@
                                 <relocation>
                                     <pattern>org.h2</pattern>
                                     <shadedPattern>me.jling.libs.h2</shadedPattern>
+                                </relocation>
+                                <relocation>
+                                    <pattern>com.mysql</pattern>
+                                    <shadedPattern>me.jling.libs.mysql</shadedPattern>
                                 </relocation>
                             </relocations>
                             <filters>
