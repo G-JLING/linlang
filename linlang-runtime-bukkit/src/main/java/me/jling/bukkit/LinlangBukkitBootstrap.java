@@ -11,6 +11,7 @@ import api.linlang.view.LinView;
 
 import core.linlang.file.impl.ConfigServiceImpl;
 import core.linlang.file.impl.LangServiceImpl;
+import core.linlang.total.prefix.PrefixAware;
 
 import lombok.Getter;
 import me.jling.facade.BukkitFacadeImpl;
@@ -79,6 +80,7 @@ public final class LinlangBukkitBootstrap implements AutoCloseable, Linlang, Lin
 
         // 发送者
         this.messenger = runtime.createMessenger(this.language);
+        wireMessengerPrefix();
 
         // 运行时自身配套
         this.linFileView = new LinFile() {
@@ -205,7 +207,7 @@ public final class LinlangBukkitBootstrap implements AutoCloseable, Linlang, Lin
         } catch (Throwable ignore) {
         }
         rebuildCommands();
-        this.messenger = runtime.createMessenger(this.language);
+        wireMessengerPrefix();
     }
 
     /**
@@ -224,6 +226,20 @@ public final class LinlangBukkitBootstrap implements AutoCloseable, Linlang, Lin
         } catch (Throwable ignore) {
         }
         this.command = runtime.createCommands(runtimePlugin, locale, prefixFn);
+    }
+
+    /**
+     * 将运行时自身的前缀接入消息服务。
+     */
+    private void wireMessengerPrefix() {
+        if (!(messenger instanceof PrefixAware aware)) return;
+        String prefix;
+        try {
+            prefix = prefixFn.apply(runtimePlugin);
+        } catch (RuntimeException exception) {
+            prefix = "";
+        }
+        aware.setTotalPrefix(prefix == null ? "" : prefix.trim());
     }
 
     @Override

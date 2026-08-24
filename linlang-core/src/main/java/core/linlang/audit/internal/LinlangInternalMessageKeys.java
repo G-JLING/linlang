@@ -28,6 +28,7 @@ public class LinlangInternalMessageKeys {
     public LinData linData = new LinData();
     public LinCommand linCommand = new LinCommand();
     public LinLog linLog = new LinLog();
+    public LinText linText = new LinText();
 
 
     public static class LinFile {
@@ -105,5 +106,10 @@ public class LinlangInternalMessageKeys {
         public String auditConfigReloaded =
                 "已重载审计配置";
 
+    }
+
+    public static class LinText {
+        public String textSourceTooLong =
+                "此高级字符串太长了: {lintext}";
     }
 }

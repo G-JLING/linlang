@@ -250,6 +250,7 @@ public final class FacadeCore<P> implements Linlang, Linlang.Configurable, Linla
                 this.localeController.setLocale(locale, "facade.restart");
 
                 rebuildCommands(locale);
+                rebuildMessenger();
                 this.view = runtime.createView(owner);
             } catch (Throwable ignore) {}
         }
@@ -262,15 +263,21 @@ public final class FacadeCore<P> implements Linlang, Linlang.Configurable, Linla
             if (closed) return;
 
             try { if (command instanceof AutoCloseable c) c.close(); } catch (Throwable ignore) {}
-            try { if (messenger instanceof AutoCloseable c) c.close(); } catch (Throwable ignore) {}
-
             String use = (locale != null && !locale.isBlank()) ? locale.trim() : effectiveLocale();
             this.command = runtime.createCommands(owner, this.language, use, () -> this.prefixController.prefix());
-            this.messenger = runtime.createMessenger(this.language);
 
             wirePrefix(this.command);
-            wirePrefix(this.messenger);
         }
+    }
+
+    /**
+     * 重建消息服务。
+     */
+    private void rebuildMessenger() {
+        try { events.unregisterAll(messenger); } catch (Throwable ignore) {}
+        try { if (messenger instanceof AutoCloseable c) c.close(); } catch (Throwable ignore) {}
+        this.messenger = runtime.createMessenger(this.language);
+        wirePrefix(this.messenger);
     }
 
     /** 将 facade 的 TotalPrefixChanged 接线到模块（模块实现 PrefixAware 即可）。 */

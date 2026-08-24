@@ -1,370 +1,220 @@
 package adapter.linlang.bukkit.messenger;
 
-/*
- * MessengerImpl：统一向玩家发送消息。
- * 约定：占位符使用 {key}，支持可变参数或 Map。
- * 颜色：将 & 转为 §；1.16+ 支持 Hex。
- */
-
-import adapter.linlang.bukkit.file.common.file.VersionDetector;
 import api.linlang.file.file.LangService;
+import api.linlang.messenger.FallbackPolicy;
+import api.linlang.messenger.LinMessage;
 import api.linlang.messenger.LinMessenger;
-import core.linlang.file.text.ColorCodes;
-import core.linlang.file.text.Placeholders;
-import net.md_5.bungee.api.ChatMessageType;
-import net.md_5.bungee.api.chat.TextComponent;
-import org.bukkit.command.CommandSender;
+import api.linlang.messenger.TitleTimes;
+import api.linlang.messenger.transport.MessageTransport;
+import api.linlang.messenger.transport.TransportMessage;
+import core.linlang.messenger.MessageNormalizer;
+import core.linlang.total.prefix.PrefixAware;
 import org.bukkit.entity.Player;
 
+import java.util.Comparator;
 import java.util.Map;
+import java.util.Objects;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.function.Function;
 import java.util.function.Supplier;
-import core.linlang.total.prefix.PrefixAware;
 
 /**
- * 面向 Bukkit 的消息发送门面。
- *
- * 功能：
- * <ul>
- *   <li>传入消息字符串或字符串形式的键</li>
- *   <li>占位符语法：{@code {placeholder}}，可变参数或 Map 传参；</li>
- *   <li>颜色转换：将 {@code &} 转为 {@code §}，在 1.16+ 支持 HEX；</li>
- *   <li>提供 Chat、Title、ActionBar 三种输出通道。</li>
- * </ul>
+ * 面向 Bukkit 的一次性消息投递门面。
  */
 public final class MessengerImpl implements LinMessenger, PrefixAware {
 
-    private final Function<String, String> translator; // key -> template
-    private final boolean hexColor; // 1.16+ -> true
+    private final Function<String, String> legacyTranslator;
+    private final MessageNormalizer normalizer = new MessageNormalizer();
+    private final CopyOnWriteArrayList<MessageTransport> transports = new CopyOnWriteArrayList<>();
 
-    /**
-     * Linlang 全局前缀（由 Facade 通过事件注入）。
-     * <p>不做 trim，以免破坏颜色码与尾随空格。</p>
-     */
     private volatile String totalPrefix = "";
+    private volatile Supplier<String> localPrefixSupplier = () -> "";
 
     /**
-     * 插件/业务侧的额外前缀（可选）。
-     * <p>若不设置则为空串。</p>
+     * 使用语言服务创建消息服务。
+     *
+     * @param language 语言服务
      */
-    private Supplier<String> localPrefixSupplier = () -> "";
-
-    /* ─────────────────────────────── 构造 ─────────────────────────────── */
-
-    /**
-     * 使用 {@link LangService} 作为翻译源的构造器。
-     * 等价于传入 {@code translator = lang::tr}。
-     */
-    public MessengerImpl(LangService lang) {
-        this(lang::tr);
+    public MessengerImpl(LangService language) {
+        this(language == null ? null : language::tr);
     }
 
     /**
-     * 使用自定义翻译函数的构造器。
+     * 使用旧版语言键翻译函数创建消息服务。
      *
-     * @param translator 翻译函数，输入消息键输出模板文本；若为 {@code null} 则回显键
+     * @param translator 旧版语言键翻译函数
      */
     public MessengerImpl(Function<String, String> translator) {
-        this.translator = translator != null ? translator : (k -> k);
-        this.hexColor = isAtLeast116();
+        this.legacyTranslator = translator == null ? key -> key : translator;
+        registerTransport(new BukkitMessageTransport(new BukkitTextRenderer()));
     }
-
-    /* ─────────────────────────────── 配置 ─────────────────────────────── */
-
-    /** 设置固定前缀（仅聊天/控制台；Title/ActionBar 不附带前缀）。 */
-    public MessengerImpl withPrefix(String prefix) {
-        this.localPrefixSupplier = () -> (prefix == null ? "" : prefix);
-        return this;
-    }
-
-    /** 设置动态前缀（运行时计算；仅聊天/控制台）。 */
-    public MessengerImpl withPrefixProvider(Supplier<String> supplier) {
-        this.localPrefixSupplier = (supplier == null ? () -> "" : supplier);
-        return this;
-    }
-
-    // ─────────────────────────────── PrefixAware ───────────────────────────────
 
     /**
-     * 设置 Linlang 全局前缀名。
-     * <p>该前缀会自动附加到聊天/控制台输出；Title/ActionBar 不附带前缀。</p>
+     * 设置固定的局部前缀。
+     *
+     * @param prefix 局部前缀
+     * @return 当前消息服务
      */
+    public MessengerImpl withPrefix(String prefix) {
+        this.localPrefixSupplier = () -> Objects.requireNonNullElse(prefix, "");
+        return this;
+    }
+
+    /**
+     * 设置动态局部前缀。
+     *
+     * @param supplier 局部前缀提供者
+     * @return 当前消息服务
+     */
+    public MessengerImpl withPrefixProvider(Supplier<String> supplier) {
+        this.localPrefixSupplier = supplier == null ? () -> "" : supplier;
+        return this;
+    }
+
     @Override
     public void setTotalPrefix(String prefix) {
-        this.totalPrefix = (prefix == null ? "" : prefix);
+        this.totalPrefix = Objects.requireNonNullElse(prefix, "");
     }
 
-    /* ─────────────────────────────── 文本：模板 ─────────────────────────────── */
-
-    /** 1) 文本到 Player（kv 变参）。 */
-    public void sendText(Player player, String template, Object... kv) {
-        sendText((CommandSender) player, template, kv);
+    @Override
+    public void send(Object recipient, LinMessage message) {
+        TransportMessage normalized = normalizer.normalize(message, prefix());
+        for (MessageTransport transport : transports) {
+            if (!transport.supports(recipient)) continue;
+            transport.send(recipient, normalized);
+            return;
+        }
+        throw new IllegalArgumentException(
+                "No message transport supports recipient type: "
+                        + (recipient == null ? "null" : recipient.getClass().getName())
+        );
     }
 
-    /** 1a) 文本到任意对象（kv 变参，桥接）。 */
-    public void sendText(Object recipient, String template, Object... kv) {
-        sendText(recipient, template, Vars.of(kv));
+    @Override
+    public synchronized LinMessenger registerTransport(MessageTransport transport) {
+        Objects.requireNonNull(transport, "transport");
+        String rawId = Objects.requireNonNull(transport.id(), "transport.id");
+        String id = rawId.trim();
+        if (id.isEmpty()) throw new IllegalArgumentException("Message transport id cannot be blank.");
+        if (!id.equals(rawId)) {
+            throw new IllegalArgumentException("Message transport id cannot contain surrounding whitespace.");
+        }
+        transports.removeIf(current -> current.id().equals(id));
+        transports.add(transport);
+        transports.sort(Comparator.comparingInt(MessageTransport::priority).reversed());
+        return this;
     }
 
-    /** 2) 文本到 Player（Map）。 */
-    public void sendText(Player player, String template, Map<String, ?> vars) {
-        sendText((CommandSender) player, template, vars);
+    @Override
+    public synchronized boolean unregisterTransport(String id) {
+        if (id == null) return false;
+        return transports.removeIf(transport -> transport.id().equals(id));
     }
 
-    /** 2a) 文本到任意对象（Map）。 */
-    public void sendText(Object recipient, String template, Map<String, ?> vars) {
-        String msg = prefix() + color(apply(template, vars));
-        chat(recipient, msg);
+    @Override
+    @Deprecated
+    public void sendKey(Object recipient, String key, Object... args) {
+        send(recipient, translate(key), args);
     }
 
-    /** 1b) 文本到 CommandSender（kv 变参）。 */
-    public void sendText(CommandSender sender, String template, Object... kv) {
-        sendText(sender, template, Vars.of(kv));
+    @Override
+    @Deprecated
+    public void sendKey(Object recipient, String key, Map<String, ?> args) {
+        send(recipient, translate(key), args);
     }
 
-    /** 2b) 文本到 CommandSender（Map）。 */
-    public void sendText(CommandSender sender, String template, Map<String, ?> vars) {
-        String msg = prefix() + color(apply(template, vars));
-        sender.sendMessage(msg);
-    }
-
-    /* ─────────────────────────────── 文本：语言键 ─────────────────────────────── */
-
-    /** 3) 语言键到 Player（kv 变参）。 */
-    public void sendKey(Player player, String key, Object... kv) {
-        sendKey((CommandSender) player, key, kv);
-    }
-
-    /** 3a) 语言键到任意对象（kv 变参，桥接）。 */
-    public void sendKey(Object recipient, String key, Object... kv) {
-        sendKey(recipient, key, Vars.of(kv));
-    }
-
-    /** 4) 语言键到 Player（Map）。 */
-    public void sendKey(Player player, String key, Map<String, ?> vars) {
-        sendKey((CommandSender) player, key, vars);
-    }
-
-    /** 4a) 语言键到任意对象（Map）。 */
-    public void sendKey(Object recipient, String key, Map<String, ?> vars) {
-        String tmpl = translator.apply(key);
-        String msg = prefix() + color(apply(tmpl, vars));
-        chat(recipient, msg);
-    }
-
-
-    /** 3b) 语言键到 CommandSender（kv 变参）。 */
-    public void sendKey(CommandSender sender, String key, Object... kv) {
-        sendKey(sender, key, Vars.of(kv));
-    }
-
-    /** 4b) 语言键到 CommandSender（Map）。 */
-    public void sendKey(CommandSender sender, String key, Map<String, ?> vars) {
-        String tmpl = translator.apply(key);
-        String msg = prefix() + color(apply(tmpl, vars));
-        sender.sendMessage(msg);
-    }
-
-    /* ─────────────────────────────── Title ─────────────────────────────── */
-
-    /** Title（模板，kv 变参）到 Player。 */
-    public void sendTitleText(Player player, String title, String subtitle,
-                              int fadeIn, int stay, int fadeOut, Object... kv) {
-        sendTitleText(player, title, subtitle, fadeIn, stay, fadeOut, Vars.of(kv));
-    }
-
-    /** Title（模板，Map）到 Player。 */
-    public void sendTitleText(Player player, String title, String subtitle,
-                              int fadeIn, int stay, int fadeOut, Map<String, ?> vars) {
-        player.sendTitle(color(apply(title, vars)),
-                color(apply(subtitle, vars)),
-                fadeIn, stay, fadeOut);
-    }
-
-    /** Title（模板，Map）到任意对象；非玩家退化为聊天行。 */
+    @Override
+    @Deprecated
     public void sendTitleText(Object recipient, String title, String subtitle,
-                              int fadeIn, int stay, int fadeOut, Map<String, ?> vars) {
-        if (recipient instanceof Player p) {
-            sendTitleText(p, title, subtitle, fadeIn, stay, fadeOut, vars);
-        } else {
-            chat(recipient, prefix() + color(apply(title + " | " + subtitle, vars)));
+                              int fadeIn, int stay, int fadeOut, Object... args) {
+        if (!(recipient instanceof Player)) {
+            send(recipient, title + " | " + subtitle, args);
+            return;
         }
+        send(recipient, LinMessage.title(title, subtitle)
+                .times(TitleTimes.of(fadeIn, stay, fadeOut))
+                .args(args)
+                .fallback(FallbackPolicy.CHAT));
     }
 
-
-
-    /** Title 文本到 CommandSender：回退为一条聊天行。 */
-    public void sendTitleText(CommandSender sender, String title, String subtitle,
-                              int fadeIn, int stay, int fadeOut, Map<String, ?> vars) {
-        sender.sendMessage(prefix() + color(apply(title + " | " + subtitle, vars)));
-    }
-
-    /** Title（键，kv 变参）到 Player。 */
-    public void sendTitleKey(Player player, String titleKey, String subKey,
-                             int fadeIn, int stay, int fadeOut, Object... kv) {
-        sendTitleKey(player, titleKey, subKey, fadeIn, stay, fadeOut, Vars.of(kv));
-    }
-
-    /** Title（键，Map）到 Player。 */
-    public void sendTitleKey(Player player, String titleKey, String subKey,
-                             int fadeIn, int stay, int fadeOut, Map<String, ?> vars) {
-        String t = translator.apply(titleKey);
-        String s = translator.apply(subKey);
-        player.sendTitle(color(apply(t, vars)),
-                color(apply(s, vars)),
-                fadeIn, stay, fadeOut);
-    }
-
-    /** Title（键，Map）到任意对象；非玩家退化为聊天行。 */
-    public void sendTitleKey(Object recipient, String titleKey, String subKey,
-                             int fadeIn, int stay, int fadeOut, Map<String, ?> vars) {
-        String t = translator.apply(titleKey);
-        String s = translator.apply(subKey);
-        if (recipient instanceof Player p) {
-            p.sendTitle(color(apply(t, vars)), color(apply(s, vars)), fadeIn, stay, fadeOut);
-        } else {
-            chat(recipient, prefix() + color(apply(t + " | " + s, vars)));
-        }
-    }
-
-    public void sendTitleKey(Object recipient, String titleKey, String subKey,
-                             int fadeIn, int stay, int fadeOut, Object... kv) {
-        sendTitleKey(recipient, titleKey, subKey, fadeIn, stay, fadeOut, Vars.of(kv));
-    }
-
+    @Override
+    @Deprecated
     public void sendTitleText(Object recipient, String title, String subtitle,
-                              int fadeIn, int stay, int fadeOut, Object... kv) {
-        sendTitleText(recipient, title, subtitle, fadeIn, stay, fadeOut, Vars.of(kv));
-    }
-
-
-    /** Title 键到 CommandSender：回退为一条聊天行。 */
-    public void sendTitleKey(CommandSender sender, String titleKey, String subKey,
-                             int fadeIn, int stay, int fadeOut, Map<String, ?> vars) {
-        String t = translator.apply(titleKey);
-        String s = translator.apply(subKey);
-        sender.sendMessage(prefix() + color(apply(t + " | " + s, vars)));
-    }
-
-    /* ─────────────────────────────── ActionBar ─────────────────────────────── */
-
-    /** ActionBar（模板，kv 变参）到 Player。 */
-    public void sendActionBarText(Player player, String template, Object... kv) {
-        sendActionBarText(player, template, Vars.of(kv));
-    }
-
-    /** ActionBar（模板，Map）到 Player。 */
-    public void sendActionBarText(Player player, String template, Map<String, ?> vars) {
-        String msg = color(apply(template, vars));
-        player.spigot().sendMessage(ChatMessageType.ACTION_BAR, new TextComponent(msg));
-    }
-
-    /** ActionBar（模板，Map）到任意对象；非玩家退化为聊天行。 */
-    public void sendActionBarText(Object recipient, String template, Map<String, ?> vars) {
-        String msg = color(apply(template, vars));
-        if (recipient instanceof Player p) {
-            p.spigot().sendMessage(ChatMessageType.ACTION_BAR, new TextComponent(msg));
-        } else {
-            chat(recipient, prefix() + msg);
+                              int fadeIn, int stay, int fadeOut, Map<String, ?> args) {
+        if (!(recipient instanceof Player)) {
+            send(recipient, title + " | " + subtitle, args);
+            return;
         }
+        send(recipient, LinMessage.title(title, subtitle)
+                .times(TitleTimes.of(fadeIn, stay, fadeOut))
+                .args(args)
+                .fallback(FallbackPolicy.CHAT));
     }
 
-    public void sendActionBarText(Object recipient, String template, Object... kv) {
-        sendActionBarText(recipient, template, Vars.of(kv));
+    @Override
+    @Deprecated
+    public void sendTitleKey(Object recipient, String titleKey, String subtitleKey,
+                             int fadeIn, int stay, int fadeOut, Object... args) {
+        sendTitleText(recipient, translate(titleKey), translate(subtitleKey),
+                fadeIn, stay, fadeOut, args);
     }
 
-    public void sendActionBarKey(Object recipient, String key, Object... kv) {
-        sendActionBarKey(recipient, key, Vars.of(kv));
+    @Override
+    @Deprecated
+    public void sendTitleKey(Object recipient, String titleKey, String subtitleKey,
+                             int fadeIn, int stay, int fadeOut, Map<String, ?> args) {
+        sendTitleText(recipient, translate(titleKey), translate(subtitleKey),
+                fadeIn, stay, fadeOut, args);
     }
 
-    /** ActionBar（键，kv 变参）到 Player。 */
-    public void sendActionBarKey(Player player, String key, Object... kv) {
-        sendActionBarKey(player, key, Vars.of(kv));
-    }
-
-    /** ActionBar（键，Map）到 Player。 */
-    public void sendActionBarKey(Player player, String key, Map<String, ?> vars) {
-        String msg = color(apply(translator.apply(key), vars));
-        player.spigot().sendMessage(ChatMessageType.ACTION_BAR, new TextComponent(msg));
-    }
-
-    /** ActionBar（键，Map）到任意对象；非玩家退化为聊天行。 */
-    public void sendActionBarKey(Object recipient, String key, Map<String, ?> vars) {
-        String msg = color(apply(translator.apply(key), vars));
-        if (recipient instanceof Player p) {
-            p.spigot().sendMessage(ChatMessageType.ACTION_BAR, new TextComponent(msg));
-        } else {
-            chat(recipient, prefix() + msg);
+    @Override
+    @Deprecated
+    public void sendActionBarText(Object recipient, String template, Object... args) {
+        if (!(recipient instanceof Player)) {
+            send(recipient, template, args);
+            return;
         }
+        send(recipient, LinMessage.actionBar(template)
+                .args(args)
+                .fallback(FallbackPolicy.CHAT));
     }
 
-    /* ─────────────────────────────── 工具 ─────────────────────────────── */
-
-    private String apply(String tmpl, Map<String, ?> vars) {
-        return Placeholders.apply(tmpl, vars);
-    }
-
-    private String color(String s) {
-        return ColorCodes.ampersandToSection(s, hexColor);
-    }
-
-    private static boolean isAtLeast116() {
-        String v = VersionDetector.nmsSuffix(); // v1_20_R4 / v1_12_R1
-        if (!v.startsWith("v1_")) return true;
-        try {
-            int minor = Integer.parseInt(v.substring(3, v.indexOf('_', 3)));
-            return minor >= 16;
-        } catch (Exception e) {
-            return true;
+    @Override
+    @Deprecated
+    public void sendActionBarText(Object recipient, String template, Map<String, ?> args) {
+        if (!(recipient instanceof Player)) {
+            send(recipient, template, args);
+            return;
         }
+        send(recipient, LinMessage.actionBar(template)
+                .args(args)
+                .fallback(FallbackPolicy.CHAT));
+    }
+
+    @Override
+    @Deprecated
+    public void sendActionBarKey(Object recipient, String key, Object... args) {
+        sendActionBarText(recipient, translate(key), args);
+    }
+
+    @Override
+    @Deprecated
+    public void sendActionBarKey(Object recipient, String key, Map<String, ?> args) {
+        sendActionBarText(recipient, translate(key), args);
+    }
+
+    private String translate(String key) {
+        String value = legacyTranslator.apply(key);
+        return Objects.requireNonNullElse(value, key == null ? "" : key);
     }
 
     private String prefix() {
-        String tp = this.totalPrefix;
-        String lp;
+        String local;
         try {
-            lp = localPrefixSupplier.get();
-        } catch (Throwable ignored) {
-            lp = "";
+            local = localPrefixSupplier.get();
+        } catch (RuntimeException exception) {
+            local = "";
         }
-        if (tp == null) tp = "";
-        if (lp == null) lp = "";
-        return tp + lp;
-    }
-
-    /** 将 {@code recipient} 解析为 {@link CommandSender}；若不是则返回 null。 */
-    private static CommandSender asSender(Object recipient) {
-        return (recipient instanceof CommandSender) ? (CommandSender) recipient : null;
-    }
-
-    /** 统一聊天输出（用于非玩家对象退化）；不支持的对象直接抛出异常便于定位问题。 */
-    private void chat(Object recipient, String message) {
-        CommandSender cs = asSender(recipient);
-        if (cs != null) {
-            cs.sendMessage(message);
-        } else {
-            throw new IllegalArgumentException("Unsupported recipient type: " +
-                    (recipient == null ? "null" : recipient.getClass().getName()));
-        }
-    }
-
-    /**
-     * 工具：把可变参数 {@code key, value, key, value...} 转为 Map。
-     */
-    public static final class Vars {
-        /**
-         * 将 {@code key, value, key, value...} 形式的实参转为 {@link Map}。
-         *
-         * @param kv 交替出现的键值序列，长度必须为偶数
-         * @return 一个新的 {@link Map}，按插入顺序保存键值；若未传参则返回空 Map
-         * @throws IllegalArgumentException 当参数个数为奇数时抛出
-         */
-        public static Map<String, Object> of(Object... kv) {
-            if (kv == null || kv.length == 0) return java.util.Map.of();
-            if ((kv.length & 1) == 1) throw new IllegalArgumentException("odd kv length");
-            java.util.Map<String, Object> m = new java.util.LinkedHashMap<>();
-            for (int i = 0; i < kv.length; i += 2) m.put(String.valueOf(kv[i]), kv[i + 1]);
-            return m;
-        }
+        return Objects.requireNonNullElse(totalPrefix, "") + Objects.requireNonNullElse(local, "");
     }
 }
