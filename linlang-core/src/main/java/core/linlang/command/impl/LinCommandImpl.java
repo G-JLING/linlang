@@ -23,7 +23,7 @@ import core.linlang.total.prefix.PrefixAware;
 
 public final class LinCommandImpl implements LinCommand, LocaleAware, PrefixAware {
 
-    // 用于控制 /root help 单页打印的条目刷数量
+    // help 单页打印的条目刷数量
     private int help_page_size = 8;
     // 命令
     private final List<LinCommand.TypeResolver> resolvers = new ArrayList<>();
@@ -427,7 +427,7 @@ public final class LinCommandImpl implements LinCommand, LocaleAware, PrefixAwar
         return false;
     }
 
-    // 提取类型提示（如 :int, :double, :string）
+    // 提取类型提示
     private static String typeHint(String rawName) {
         if (rawName == null) return null;
         String s = rawName.trim();
@@ -485,7 +485,7 @@ public final class LinCommandImpl implements LinCommand, LocaleAware, PrefixAwar
             return List.of();
         }
 
-        // 当仅输入根命令或根命令后紧跟空格时，不猜测参数，直接枚举所有二级子命令
+        // 当仅输入根命令或根命令后紧跟空格时，直接枚举所有二级子命令
         if (args.length == 0 || (args.length == 1 && (args[0] == null || args[0].isEmpty()))) {
             java.util.LinkedHashSet<String> subs = new java.util.LinkedHashSet<>();
             for (var n : nodes) {
@@ -511,7 +511,7 @@ public final class LinCommandImpl implements LinCommand, LocaleAware, PrefixAwar
                 String prefTok = args[0] == null ? "" : args[0];
                 if (!prefTok.isEmpty() && need.toLowerCase(java.util.Locale.ROOT).startsWith(prefTok.toLowerCase(java.util.Locale.ROOT))) {
                     high.add(need);
-                    // 不再为该分支填充参数候选，避免与以数字开头的 root 分支产生竞争
+                    // 不再为该分支填充参数候选
                     continue;
                 }
             }
@@ -597,7 +597,7 @@ public final class LinCommandImpl implements LinCommand, LocaleAware, PrefixAwar
         if (!lits.get(0).equalsIgnoreCase(label)) {
             return false;
         }
-        // TAB 模式：只要“已输入”的字面量都匹配即可（允许还没输入到子字面量）
+        // TAB 模式：只要已有的字面量都匹配即可
         if (prefix) {
             int provided = Math.min(args.length, Math.max(0, lits.size() - 1));
             for (int i = 1; i <= provided; i++) {
@@ -608,7 +608,7 @@ public final class LinCommandImpl implements LinCommand, LocaleAware, PrefixAwar
                     // 对于已完整输入的前置字面量，要求完全匹配
                     ok = need.equalsIgnoreCase(tok);
                 } else {
-                    // 对于当前正在输入的最后一个字面量，允许前缀匹配（忽略大小写）
+                    // 对于当前正在输入的最后一个字面量，允许前缀匹配
                     ok = need.regionMatches(true, 0, tok, 0, tok.length());
                 }
                 if (!ok) return false;
@@ -873,55 +873,51 @@ public final class LinCommandImpl implements LinCommand, LocaleAware, PrefixAwar
 
             String displayName = null;
 
-            // 1) 若标记了 i18nTag：优先从延迟提供者取值，其次从静态映射取值
-            if (p.i18nTag) {
-                // 1.1 延迟提供者（动态取值）
-                if (lazyLabels != null) {
-                    LinCommand.I18nSupplier sup = lazyLabels.get(namePart);
-                    if (sup != null) {
-                        try {
-                            String v = sup.get(localeTag);
-                            if (v != null && !v.isBlank()) {
-                                displayName = v;
-                            }
-                        } catch (Throwable ignore) {
+            // 1) 优先使用外部参数标签，不再要求命令规范包含 @i18n
+            if (lazyLabels != null) {
+                LinCommand.I18nSupplier sup = lazyLabels.get(namePart);
+                if (sup != null) {
+                    try {
+                        String v = sup.get(localeTag);
+                        if (v != null && !v.isBlank()) {
+                            displayName = v;
                         }
-                    }
-                }
-
-                // 1.2 静态映射（向后兼容）
-                if ((displayName == null || displayName.isBlank()) && labels != null) {
-                    Map<String, String> byLocale = labels.get(namePart);
-                    if (byLocale != null && !byLocale.isEmpty()) {
-                        // 宽松匹配 zh_CN / zh-CN / zh
-                        String tagNorm = localeTag;                  // 例如 zh_CN
-                        String tagDash = tagNorm.replace('_', '-');   // zh-CN
-                        String langOnly = tagNorm.contains("_")
-                                ? tagNorm.substring(0, tagNorm.indexOf('_'))
-                                : (tagNorm.contains("-") ? tagNorm.substring(0, tagNorm.indexOf('-')) : tagNorm);
-
-                        String v = byLocale.get(tagNorm);
-                        if (v == null) v = byLocale.get(tagDash);
-                        if (v == null) v = byLocale.get(langOnly);
-                        if (v == null) v = byLocale.get("zh_CN");
-                        if (v == null) v = byLocale.get("en_GB");
-                        if (v == null && !byLocale.isEmpty()) v = byLocale.values().iterator().next();
-                        displayName = v;
+                    } catch (Throwable ignore) {
                     }
                 }
             }
 
-            // 2) 未标记 i18nTag：优先使用 p.desc（内联注释文字）
+            // 2) 静态映射继续作为兼容来源
+            if ((displayName == null || displayName.isBlank()) && labels != null) {
+                Map<String, String> byLocale = labels.get(namePart);
+                if (byLocale != null && !byLocale.isEmpty()) {
+                    String tagNorm = localeTag;
+                    String tagDash = tagNorm.replace('_', '-');
+                    String langOnly = tagNorm.contains("_")
+                            ? tagNorm.substring(0, tagNorm.indexOf('_'))
+                            : (tagNorm.contains("-") ? tagNorm.substring(0, tagNorm.indexOf('-')) : tagNorm);
+
+                    String v = byLocale.get(tagNorm);
+                    if (v == null) v = byLocale.get(tagDash);
+                    if (v == null) v = byLocale.get(langOnly);
+                    if (v == null) v = byLocale.get("zh_CN");
+                    if (v == null) v = byLocale.get("en_GB");
+                    if (v == null && !byLocale.isEmpty()) v = byLocale.values().iterator().next();
+                    displayName = v;
+                }
+            }
+
+            // 3) 外部标签不可用时使用内联说明
             if (displayName == null && p.desc != null && !p.desc.isBlank()) {
                 displayName = p.desc;
             }
 
-            // 3) 再尝试 inline 的 @注释（trimmed 中 @ 之后的）
+            // 4) 兼容原始 token 中的内联说明
             if (displayName == null && descInline != null && !descInline.isEmpty()) {
                 displayName = descInline;
             }
 
-            // 4) 最后回退到冒号前的简名
+            // 5) 最后回退到参数名
             if (displayName == null || displayName.isBlank()) {
                 displayName = namePart;
             }

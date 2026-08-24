@@ -99,7 +99,7 @@ public final class BukkitFacadeImpl implements Linlang, Linlang.Configurable, Li
 
     /**
      * 设置平台上下文。
-     * <p>Bukkit 平台下，platformContext 固定为 JavaPlugin；只允许与 owner 一致。</p>
+     * <p>Bukkit 平台下，platformContext == JavaPlugin</p>
      */
     @Override
     public BukkitFacadeImpl withPlatformContext(Object platformContext) {
@@ -108,7 +108,7 @@ public final class BukkitFacadeImpl implements Linlang, Linlang.Configurable, Li
     }
 
     /**
-     * 设置全局前缀名（facade 级唯一入口）。
+     * 设置全局前缀名
      */
     @Override
     public BukkitFacadeImpl totalPrefix(String prefix) {
@@ -117,7 +117,7 @@ public final class BukkitFacadeImpl implements Linlang, Linlang.Configurable, Li
     }
 
     /**
-     * 设置全局前缀名提供函数（facade 级唯一入口）。
+     * 全局前缀名提供函数
      */
     @Override
     public BukkitFacadeImpl totalPrefixProvider(Function<Object, String> provider) {
@@ -126,7 +126,7 @@ public final class BukkitFacadeImpl implements Linlang, Linlang.Configurable, Li
     }
 
     /**
-     * 设置初始语言（仅记录，需 reload/restart 才会应用）。
+     * 设置语言（之后 /relaod）
      */
     @Override
     public BukkitFacadeImpl totalLocale(String locale) {
@@ -135,7 +135,7 @@ public final class BukkitFacadeImpl implements Linlang, Linlang.Configurable, Li
     }
 
     /**
-     * 配置是否使用插件 logger。
+     * 是否使用插件 logger。
      */
     @Override
     public BukkitFacadeImpl usingPluginLogger(boolean usePluginLogger) {
@@ -144,7 +144,7 @@ public final class BukkitFacadeImpl implements Linlang, Linlang.Configurable, Li
     }
 
     /**
-     * 软重载：刷新 facade 的软配置（例如前缀/语言）。
+     * 软重载：刷新 facade 的设置和个性化
      */
     @Override
     public void reload() {

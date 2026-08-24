@@ -1,5 +1,9 @@
 package core.linlang.file.runtime;
 
+import api.linlang.file.file.LangList;
+import api.linlang.file.file.LangMap;
+import api.linlang.file.file.LangText;
+import api.linlang.file.file.LangValue;
 import api.linlang.file.file.annotations.Comment;
 import api.linlang.file.file.annotations.Key;
 import api.linlang.file.file.annotations.NamingStyle;
@@ -54,7 +58,7 @@ public final class TreeMapper {
 
     private static boolean simpleType(Class<?> t){
         return t.isPrimitive() || t==String.class || Number.class.isAssignableFrom(t) ||
-                t==Boolean.class || t==java.time.Instant.class;
+                t==Boolean.class || t==java.time.Instant.class || LangValue.class.isAssignableFrom(t);
     }
 
     private static void writeObject(Object bean, String prefix, Map<String,Object> doc, NamingStyle.Style style){
@@ -75,7 +79,9 @@ public final class TreeMapper {
                 String path = prefix.isEmpty()? name : prefix + "." + name;
                 if (v==null){ put(doc, path, null); continue; }
 
-                if (simpleType(f.getType())) {
+                if (v instanceof LangValue<?> value) {
+                    put(doc, path, value.resolve());
+                } else if (simpleType(f.getType())) {
                     put(doc, path, v);
                 } else if (Map.class.isAssignableFrom(f.getType())) {
                     put(doc, path, v); // 直接放 map（子键保持原样）
@@ -110,7 +116,9 @@ public final class TreeMapper {
                     }
                     continue;
                 }
-                if (simpleType(f.getType())) {
+                if (LangValue.class.isAssignableFrom(f.getType())) {
+                    continue;
+                } else if (simpleType(f.getType())) {
                     f.set(bean, coerce(val, f.getType()));
                 } else if (Map.class.isAssignableFrom(f.getType()) || Collection.class.isAssignableFrom(f.getType())) {
                     f.set(bean, val);
@@ -121,6 +129,69 @@ public final class TreeMapper {
                 }
             } catch (Exception ignore){}
         }
+    }
+
+    /**
+     * 按文件对象路径为所有语言引用字段安装受管理引用。
+     *
+     * @param bean 语言对象
+     * @param factory 引用工厂
+     */
+    public static void bindLangValues(Object bean, LangValueFactory factory) {
+        if (bean == null || factory == null) return;
+        bindLangValues(bean, "", styleOf(bean.getClass()), factory);
+    }
+
+    private static void bindLangValues(Object bean, String prefix, NamingStyle.Style style,
+                                       LangValueFactory factory) {
+        for (Field f : bean.getClass().getFields()) {
+            String name = keyOf(f, style);
+            String path = prefix.isEmpty() ? name : prefix + "." + name;
+            try {
+                if (LangValue.class.isAssignableFrom(f.getType())) {
+                    Object current = f.get(bean);
+                    LangValue<?> initial = current instanceof LangValue<?> value
+                            ? value
+                            : emptyLangValue(f.getType());
+                    f.set(bean, factory.bind(path, initial));
+                    continue;
+                }
+
+                Class<?> fieldType = f.getType();
+                if (simpleType(fieldType) || Map.class.isAssignableFrom(fieldType)
+                        || Collection.class.isAssignableFrom(fieldType) || fieldType.isArray()) {
+                    continue;
+                }
+
+                Object child = f.get(bean);
+                if (child == null) {
+                    child = fieldType.getDeclaredConstructor().newInstance();
+                    f.set(bean, child);
+                }
+                bindLangValues(child, path, styleOf(fieldType), factory);
+            } catch (ReflectiveOperationException ignored) {
+            }
+        }
+    }
+
+    private static LangValue<?> emptyLangValue(Class<?> type) {
+        if (type == LangList.class) return LangList.of();
+        if (type == LangMap.class) return LangMap.of();
+        return LangText.of("");
+    }
+
+    /**
+     * 创建语言字段受管理引用。
+     */
+    @FunctionalInterface
+    public interface LangValueFactory {
+
+        /**
+         * @param key 字段路径键
+         * @param initial 字段声明的初始引用值
+         * @return 受管理引用
+         */
+        LangValue<?> bind(String key, LangValue<?> initial);
     }
 
     private static Object coerce(Object v, Class<?> t){
@@ -160,6 +231,18 @@ public final class TreeMapper {
         return cur.get(ps[ps.length-1]);
     }
 
+    /**
+     * 按路径读取文档值。
+     *
+     * @param root 文档根节点
+     * @param path 点分隔路径
+     * @return 路径对应的值；不存在时返回 {@code null}
+     */
+    public static Object valueAt(Map<String, Object> root, String path) {
+        if (root == null || path == null || path.isBlank()) return null;
+        return get(root, path);
+    }
+
     // 将带有 LIST 样式的 bean 汇总为 List：
     // 规则：优先使用第一个类型为 Collection 或 数组 的公开字段；
     // 否则收集所有公开 String/基本类型字段的非空值为字符串列表。
@@ -182,7 +265,11 @@ public final class TreeMapper {
             for (Field f : bean.getClass().getFields()){
                 Object v = f.get(bean);
                 if (v == null) continue;
-                if (simpleType(f.getType())) out.add(v);
+                if (v instanceof LangValue<?> value) {
+                    out.add(value.resolve());
+                } else if (simpleType(f.getType())) {
+                    out.add(v);
+                }
             }
             return out;
         } catch (IllegalAccessException e){

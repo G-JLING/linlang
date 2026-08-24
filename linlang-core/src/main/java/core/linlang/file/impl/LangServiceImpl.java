@@ -2,7 +2,10 @@ package core.linlang.file.impl;
 
 import api.linlang.audit.LinLog;
 import api.linlang.file.file.FileType;
+import api.linlang.file.file.LangList;
+import api.linlang.file.file.LangMap;
 import api.linlang.file.file.LangService;
+import api.linlang.file.file.LangText;
 import api.linlang.file.file.annotations.LangPack;
 import api.linlang.file.file.annotations.NoEmit;
 import api.linlang.file.file.tool.LocaleId;
@@ -61,6 +64,8 @@ public final class LangServiceImpl implements LangService, LocaleAware {
         final String defaultLocale;
         final boolean normalizeLocale;
         final Map<String, Object> defaults;
+        final Map<String, Map<String, String>> texts = new ConcurrentHashMap<>();
+        final Map<String, Map<String, Object>> documents = new ConcurrentHashMap<>();
 
         BoundMeta(Class<?> keysClass, Object holder, PackSpec spec, boolean emit,
                   Map<String, Object> defaults) {
@@ -146,6 +151,29 @@ public final class LangServiceImpl implements LangService, LocaleAware {
         Map<String, Object> defaults = defaultSnapshot(holder);
         BoundMeta meta = new BoundMeta(keysClass, holder, spec, shouldEmit, defaults);
 
+        TreeMapper.bindLangValues(holder, (key, initial) -> {
+            if (initial instanceof LangList list) {
+                return new LangListImpl(
+                        key,
+                        list.fallback(),
+                        locale -> resolveList(meta, key, locale, list.fallback())
+                );
+            }
+            if (initial instanceof LangMap map) {
+                return new LangMapImpl(
+                        key,
+                        map.fallback(),
+                        locale -> resolveMap(meta, key, locale, map.fallback())
+                );
+            }
+            LangText text = (LangText) initial;
+            return new LangTextImpl(
+                    key,
+                    text.fallback(),
+                    locale -> resolveText(meta, key, locale, text.fallback())
+            );
+        });
+
         loadAndPopulate(meta, holder, locale());
 
         bound.put(keysClass, meta);
@@ -178,7 +206,7 @@ public final class LangServiceImpl implements LangService, LocaleAware {
 
             persist(f, bm.fmt, curr);
 
-            cache.computeIfAbsent(loc, k -> new LinkedHashMap<>()).putAll(flatten(curr));
+            cacheDocument(bm, loc, curr);
         } catch (Exception e) {
             LinLog.warn(LinMsg.k("linFile.lang.langSaveFailed"), "lang", f, "reason", e.getMessage());
         }
@@ -202,11 +230,17 @@ public final class LangServiceImpl implements LangService, LocaleAware {
         for (BoundMeta bm : new ArrayList<>(bound.values())) {
             if (bm == null || bm.holder == null) continue;
             try {
+                bm.texts.clear();
+                bm.documents.clear();
                 Map<String, Object> doc = loadDocFor(bm, cur);
                 TreeMapper.populate(bm.holder, doc);
 
                 String cacheLocale = localeFor(bm.normalizeLocale, cur);
-                newCache.computeIfAbsent(cacheLocale, k -> new LinkedHashMap<>()).putAll(flatten(doc));
+                Map<String, Object> document = immutableDeepCopy(doc);
+                Map<String, String> values = immutableTextSnapshot(document);
+                bm.documents.put(cacheLocale, document);
+                bm.texts.put(cacheLocale, values);
+                newCache.computeIfAbsent(cacheLocale, k -> new LinkedHashMap<>()).putAll(values);
             } catch (Exception ex) {
                 LinLog.warn(LinMsg.k("linFile.lang.langReloadLangFailed"), "lang", bm.keysClass, "reason", ex.getMessage());
             }
@@ -272,7 +306,11 @@ public final class LangServiceImpl implements LangService, LocaleAware {
                     }
                 }
 
-                cache.computeIfAbsent(loc, k -> new LinkedHashMap<>()).putAll(flatten(doc));
+                if (bm != null) {
+                    cacheDocument(bm, loc, doc);
+                } else {
+                    cache.computeIfAbsent(loc, k -> new LinkedHashMap<>()).putAll(flatten(doc));
+                }
             } catch (Throwable t) {
                 LinLog.warn("ensure failed: keys={}, locale={}, err={}", keysClass.getName(), loc, t.getMessage());
             }
@@ -326,7 +364,11 @@ public final class LangServiceImpl implements LangService, LocaleAware {
             String loc = localeFor(bm.normalizeLocale, locale);
             Map<String, Object> doc = loadDocFor(bm, locale);
             TreeMapper.populate(bm.holder, doc);
-            buckets.computeIfAbsent(loc, key -> new LinkedHashMap<>()).putAll(flatten(doc));
+            Map<String, Object> document = immutableDeepCopy(doc);
+            Map<String, String> values = immutableTextSnapshot(document);
+            bm.documents.put(loc, document);
+            bm.texts.put(loc, values);
+            buckets.computeIfAbsent(loc, key -> new LinkedHashMap<>()).putAll(values);
         }
 
         for (var entry : buckets.entrySet()) {
@@ -340,8 +382,102 @@ public final class LangServiceImpl implements LangService, LocaleAware {
         String loc = localeFor(meta.normalizeLocale, locale);
         Map<String, Object> doc = loadDocFor(meta, locale);
         TreeMapper.populate(holder, doc);
+        cacheDocument(meta, loc, doc);
+    }
 
-        cache.computeIfAbsent(loc, k -> new LinkedHashMap<>()).putAll(flatten(doc));
+    private String resolveText(BoundMeta meta, String key, String requestedLocale, String fallback) {
+        String requested = requestedLocale == null || requestedLocale.isBlank()
+                ? locale()
+                : requestedLocale.trim();
+        String loc = localeFor(meta.normalizeLocale, requested);
+        Map<String, String> values = meta.texts.get(loc);
+
+        if (values == null) {
+            synchronized (meta) {
+                values = meta.texts.get(loc);
+                if (values == null) {
+                    try {
+                        Map<String, Object> doc = loadDocFor(meta, requested);
+                        values = cacheDocument(meta, loc, doc);
+                    } catch (Throwable ignored) {
+                        values = Map.of();
+                    }
+                }
+            }
+        }
+
+        String value = values.get(key);
+        return value == null ? fallback : value;
+    }
+
+    private List<String> resolveList(BoundMeta meta, String key, String requestedLocale,
+                                     List<String> fallback) {
+        Object raw = resolveValue(meta, key, requestedLocale);
+        if (!(raw instanceof Collection<?> collection)) return fallback;
+
+        List<String> values = new ArrayList<>(collection.size());
+        for (Object value : collection) {
+            if (value instanceof Map<?, ?> || value instanceof Collection<?>) return fallback;
+            values.add(value == null ? "" : String.valueOf(value));
+        }
+        return Collections.unmodifiableList(values);
+    }
+
+    private Map<String, String> resolveMap(BoundMeta meta, String key, String requestedLocale,
+                                           Map<String, String> fallback) {
+        Object raw = resolveValue(meta, key, requestedLocale);
+        if (!(raw instanceof Map<?, ?> map)) return fallback;
+
+        Map<String, String> values = new LinkedHashMap<>();
+        for (var entry : map.entrySet()) {
+            Object value = entry.getValue();
+            if (value instanceof Map<?, ?> || value instanceof Collection<?>) return fallback;
+            values.put(String.valueOf(entry.getKey()), value == null ? "" : String.valueOf(value));
+        }
+        return Collections.unmodifiableMap(values);
+    }
+
+    private Object resolveValue(BoundMeta meta, String key, String requestedLocale) {
+        String requested = requestedLocale == null || requestedLocale.isBlank()
+                ? locale()
+                : requestedLocale.trim();
+        String loc = localeFor(meta.normalizeLocale, requested);
+        Map<String, Object> document = meta.documents.get(loc);
+
+        if (document == null) {
+            synchronized (meta) {
+                document = meta.documents.get(loc);
+                if (document == null) {
+                    try {
+                        Map<String, Object> loaded = loadDocFor(meta, requested);
+                        cacheDocument(meta, loc, loaded);
+                        document = meta.documents.get(loc);
+                    } catch (Throwable ignored) {
+                        document = Map.of();
+                    }
+                }
+            }
+        }
+        return TreeMapper.valueAt(document, key);
+    }
+
+    private Map<String, String> cacheDocument(BoundMeta meta, String locale,
+                                               Map<String, Object> document) {
+        Map<String, Object> snapshot = immutableDeepCopy(document);
+        Map<String, String> values = immutableTextSnapshot(snapshot);
+        meta.documents.put(locale, snapshot);
+        meta.texts.put(locale, values);
+        cache.compute(locale, (key, current) -> {
+            Map<String, String> merged = new LinkedHashMap<>();
+            if (current != null) merged.putAll(current);
+            merged.putAll(values);
+            return Collections.unmodifiableMap(merged);
+        });
+        return values;
+    }
+
+    private static Map<String, String> immutableTextSnapshot(Map<String, Object> document) {
+        return Collections.unmodifiableMap(new LinkedHashMap<>(flatten(document)));
     }
 
     private Map<String, Object> loadDocFor(BoundMeta meta, String locale) {

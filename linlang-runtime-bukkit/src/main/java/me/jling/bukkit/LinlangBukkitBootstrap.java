@@ -21,8 +21,7 @@ import java.util.function.Function;
 
 /**
  * 此类是 Linlang 运行时插件的引导类，实现了 Linlang 接口。
- * 它为运行时插件本身提供配置、语言和命令功能。
- * 其他插件不会直接使用这个实例，而是通过 Lin.init(bukkit) 创建的 BukkitFacadeImpl 来使用。
+ * Linlang 服务从此处开始
  */
 public final class LinlangBukkitBootstrap implements AutoCloseable, Linlang, Linlang.Configurable, Linlang.Parametric {
 
@@ -65,26 +64,23 @@ public final class LinlangBukkitBootstrap implements AutoCloseable, Linlang, Lin
     private LinlangBukkitBootstrap(JavaPlugin runtimePlugin) {
         this.runtimePlugin = runtimePlugin;
 
-        // 初始化 runtime，全局服务，不含 per-bukkit 状态
+        // 运行时和其自身配套
         this.runtime = new BukkitRuntimeImpl(runtimePlugin, this);
-
-        // 配置：runtime bukkit 自己的 config/lang
         this.config = runtime.createConfigService(runtimePlugin);
         this.language = runtime.createLangService(runtimePlugin);
 
-        // 初始化国际化（模板注册）
         this.runtime.installLinMsg();
 
-        // 初始化审计（runtime bukkit 的审计）
+        // 审计
         this.runtime.installAudit(false);
 
-        // 初始化 runtime bukkit 自己的命令
+        // 运行时自身的有关命令
         this.command = runtime.createCommands(runtimePlugin, locale, prefixFn);
 
-        // messenger 基于 runtime bukkit 自己的语言
+        // 发送者
         this.messenger = runtime.createMessenger(this.language);
 
-        // LinFile：runtime bukkit 的视图
+        // 运行时自身配套
         this.linFileView = new LinFile() {
             public ConfigService config() {
                 return LinlangBukkitBootstrap.this.config;
@@ -126,7 +122,7 @@ public final class LinlangBukkitBootstrap implements AutoCloseable, Linlang, Lin
     }
 
     /* ============================================================
-     * Linlang interface — runtime bukkit ONLY
+     * Linlang interface — runtime bukkit
      * ============================================================ */
 
     /**
