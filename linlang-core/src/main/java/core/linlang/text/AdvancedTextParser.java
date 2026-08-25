@@ -1,7 +1,6 @@
 package core.linlang.text;
 
-import api.linlang.audit.LinLog;
-import core.linlang.audit.internal.LinlangInternalMessageKeys;
+import core.linlang.audit.problem.BuiltinProblemCatalog;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -24,8 +23,10 @@ public final class AdvancedTextParser {
     public List<TextNode> parse(String source) {
         String input = source == null ? "" : source;
         if (input.length() > MAX_SOURCE_LENGTH) {
-            LinLog.error("linText.textSourceTooLong", input);
-            throw new IllegalArgumentException("LinText source is too long.");
+            throw new IllegalArgumentException(
+                    BuiltinProblemCatalog.TEXT_SOURCE_TOO_LONG
+                            + ": length=" + input.length()
+            );
         }
 
         List<TextNode> nodes = new ArrayList<>();

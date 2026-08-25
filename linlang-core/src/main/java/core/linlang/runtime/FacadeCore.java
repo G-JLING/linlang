@@ -1,6 +1,7 @@
 // core/linlang/runtime/FacadeCore.java
 package core.linlang.runtime;
 
+import api.linlang.audit.LinAudit;
 import api.linlang.view.LinView;
 import api.linlang.command.LinCommand;
 import api.linlang.file.LinFile;
@@ -8,6 +9,7 @@ import api.linlang.file.file.ConfigService;
 import api.linlang.file.file.LangService;
 import api.linlang.messenger.LinMessenger;
 import api.linlang.runtime.Linlang;
+import core.linlang.audit.problem.BuiltinProblemCatalog;
 import core.linlang.event.api.LinEventBus;
 import core.linlang.event.api.ThreadMode;
 import core.linlang.file.impl.ConfigServiceImpl;
@@ -47,6 +49,7 @@ public final class FacadeCore<P> implements Linlang, Linlang.Configurable, Linla
     private volatile LinCommand command;
     private volatile LinMessenger messenger;
     private volatile LinView view;
+    private final LinAudit audit;
 
     private volatile Function<P, String> prefixFn;
     private volatile String preferredLocale;
@@ -68,11 +71,12 @@ public final class FacadeCore<P> implements Linlang, Linlang.Configurable, Linla
     private FacadeCore(RuntimeCore<P> runtime, P owner) {
         this.runtime = runtime;
         this.owner = owner;
+        this.audit = runtime.auditFor(owner);
 
         this.prefixFn = runtime.adapter()::defaultTotalPrefix;
 
         // facade 级事件总线
-        this.events = runtime.newFacadeBus();
+        this.events = runtime.newFacadeBus(owner);
 
         // facade 级语言/前缀控制器（唯一真相源）
         this.localeController = new LocaleController(this.events);
@@ -85,9 +89,17 @@ public final class FacadeCore<P> implements Linlang, Linlang.Configurable, Linla
         this.events.on(this, LocaleChanged.class, ThreadMode.CURRENT, 0, e -> {
             try {
                 if (this.language != null) this.language.setLocale(e.newLocale());
-            } catch (Throwable ignore) {}
+            } catch (RuntimeException exception) {
+                report(BuiltinProblemCatalog.LANGUAGE_LOCALE_SWITCH_FAILED, exception,
+                        "locale", e.newLocale());
+            }
 
-            try { rebuildCommands(e.newLocale()); } catch (Throwable ignore) {}
+            try {
+                rebuildCommands(e.newLocale());
+            } catch (RuntimeException exception) {
+                report(BuiltinProblemCatalog.FACADE_RELOAD_FAILED, exception,
+                        "resource", "command", "locale", e.newLocale());
+            }
         });
 
         // 初始化文件服务
@@ -101,7 +113,7 @@ public final class FacadeCore<P> implements Linlang, Linlang.Configurable, Linla
 
         // 初始化命令/消息
         this.command = runtime.createCommands(owner, this.language, locale, () -> this.prefixController.prefix());
-        this.messenger = runtime.createMessenger(this.language);
+        this.messenger = runtime.createMessenger(owner, this.language);
 
         // 初始化交互服务（每个 facade 独享）
         this.view = runtime.createView(owner);
@@ -154,6 +166,11 @@ public final class FacadeCore<P> implements Linlang, Linlang.Configurable, Linla
         return view;
     }
 
+    @Override
+    public LinAudit linAudit() {
+        return audit;
+    }
+
     /** facade 级语言控制器 */
     public LocaleController locale() {
         return localeController;
@@ -170,18 +187,26 @@ public final class FacadeCore<P> implements Linlang, Linlang.Configurable, Linla
             if (closed) return;
             closed = true;
 
-            try { runtime.unregisterFacade(this); } catch (Throwable ignore) {}
+            try {
+                runtime.unregisterFacade(this);
+            } catch (RuntimeException exception) {
+                report(BuiltinProblemCatalog.RESOURCE_CLOSE_FAILED, exception,
+                        "resource", "facade-registration");
+            }
 
-            try { if (command instanceof AutoCloseable c) c.close(); } catch (Throwable ignore) {}
-            try { if (messenger instanceof AutoCloseable c) c.close(); } catch (Throwable ignore) {}
+            closeResource(command, "command");
+            closeResource(messenger, "messenger");
 
             view = null;
-            runtime.releaseOwner(owner);
 
             try {
                 events.unregisterAll(this);
                 events.shutdown();
-            } catch (Throwable ignore) {}
+            } catch (RuntimeException exception) {
+                report(BuiltinProblemCatalog.RESOURCE_CLOSE_FAILED, exception,
+                        "resource", "facade-event-bus");
+            }
+            runtime.releaseOwner(owner);
         }
     }
 
@@ -226,13 +251,9 @@ public final class FacadeCore<P> implements Linlang, Linlang.Configurable, Linla
     public void reload() {
         synchronized (lifecycleLock) {
             if (closed) return;
-            try {
-                // totalPrefixProvider 可能依赖外部状态，reload 时重新解析一次
-                try { this.prefixController.setPrefix(resolveTotalPrefix(), "facade.reload"); } catch (Throwable ignore) {}
-
-                String locale = effectiveLocale();
-                this.localeController.setLocale(locale, "facade.reload");
-            } catch (Throwable ignore) {}
+            this.prefixController.setPrefix(resolveTotalPrefix(), "facade.reload");
+            String locale = effectiveLocale();
+            this.localeController.setLocale(locale, "facade.reload");
         }
     }
 
@@ -241,18 +262,15 @@ public final class FacadeCore<P> implements Linlang, Linlang.Configurable, Linla
     public void restart() {
         synchronized (lifecycleLock) {
             if (closed) return;
-            try {
-                // 重建文件服务实例（路径不变，但缓存/holder 会重建）
-                this.config = runtime.createConfigService(owner);
-                this.language = runtime.createLangService(owner);
+            this.config = runtime.createConfigService(owner);
+            this.language = runtime.createLangService(owner);
 
-                String locale = effectiveLocale();
-                this.localeController.setLocale(locale, "facade.restart");
+            String locale = effectiveLocale();
+            this.localeController.setLocale(locale, "facade.restart");
 
-                rebuildCommands(locale);
-                rebuildMessenger();
-                this.view = runtime.createView(owner);
-            } catch (Throwable ignore) {}
+            rebuildCommands(locale);
+            rebuildMessenger();
+            this.view = runtime.createView(owner);
         }
     }
 
@@ -262,7 +280,7 @@ public final class FacadeCore<P> implements Linlang, Linlang.Configurable, Linla
         synchronized (lifecycleLock) {
             if (closed) return;
 
-            try { if (command instanceof AutoCloseable c) c.close(); } catch (Throwable ignore) {}
+            closeResource(command, "command");
             String use = (locale != null && !locale.isBlank()) ? locale.trim() : effectiveLocale();
             this.command = runtime.createCommands(owner, this.language, use, () -> this.prefixController.prefix());
 
@@ -274,9 +292,14 @@ public final class FacadeCore<P> implements Linlang, Linlang.Configurable, Linla
      * 重建消息服务。
      */
     private void rebuildMessenger() {
-        try { events.unregisterAll(messenger); } catch (Throwable ignore) {}
-        try { if (messenger instanceof AutoCloseable c) c.close(); } catch (Throwable ignore) {}
-        this.messenger = runtime.createMessenger(this.language);
+        try {
+            events.unregisterAll(messenger);
+        } catch (RuntimeException exception) {
+            report(BuiltinProblemCatalog.RESOURCE_CLOSE_FAILED, exception,
+                    "resource", "messenger-event-registration");
+        }
+        closeResource(messenger, "messenger");
+        this.messenger = runtime.createMessenger(owner, this.language);
         wirePrefix(this.messenger);
     }
 
@@ -284,11 +307,21 @@ public final class FacadeCore<P> implements Linlang, Linlang.Configurable, Linla
     private void wirePrefix(Object module) {
         if (!(module instanceof PrefixAware pa)) return;
 
-        try { pa.setTotalPrefix(this.prefixController.prefix()); } catch (Throwable ignore) {}
+        try {
+            pa.setTotalPrefix(this.prefixController.prefix());
+        } catch (RuntimeException exception) {
+            report(BuiltinProblemCatalog.MESSAGE_PREFIX_RESOLVE_FAILED, exception,
+                    "resource", module.getClass().getName());
+        }
 
         // 订阅后续变更：owner=module，便于模块自身 close；Facade close 时也会统一 unregisterAll(this)
         this.events.on(module, TotalPrefixChanged.class, ThreadMode.CURRENT, 0, e -> {
-            try { pa.setTotalPrefix(e.newPrefix()); } catch (Throwable ignore) {}
+            try {
+                pa.setTotalPrefix(e.newPrefix());
+            } catch (RuntimeException exception) {
+                report(BuiltinProblemCatalog.MESSAGE_PREFIX_RESOLVE_FAILED, exception,
+                        "resource", module.getClass().getName());
+            }
         });
     }
 
@@ -297,7 +330,10 @@ public final class FacadeCore<P> implements Linlang, Linlang.Configurable, Linla
         try {
             Function<P, String> fn = this.prefixFn;
             if (fn != null) out = fn.apply(this.owner);
-        } catch (Throwable ignore) {}
+        } catch (RuntimeException exception) {
+            report(BuiltinProblemCatalog.MESSAGE_PREFIX_RESOLVE_FAILED, exception,
+                    "resource", "total-prefix-provider");
+        }
 
         if (out != null) {
             String v = out.trim();
@@ -310,5 +346,19 @@ public final class FacadeCore<P> implements Linlang, Linlang.Configurable, Linla
         String v = this.preferredLocale;
         if (v != null && !v.isBlank()) return v.trim();
         return "zh_CN";
+    }
+
+    private void closeResource(Object resource, String name) {
+        if (!(resource instanceof AutoCloseable closeable)) return;
+        try {
+            closeable.close();
+        } catch (Exception exception) {
+            report(BuiltinProblemCatalog.RESOURCE_CLOSE_FAILED, exception,
+                    "resource", name);
+        }
+    }
+
+    private void report(String code, Throwable cause, Object... context) {
+        audit.problem().report(code, cause, context);
     }
 }

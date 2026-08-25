@@ -1,37 +1,53 @@
 package core.linlang.audit;
 
 import api.linlang.audit.LinLog;
-import com.fasterxml.jackson.core.JsonTokenId;
+import api.linlang.audit.event.AuditEvent;
+import api.linlang.audit.log.LogChannel;
+import api.linlang.audit.log.LogLevel;
+import api.linlang.audit.log.LogRecord;
+import api.linlang.audit.problem.LinProblem;
+import api.linlang.audit.problem.ProblemDefinition;
 import core.linlang.audit.config.AuditConfig;
-import lombok.Getter;
-import lombok.Setter;
+import core.linlang.audit.format.AuditRecordFormatter;
+import core.linlang.audit.format.AuditRecordFormatter.FormattedMessage;
+import core.linlang.audit.io.AuditFileWriter;
+import core.linlang.audit.problem.BuiltinProblemCatalog;
 
-import java.io.IOException;
-import java.nio.file.*;
-import java.util.*;
+import java.nio.file.Path;
+import java.util.ArrayDeque;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Deque;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
 /**
- * 平台无关的日志/审计实现基类。
- * <p>负责：多租户、级别过滤、格式化、文件输出、文件轮转、OP/STARTUP 队列等。</p>
- * <p>平台适配层（如 Bukkit）只需要实现 logger 创建和 OP/启动日志的投递方式。</p>
+ * 平台无关的日志、审计与问题报告 Provider。
+ *
+ * <p>该类只负责租户路由、等级判断和平台投递。格式化、文件写入与问题代码目录
+ * 分别由专用组件完成。</p>
  */
-public abstract class AbstractAuditProvider implements LinLog.Provider {
+public abstract class AbstractAuditProvider implements LinLog.Provider, AutoCloseable {
 
-    /** 每个租户（runtime 或某个插件） */
+    protected static final int MAX_PENDING = 50;
+
     protected static final class Tenant {
-        final Object ownerKey;
-        final Logger jul;          // 对应此租户的 JUL logger
+        private final Object ownerKey;
+        private volatile String name;
+        private volatile Logger logger;
+        private volatile AuditConfig config;
 
-        @Getter
-        @Setter
-        volatile AuditConfig config;
-
-        Tenant(Object ownerKey, Logger jul, AuditConfig config) {
+        private Tenant(Object ownerKey, String name, Logger logger, AuditConfig config) {
             this.ownerKey = ownerKey;
-            this.jul = jul;
+            this.name = name;
+            this.logger = logger;
             this.config = config;
         }
     }
@@ -39,356 +55,287 @@ public abstract class AbstractAuditProvider implements LinLog.Provider {
     private final Object runtimeOwnerKey;
     private final Tenant runtimeTenant;
     private final Map<Object, Tenant> tenants = new ConcurrentHashMap<>();
-
-    protected static final int MAX_PENDING = 50;
-    protected static final Deque<String> pendingOp = new ArrayDeque<>();
-    protected static final Deque<String> pendingStartup = new ArrayDeque<>();
-    protected static final Object FILE_LOCK = new Object();
-
-    private static final boolean ANSI_SUPPORTED =
-            !System.getProperty("os.name", "").toLowerCase(Locale.ROOT).contains("win");
-
-    private static final String ANSI_RESET = "\u001B[0m";
-    private static final String ANSI_ERROR = "\u001B[31m";   // 红色 - 错误信息
-    private static final String ANSI_DEBUG = "\u001B[90m";   // 灰色 - 调试信息
-    private static final String ANSI_INFO  = "\u001B[37m";   // 白色 - 普通信息
-    private static final String ANSI_WARN  = "\u001B[33m";   // 黄色 - 警告信息
-    private static final String ANSI_AUDIT = "\u001B[35m";   // 紫色 - 审计信息
-    private static final String ANSI_START = "\u001B[92m";   // 亮绿色 - 在启动时
-    private static final String ANSI_OP    = "\u001B[96m";   // 亮青色 - 至管理员
+    private final Map<Object, Deque<String>> pendingOp = new ConcurrentHashMap<>();
+    private final Map<Object, Deque<String>> pendingStartup = new ConcurrentHashMap<>();
+    private final AuditRecordFormatter formatter = new AuditRecordFormatter();
+    private final AuditFileWriter fileWriter;
+    private final BuiltinProblemCatalog problems = new BuiltinProblemCatalog();
+    private final AtomicBoolean closed = new AtomicBoolean();
 
     protected AbstractAuditProvider(Object runtimeOwnerKey,
                                     Logger runtimeLogger,
                                     AuditConfig runtimeConfig) {
-        this.runtimeOwnerKey = runtimeOwnerKey;
-        try { runtimeLogger.setLevel(Level.ALL); } catch (Throwable ignore) {}
-        this.runtimeTenant = new Tenant(runtimeOwnerKey, runtimeLogger, runtimeConfig);
+        this.runtimeOwnerKey = Objects.requireNonNull(runtimeOwnerKey, "runtimeOwnerKey");
+        Logger logger = Objects.requireNonNull(runtimeLogger, "runtimeLogger");
+        configureLogger(logger);
+        this.runtimeTenant = new Tenant(
+                runtimeOwnerKey,
+                "runtime",
+                logger,
+                runtimeConfig == null ? new AuditConfig() : runtimeConfig
+        );
+        this.fileWriter = new AuditFileWriter(this.runtimeTenant.config.queueCapacity);
     }
 
-    /** 平台实现负责：根据 ownerKey 创建合适的 JUL logger */
     protected abstract Logger createLoggerFor(Object ownerKey, boolean usePluginLogger);
 
-    /** 平台实现负责：将 ownerHint 归一化为 ownerKey（例如 Class → 插件实例） */
     protected abstract Object normalizeOwnerKey(Object ownerHint);
 
-    /** 平台实现负责：立即向在线 OP 投递一条 OP 日志（文本格式） */
-    protected abstract void platformDeliverOpLine(String line);
+    protected abstract String ownerName(Object ownerKey);
 
-    /** 平台实现负责：立即投递一条 STARTUP 日志（控制台或广播） */
-    protected abstract void platformDeliverStartupLine(String line);
+    protected abstract Path resolveOutputPath(Object ownerKey, String configuredPath);
 
-    /** 注册/更新某个 owner 的租户 */
-    public void registerTenant(Object ownerKey, AuditConfig cfg, boolean usePluginLogger) {
-        Logger logger = createLoggerFor(ownerKey, usePluginLogger);
-        try { logger.setLevel(Level.ALL); } catch (Throwable ignore) {}
-        Tenant t = new Tenant(ownerKey, logger, cfg);
-        tenants.put(ownerKey, t);
+    protected abstract boolean platformDeliverOpLine(Object ownerKey, String line);
+
+    protected abstract boolean platformDeliverStartupLine(Object ownerKey, String line);
+
+    public final void registerTenant(Object ownerKey, AuditConfig config, boolean usePluginLogger) {
+        Objects.requireNonNull(ownerKey, "ownerKey");
+        Logger logger = Objects.requireNonNull(
+                createLoggerFor(ownerKey, usePluginLogger),
+                "tenant logger"
+        );
+        configureLogger(logger);
+        AuditConfig resolved = config == null ? new AuditConfig() : config;
+        if (Objects.equals(ownerKey, runtimeOwnerKey)) {
+            runtimeTenant.logger = logger;
+            runtimeTenant.config = resolved;
+            return;
+        }
+        tenants.put(ownerKey, new Tenant(ownerKey, safeOwnerName(ownerKey), logger, resolved));
     }
 
-    public void unregisterTenant(Object ownerKey) {
+    public final void unregisterTenant(Object ownerKey) {
+        if (ownerKey == null || Objects.equals(ownerKey, runtimeOwnerKey)) return;
         tenants.remove(ownerKey);
+        pendingOp.remove(ownerKey);
+        pendingStartup.remove(ownerKey);
     }
 
-    protected Tenant resolveTenant(Object ownerHint) {
+    protected final Object normalizedOwner(Object ownerHint) {
         Object key = normalizeOwnerKey(ownerHint);
-        if (key == null) key = runtimeOwnerKey;
-        Tenant t = tenants.get(key);
-        return (t != null ? t : runtimeTenant);
+        return key == null ? runtimeOwnerKey : key;
     }
 
-    // ---- 级别过滤 ----
-
-    protected boolean shouldLog(AuditConfig c, String level) {
-        String confLevel = (c == null || c.level == null)
-                ? "INFO"
-                : c.level.toUpperCase(Locale.ROOT);
-        int confLevelVal = levelValue(confLevel);
-        int msgLevelVal  = levelValue(level.toUpperCase(Locale.ROOT));
-        return msgLevelVal >= confLevelVal;
+    protected final List<String> drainPendingOp(Object ownerHint) {
+        return drain(pendingOp, normalizedOwner(ownerHint));
     }
 
-    protected int levelValue(String level) {
-        return switch (level) {
-            case "DEBUG" -> 1;
-            case "INFO", "INIT", "OP", "STARTUP", "BANR" -> 2;
-            case "WARN" -> 3;
-            case "ERROR" -> 4;
-            case "AUDIT" -> 5;
-            default -> 2;
-        };
+    protected final List<String> drainPendingStartup(Object ownerHint) {
+        return drain(pendingStartup, normalizedOwner(ownerHint));
     }
 
-    // ---- 文件输出与轮转 ----
+    protected final void restorePendingOp(Object ownerHint, Collection<String> lines) {
+        Object key = normalizedOwner(ownerHint);
+        for (String line : lines) {
+            enqueue(pendingOp, key, line);
+        }
+    }
 
-    protected void writeToFile(AuditConfig.Output out, String line) {
-        if (out == null || out.path == null || out.path.isEmpty()) return;
-        Path p = Path.of(out.path);
+    protected final Logger loggerFor(Object ownerHint) {
+        return resolveTenant(ownerHint).logger;
+    }
+
+    @Override
+    public final void publish(Object owner, LogRecord record) {
+        if (record == null || closed.get()) return;
+        Tenant tenant = resolveTenant(owner);
+        AuditConfig config = tenant.config;
+        if (!shouldLog(config, record.level())) return;
+
+        FormattedMessage formatted = formatter.format(record.message(), record.arguments());
+        String consoleLine = formatter.logText(tenant.name, record, formatted, false);
+        if (record.channel() == LogChannel.OP) {
+            if (!platformDeliverOpLine(tenant.ownerKey, consoleLine)) {
+                enqueue(pendingOp, tenant.ownerKey, consoleLine);
+            }
+            submitLogFile(tenant, config, record, formatted);
+            return;
+        }
+        if (record.channel() == LogChannel.STARTUP) {
+            if (!platformDeliverStartupLine(tenant.ownerKey, consoleLine)) {
+                enqueue(pendingStartup, tenant.ownerKey, consoleLine);
+            }
+            submitLogFile(tenant, config, record, formatted);
+            return;
+        }
+
+        if (isEnabled(config == null ? null : config.console, true)) {
+            String output = useJsonFor(config, config == null ? null : config.console)
+                    ? formatter.jsonLog(tenant.name, record, formatted)
+                    : formatter.colorize(record, consoleLine);
+            tenant.logger.log(formatter.julLevel(record.level()), output, record.cause());
+        }
+        submitLogFile(tenant, config, record, formatted);
+    }
+
+    @Override
+    public final void publishAudit(Object owner, AuditEvent event) {
+        if (event == null || closed.get()) return;
+        Tenant tenant = resolveTenant(owner);
+        AuditConfig config = tenant.config;
+        AuditConfig.Output output = config == null ? null : config.audit;
+        if (!isEnabled(output, false)) return;
+
+        if (isEnabled(config.console, true)) {
+            String line = useJsonFor(config, config.console)
+                    ? formatter.jsonAudit(tenant.name, event)
+                    : formatter.colorizeAudit(formatter.auditText(tenant.name, event, false));
+            tenant.logger.log(Level.INFO, line);
+        }
+        String fileLine = useJsonFor(config, output)
+                ? formatter.jsonAudit(tenant.name, event)
+                : formatter.auditText(tenant.name, event, true);
+        submitFile(tenant, output, fileLine, true);
+    }
+
+    @Override
+    public final void publishProblem(Object owner, LinProblem problem) {
+        if (problem == null || closed.get()) return;
+        Tenant tenant = resolveTenant(owner);
+        AuditConfig config = tenant.config;
+        if (isEnabled(config == null ? null : config.console, true)) {
+            String line = useJsonFor(config, config == null ? null : config.console)
+                    ? formatter.jsonProblem(tenant.name, problem)
+                    : formatter.colorizeProblem(formatter.problemText(tenant.name, problem, false));
+            tenant.logger.log(Level.SEVERE, line, problem.cause());
+        }
+
+        AuditConfig.Output output = config == null ? null : config.problem;
+        if (isEnabled(output, false)) {
+            String fileLine = useJsonFor(config, output)
+                    ? formatter.jsonProblem(tenant.name, problem)
+                    : formatter.problemText(tenant.name, problem, true);
+            submitFile(tenant, output, fileLine, true);
+        }
+    }
+
+    @Override
+    public final Optional<ProblemDefinition> lookupProblem(String code) {
+        return problems.lookup(code);
+    }
+
+    @Override
+    public final List<ProblemDefinition> listProblems() {
+        return problems.list();
+    }
+
+    @Override
+    public final void flush(Object owner) {
+        fileWriter.flush(resolveTenant(owner).logger);
+    }
+
+    @Override
+    public void close() {
+        if (closed.get()) return;
+        fileWriter.flush(runtimeTenant.logger);
+        if (!closed.compareAndSet(false, true)) return;
+        fileWriter.close();
+    }
+
+    protected final boolean shouldLog(AuditConfig config, LogLevel level) {
+        return level.ordinal() >= configuredLevel(config).ordinal();
+    }
+
+    protected final String formatMessage(String message, Object... arguments) {
+        return formatter.format(message, arguments).text();
+    }
+
+    private Tenant resolveTenant(Object ownerHint) {
+        Object key = normalizedOwner(ownerHint);
+        if (Objects.equals(key, runtimeOwnerKey)) {
+            runtimeTenant.name = safeOwnerName(runtimeOwnerKey);
+            return runtimeTenant;
+        }
+        return tenants.getOrDefault(key, runtimeTenant);
+    }
+
+    private LogLevel configuredLevel(AuditConfig config) {
+        if (config == null || config.level == null) return LogLevel.INFO;
         try {
-            synchronized (FILE_LOCK) {
-                Path parent = p.toAbsolutePath().getParent();
-                if (parent != null) Files.createDirectories(parent);
-
-                long limit = (long) Math.max(1, out.sizeMb) * 1024L * 1024L;
-                if (Files.exists(p)) {
-                    long size = Files.size(p);
-                    if (size >= limit) rotateFiles(p, Math.max(1, out.retained));
-                }
-                Files.writeString(p, line + System.lineSeparator(),
-                        StandardOpenOption.CREATE, StandardOpenOption.APPEND);
-            }
-        } catch (IOException e) {
-            // 此处不抛出，由租户 logger 自行记录警告或忽略
+            return LogLevel.valueOf(config.level.trim().toUpperCase(Locale.ROOT));
+        } catch (IllegalArgumentException exception) {
+            return LogLevel.INFO;
         }
     }
 
-    protected void rotateFiles(Path base, int retained) throws IOException {
-        for (int i = retained; i >= 2; i--) {
-            Path prev = Path.of(base.toString() + "." + (i - 1));
-            Path next = Path.of(base.toString() + "." + i);
-            if (Files.exists(prev)) {
-                Files.move(prev, next, StandardCopyOption.REPLACE_EXISTING);
-            }
+    private void submitLogFile(Tenant tenant,
+                               AuditConfig config,
+                               LogRecord record,
+                               FormattedMessage formatted) {
+        AuditConfig.Output output = config == null ? null : config.file;
+        if (!isEnabled(output, false)) return;
+        String line = useJsonFor(config, output)
+                ? formatter.jsonLog(tenant.name, record, formatted)
+                : formatter.logText(tenant.name, record, formatted, true);
+        if (record.cause() != null && !useJsonFor(config, output)) {
+            line += System.lineSeparator() + formatter.stackTrace(record.cause());
         }
-        if (Files.exists(base)) {
-            Files.move(base, Path.of(base.toString() + ".1"),
-                    StandardCopyOption.REPLACE_EXISTING);
-        }
+        submitFile(tenant, output, line, record.level() == LogLevel.ERROR);
     }
 
-    protected boolean useJsonFor(AuditConfig c, AuditConfig.Output out) {
-        if (out != null && out.json != null) {
-            return out.json;
-        }
-        return c != null && c.json;
-    }
-
-    // ---- 队列工具 ----
-
-    protected static void enqueueBounded(Deque<String> q, String line) {
-        synchronized (q) {
-            while (q.size() >= MAX_PENDING) q.pollFirst();
-            q.addLast(line);
-        }
-    }
-
-    // ---- 文本格式化 & 颜色 ----
-
-    protected String shortLevel(String lvl) {
-        String u = (lvl == null ? "INFO" : lvl).toUpperCase(Locale.ROOT);
-        return switch (u) {
-            case "DEBUG" -> "dbg";
-            case "INFO"  -> "inf";
-            case "WARN"  -> "wrn";
-            case "AUDIT" -> "log";
-            case "STARTUP" -> "str";
-            case "INIT"  -> "int";
-            case "OP"    -> "opr";
-            default -> {
-                String s = u.toLowerCase(Locale.ROOT);
-                if (s.length() >= 3) yield s.substring(0, 3);
-                StringBuilder sb = new StringBuilder(s);
-                while (sb.length() < 3) sb.append(' ');
-                yield sb.toString();
-            }
-        };
-    }
-
-    protected String prefixFor(String lvl) {
-        String u = (lvl == null ? "INFO" : lvl).toUpperCase(Locale.ROOT);
-        if ("BANR".equals(u)) {
-            return "";
-        }
-        String tag = shortLevel(u);
-        return "[linlang-" + tag + "] ";
-    }
-
-    protected String colorizeForConsole(String level, String message) {
-        if (!ANSI_SUPPORTED || message == null) return message;
-        String u = level == null ? "INFO" : level.toUpperCase(Locale.ROOT);
-        String color = switch (u) {
-            case "DEBUG" -> ANSI_DEBUG;
-            case "ERROR" -> ANSI_ERROR;
-            case "WARN"  -> ANSI_WARN;
-            case "AUDIT" -> ANSI_AUDIT;
-            case "STARTUP", "INIT" -> ANSI_START;
-            case "OP"    -> ANSI_OP;
-            case "INFO"  -> ANSI_INFO;
-            default      -> ANSI_INFO;
-        };
-        return color + message + ANSI_RESET;
-    }
-
-    /**
-     * 将 level+msg+kv 格式化为文本行（非 JSON）。
-     */
-    protected String fmt(String lvl, String msg, Object... kv) {
-        String template = msg == null ? "" : msg;
-
-        int valueIdx = 0;
-        if (kv != null && kv.length > 0) {
-            while (template.contains("{}") && valueIdx < kv.length) {
-                String rep = String.valueOf(kv[valueIdx++]);
-                template = template.replaceFirst("\\{}", rep == null ? "null" : rep);
-            }
-        }
-
-        boolean replacedAny = false;
-        if (kv != null && kv.length > valueIdx) {
-            for (int i = valueIdx; i + 1 < kv.length; i += 2) {
-                String rawKey = String.valueOf(kv[i]);
-                if (rawKey == null) continue;
-                String k = rawKey.trim();
-                if (k.startsWith("{") && k.endsWith("}") && k.length() > 2) {
-                    k = k.substring(1, k.length() - 1).trim();
-                }
-                if (k.isEmpty()) continue;
-                String placeholder = "{" + k + "}";
-                if (template.contains(placeholder)) {
-                    String rep = String.valueOf(kv[i + 1]);
-                    template = template.replace(placeholder, rep == null ? "null" : rep);
-                    replacedAny = true;
-                }
-            }
-        }
-
-        StringBuilder sb = new StringBuilder();
-        sb.append(prefixFor(lvl == null ? "info" : lvl));
-        sb.append(template);
-
-        if (!replacedAny && kv != null && kv.length > valueIdx) {
-            for (int i = valueIdx; i + 1 < kv.length; i += 2) {
-                sb.append(' ').append(kv[i]).append('=').append(String.valueOf(kv[i + 1]));
-            }
-            if (((kv.length - valueIdx) & 1) == 1) {
-                sb.append(" kv_odd=").append(kv[kv.length - 1]);
-            }
-        }
-
-        return sb.toString();
-    }
-
-    protected String buildJsonLine(String level, String msg, Object... kv) {
-        StringBuilder sb = new StringBuilder();
-        sb.append("{");
-        sb.append("\"level\":\"").append(level).append("\",");
-        sb.append("\"message\":\"").append(msg).append("\"");
-        for (int i = 0; i + 1 < kv.length; i += 2) {
-            sb.append(",\"").append(kv[i]).append("\":\"")
-                    .append(String.valueOf(kv[i + 1])).append("\"");
-        }
-        if ((kv.length & 1) == 1) {
-            sb.append(",\"kv_odd\":\"").append(kv[kv.length - 1]).append("\"");
-        }
-        sb.append("}");
-        return sb.toString();
-    }
-
-    protected String buildAuditJson(String event, Object... kv) {
-        StringBuilder sb = new StringBuilder();
-        sb.append("{");
-        sb.append("\"event\":\"").append(event).append("\"");
-        for (int i = 0; i + 1 < kv.length; i += 2) {
-            sb.append(",\"").append(kv[i]).append("\":\"")
-                    .append(String.valueOf(kv[i + 1])).append("\"");
-        }
-        if ((kv.length & 1) == 1) {
-            sb.append(",\"kv_odd\":\"").append(kv[kv.length - 1]).append("\"");
-        }
-        sb.append("}");
-        return sb.toString();
-    }
-
-    // ---- Provider 接口实现 ----
-
-    @Override
-    public void log(String level, String msg, Object... kv) {
-        log(null, level, msg, kv); // 视为 runtime
-    }
-
-    @Override
-    public void log(Object owner, String level, String msg, Object... kv) {
-        Tenant t = resolveTenant(owner);
-        AuditConfig c = t.config;
-        if (!shouldLog(c, level)) return;
-
-        String upper = level.toUpperCase(Locale.ROOT);
-        boolean consoleJson = useJsonFor(c, c != null ? c.console : null);
-        String line = consoleJson ? buildJsonLine(upper, msg, kv) : fmt(upper, msg, kv);
-
-        if ("OP".equals(upper)) {
-            String payload = consoleJson ? line : msg;
-            platformDeliverOpLine(payload);
-            if (c != null && c.file != null && c.file.enabled && c.file.path != null) {
-                String fileLine = useJsonFor(c, c.file) ? line : fmt("OP", msg, kv);
-                writeToFile(c.file, fileLine);
-            }
+    private void submitFile(Tenant tenant,
+                            AuditConfig.Output output,
+                            String line,
+                            boolean critical) {
+        if (output == null || output.path == null || output.path.isBlank()) return;
+        Path path;
+        try {
+            path = resolveOutputPath(tenant.ownerKey, output.path);
+        } catch (RuntimeException exception) {
+            tenant.logger.log(
+                    Level.SEVERE,
+                    '[' + BuiltinProblemCatalog.OUTPUT_PATH_INVALID + "] path=" + output.path,
+                    exception
+            );
             return;
         }
+        fileWriter.submit(path, output, line, tenant.logger, critical);
+    }
 
-        if ("STARTUP".equals(upper)) {
-            String payload = consoleJson ? line : msg;
-            platformDeliverStartupLine(payload);
-            if (c != null && c.file != null && c.file.enabled && c.file.path != null) {
-                String fileLine = useJsonFor(c, c.file) ? line : fmt("STARTUP", msg, kv);
-                writeToFile(c.file, fileLine);
+    private boolean useJsonFor(AuditConfig config, AuditConfig.Output output) {
+        if (output != null && output.json != null) return output.json;
+        return config != null && config.json;
+    }
+
+    private boolean isEnabled(AuditConfig.Output output, boolean defaultValue) {
+        return output == null ? defaultValue : output.enabled;
+    }
+
+    private void enqueue(Map<Object, Deque<String>> queues, Object ownerKey, String line) {
+        Deque<String> queue = queues.computeIfAbsent(ownerKey, ignored -> new ArrayDeque<>());
+        synchronized (queue) {
+            while (queue.size() >= MAX_PENDING) {
+                queue.pollFirst();
             }
-            return;
-        }
-
-        // 控制台输出
-        if (c == null || (c.console != null && c.console.enabled)) {
-            String consoleLine = consoleJson ? line : colorizeForConsole(upper, line);
-            t.jul.info(consoleLine);
-        }
-
-        // 文件输出
-        if (c != null && c.file != null && c.file.enabled && c.file.path != null) {
-            boolean fileJson = useJsonFor(c, c.file);
-            String fileLine = fileJson ? line : fmt(level, msg, kv);
-            writeToFile(c.file, fileLine);
+            queue.addLast(line);
         }
     }
 
-    @Override
-    public void audit(String event, Object... kv) {
-        audit(null, event, kv);
-    }
-
-    @Override
-    public void audit(Object owner, String event, Object... kv) {
-        Tenant t = resolveTenant(owner);
-        AuditConfig c = t.config;
-        if (c == null || c.audit == null || !c.audit.enabled) return;
-
-        boolean consoleJson = useJsonFor(c, c.console);
-        boolean auditJson   = useJsonFor(c, c.audit);
-
-        String line = auditJson ? buildAuditJson(event, kv) : fmt("AUDIT", event, kv);
-
-        if (c.console != null && c.console.enabled) {
-            if (consoleJson) {
-                t.jul.info(line);
-            } else {
-                String formatted = fmt("AUDIT", event, kv);
-                t.jul.info(colorizeForConsole("AUDIT", formatted));
-            }
-        }
-        if (c.audit.path != null) {
-            writeToFile(c.audit, line);
+    private List<String> drain(Map<Object, Deque<String>> queues, Object ownerKey) {
+        Deque<String> queue = queues.get(ownerKey);
+        if (queue == null) return List.of();
+        synchronized (queue) {
+            if (queue.isEmpty()) return List.of();
+            List<String> result = new ArrayList<>(queue);
+            queue.clear();
+            return result;
         }
     }
 
-    // flush 接口默认使用队列，平台可按需 override
-
-    @Override
-    public void flushOpToOnlineOps() {
+    private String safeOwnerName(Object ownerKey) {
+        try {
+            String value = ownerName(ownerKey);
+            return value == null || value.isBlank() ? "runtime" : value;
+        } catch (RuntimeException exception) {
+            return "runtime";
+        }
     }
 
-    @Override
-    public void flushStartupToConsole() {
-    }
-
-    @Override
-    public void flushOpTo(Object op) {
+    private void configureLogger(Logger logger) {
+        try {
+            logger.setLevel(Level.ALL);
+        } catch (RuntimeException ignored) {
+        }
     }
 }

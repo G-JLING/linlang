@@ -1,6 +1,7 @@
 package core.linlang.event.impl;
 
 import api.linlang.audit.LinLog;
+import core.linlang.audit.problem.BuiltinProblemCatalog;
 import core.linlang.event.api.LinEventBus;
 import core.linlang.event.api.Subscription;
 import core.linlang.event.api.ThreadMode;
@@ -16,6 +17,7 @@ import java.util.function.Consumer;
 public final class DefaultEventBus implements LinEventBus {
 
     private final EventDispatcher dispatcher;
+    private final Object defaultOwner;
 
     // 精确类型匹配：eventType -> listeners
     private final Map<Class<?>, CopyOnWriteArrayList<ListenerEntry>> listeners = new ConcurrentHashMap<>();
@@ -29,7 +31,12 @@ public final class DefaultEventBus implements LinEventBus {
     private volatile boolean closed = false;
 
     public DefaultEventBus(EventDispatcher dispatcher) {
+        this(dispatcher, null);
+    }
+
+    public DefaultEventBus(EventDispatcher dispatcher, Object defaultOwner) {
         this.dispatcher = (dispatcher == null) ? EventDispatcher.direct() : dispatcher;
+        this.defaultOwner = defaultOwner;
     }
 
     @Override
@@ -135,12 +142,13 @@ public final class DefaultEventBus implements LinEventBus {
                 // 安全转换：我们只做“精确类型匹配”，因此这里一定可 cast
                 e.handler.accept(event);
             } catch (Throwable t) {
-                // 事件监听异常隔离：不中断其它监听器
                 try {
-                    LinLog.warn("[lin-events] listener error: type={}, owner={}, err={}",
-                            event.getClass().getName(),
-                            (e.owner == null ? "null" : e.owner.getClass().getName()),
-                            t.toString());
+                    Object problemOwner = e.owner == null ? defaultOwner : e.owner;
+                    LinLog.forOwner(problemOwner).problem().report(
+                            BuiltinProblemCatalog.EVENT_LISTENER_FAILED, t,
+                            "event", event.getClass().getName(),
+                            "owner", e.owner == null ? "null" : e.owner.getClass().getName()
+                    );
                 } catch (Throwable ignore) {
                 }
             }

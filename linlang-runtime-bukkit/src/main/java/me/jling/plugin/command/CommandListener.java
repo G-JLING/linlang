@@ -1,7 +1,12 @@
 package me.jling.plugin.command;
 
+import api.linlang.audit.LinAudit;
+import api.linlang.audit.event.AuditEvent;
+import api.linlang.audit.event.AuditOutcome;
+import api.linlang.audit.problem.ProblemDefinition;
 import api.linlang.command.LinCommand;
 import api.linlang.runtime.Lin;
+import core.linlang.audit.problem.BuiltinProblemCatalog;
 import me.jling.facade.BukkitFacadeImpl;
 import me.jling.runtime.BukkitRuntimeImpl;
 import org.bukkit.command.CommandSender;
@@ -9,6 +14,7 @@ import org.bukkit.plugin.Plugin;
 import org.bukkit.plugin.java.JavaPlugin;
 
 import java.util.Locale;
+import java.util.List;
 import java.util.Objects;
 import java.util.Set;
 import java.util.stream.Collectors;
@@ -24,6 +30,8 @@ import java.util.stream.Collectors;
  *   <li><code>/linlang restart &lt;bukkit&gt;</code>：重启某一插件的 Linlang 实例</li>
  *   <li><code>/linlang reload</code>：对运行时及所有门面执行一次软重载</li>
  *   <li><code>/linlang restart-all</code>：对所有门面执行一次硬重启</li>
+ *   <li><code>/linlang problems</code>：列出全部 Linlang 内建问题代码</li>
+ *   <li><code>/linlang problem &lt;code&gt;</code>：查询指定问题代码</li>
  * </ul>
  */
 public final class CommandListener {
@@ -153,8 +161,25 @@ public final class CommandListener {
                     try {
                         target.restart();
                         sender.sendMessage("§a[Linlang] 已重启插件 §f" + target.owner().getName() + " §a的 Linlang 实例。");
+                        runtime.audit().record(AuditEvent.builder("runtime.facade.restart")
+                                .actor(actor(sender))
+                                .resource(target.owner().getName())
+                                .outcome(AuditOutcome.SUCCESS)
+                                .build());
                     } catch (Throwable t) {
-                        sender.sendMessage("§c[Linlang] 重启插件 §f" + target.owner().getName() + " §c的 Linlang 实例时发生错误，请查看控制台日志。");
+                        runtime.audit().problem().report(
+                                BuiltinProblemCatalog.FACADE_RESTART_FAILED,
+                                t,
+                                "owner", target.owner().getName(),
+                                "actor", actor(sender)
+                        );
+                        runtime.audit().record(AuditEvent.builder("runtime.facade.restart")
+                                .actor(actor(sender))
+                                .resource(target.owner().getName())
+                                .outcome(AuditOutcome.FAILURE)
+                                .build());
+                        sender.sendMessage("§c[Linlang] 重启失败，问题代码：§f"
+                                + BuiltinProblemCatalog.FACADE_RESTART_FAILED);
                     }
                 },
                 LinCommand.Permission.perms("linlangruntimebukkit.admin"),
@@ -173,10 +198,31 @@ public final class CommandListener {
                 ctx -> {
                     CommandSender sender = (CommandSender) ctx.sender();
                     try {
-                        runtime.reload();
-                        sender.sendMessage("§a[Linlang] 已对运行时与所有已注册插件执行一次软重载。");
+                        int failures = runtime.reloadAndCountFailures();
+                        if (failures == 0) {
+                            sender.sendMessage("§a[Linlang] 已对运行时与所有已注册插件执行一次软重载。");
+                        } else {
+                            sender.sendMessage("§e[Linlang] 重载已完成，但有 " + failures
+                                    + " 项失败，请使用问题代码查询命令排查。");
+                        }
+                        runtime.audit().record(AuditEvent.builder("runtime.reload")
+                                .actor(actor(sender))
+                                .outcome(failures == 0 ? AuditOutcome.SUCCESS : AuditOutcome.FAILURE)
+                                .field("failures", failures)
+                                .build());
                     } catch (Throwable t) {
-                        sender.sendMessage("§c[Linlang] 执行软重载时发生错误，请查看控制台日志。");
+                        runtime.audit().problem().report(
+                                BuiltinProblemCatalog.FACADE_RELOAD_FAILED,
+                                t,
+                                "scope", "runtime-all",
+                                "actor", actor(sender)
+                        );
+                        runtime.audit().record(AuditEvent.builder("runtime.reload")
+                                .actor(actor(sender))
+                                .outcome(AuditOutcome.FAILURE)
+                                .build());
+                        sender.sendMessage("§c[Linlang] 重载失败，问题代码：§f"
+                                + BuiltinProblemCatalog.FACADE_RELOAD_FAILED);
                     }
                 },
                 LinCommand.Permission.perms("linlangruntimebukkit.admin"),
@@ -197,6 +243,12 @@ public final class CommandListener {
                     int success = runtime.restart();
 
                     sender.sendMessage("§d[Linlang] §7已尝试对所有插件门面执行硬重启：成功 " + success + " / " + total + "。");
+                    runtime.audit().record(AuditEvent.builder("runtime.facade.restart-all")
+                            .actor(actor(sender))
+                            .outcome(success == total ? AuditOutcome.SUCCESS : AuditOutcome.FAILURE)
+                            .field("success", success)
+                            .field("total", total)
+                            .build());
                 },
                 LinCommand.Permission.perms("linlangruntimebukkit.admin"),
                 LinCommand.ExecTarget.ALL,
@@ -206,6 +258,84 @@ public final class CommandListener {
                 ),
                 LinCommand.Labels.create()
         );
+
+        registry.register(
+                "linlang problems",
+                ctx -> sendProblemList((CommandSender) ctx.sender(), runtime.audit()),
+                LinCommand.Permission.perms("linlangruntimebukkit.admin"),
+                LinCommand.ExecTarget.ALL,
+                LinCommand.Desc.desc(
+                        "zh_CN", "列出全部 Linlang 内建问题代码",
+                        "en_GB", "List all built-in Linlang problem codes"
+                ),
+                LinCommand.Labels.create()
+        );
+
+        registry.register(
+                "linlang problem <code:string{[A-Za-z0-9-]+}>",
+                ctx -> sendProblem(
+                        (CommandSender) ctx.sender(),
+                        runtime.audit(),
+                        String.valueOf(ctx.get("code"))
+                ),
+                LinCommand.Permission.perms("linlangruntimebukkit.admin"),
+                LinCommand.ExecTarget.ALL,
+                LinCommand.Desc.desc(
+                        "zh_CN", "查询指定 Linlang 问题代码",
+                        "en_GB", "Look up a Linlang problem code"
+                ),
+                LinCommand.Labels.create()
+                        .add("code", "zh_CN", "问题代码")
+                        .add("code", "en_GB", "problem code")
+        );
+    }
+
+    static void sendProblemList(CommandSender sender, LinAudit audit) {
+        List<ProblemDefinition> definitions = audit.problem().list();
+        sender.sendMessage("§d[Linlang] §7内建问题代码（" + definitions.size() + "）：");
+        for (ProblemDefinition definition : definitions) {
+            sender.sendMessage("§f" + definition.code()
+                    + " §8[" + definition.component() + "] §7"
+                    + definition.description());
+        }
+        audit.record(AuditEvent.builder("runtime.problem.list")
+                .actor(actor(sender))
+                .outcome(AuditOutcome.SUCCESS)
+                .field("count", definitions.size())
+                .build());
+    }
+
+    static void sendProblem(CommandSender sender, LinAudit audit, String code) {
+        ProblemDefinition definition = audit.problem().lookup(code).orElse(null);
+        if (definition == null) {
+            sender.sendMessage("§c[Linlang] 未找到问题代码：§f" + code);
+            sender.sendMessage("§7使用 §f/linlang problems §7查看全部内建代码。");
+            audit.record(AuditEvent.builder("runtime.problem.lookup")
+                    .actor(actor(sender))
+                    .resource(code)
+                    .outcome(AuditOutcome.FAILURE)
+                    .build());
+            return;
+        }
+
+        sender.sendMessage("§d[Linlang] §f" + definition.code());
+        sender.sendMessage("§7组件：§f" + definition.component());
+        sender.sendMessage("§7含义：§f" + definition.description());
+        if (!definition.resolution().isBlank()) {
+            sender.sendMessage("§7处理：§f" + definition.resolution());
+        }
+        if (!definition.documentation().isBlank()) {
+            sender.sendMessage("§7文档：§f" + definition.documentation());
+        }
+        audit.record(AuditEvent.builder("runtime.problem.lookup")
+                .actor(actor(sender))
+                .resource(definition.code())
+                .outcome(AuditOutcome.SUCCESS)
+                .build());
+    }
+
+    private static String actor(CommandSender sender) {
+        return sender == null ? "unknown" : sender.getName();
     }
 
 }

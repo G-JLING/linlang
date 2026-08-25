@@ -1,6 +1,7 @@
 package me.jling.runtime;
 
 import adapter.linlang.bukkit.platform.BukkitPlatformAdapter;
+import api.linlang.audit.LinAudit;
 import api.linlang.audit.LinLog;
 import api.linlang.command.LinCommand;
 import api.linlang.command.message.CommandMessages;
@@ -8,6 +9,7 @@ import api.linlang.file.database.DataService;
 import api.linlang.messenger.LinMessenger;
 import api.linlang.view.LinView;
 import core.linlang.event.api.LinEventBus;
+import core.linlang.audit.problem.BuiltinProblemCatalog;
 import core.linlang.event.dispatcher.EventDispatcher;
 import core.linlang.file.impl.ConfigServiceImpl;
 import core.linlang.file.impl.LangServiceImpl;
@@ -105,6 +107,13 @@ public final class BukkitRuntimeImpl implements AutoCloseable {
     }
 
     /**
+     * 返回绑定运行时插件的统一审计入口。
+     */
+    public LinAudit audit() {
+        return core.auditFor(runtimePlugin);
+    }
+
+    /**
      * 为指定插件创建独立的配置服务实例。
      */
     public ConfigServiceImpl createConfigService(JavaPlugin owner) {
@@ -154,6 +163,13 @@ public final class BukkitRuntimeImpl implements AutoCloseable {
     }
 
     /**
+     * 基于指定插件和语言服务创建消息发送器。
+     */
+    public LinMessenger createMessenger(JavaPlugin owner, LangServiceImpl lang) {
+        return core.createMessenger(owner, lang);
+    }
+
+    /**
      * 为指定插件创建/获取交互服务（GUI/交互服务）。
      * <p>该服务为每个插件独立分发，视图文件默认位于 plugins/&lt;plugin&gt;/gui 目录。</p>
      */
@@ -200,52 +216,22 @@ public final class BukkitRuntimeImpl implements AutoCloseable {
      * 软重载运行时插件自身及所有已注册门面的服务实例。
      */
     public void reload() {
-        // 先让 core 做 runtime 自身重载
-        try {
-            core.attachRuntimeFileServices(bootstrap.getConfig(), bootstrap.getLanguage());
-            core.reload();
-        } catch (Throwable t) {
-            // 不影响后续 facade reload
-        }
+        reloadAndCountFailures();
+    }
 
-        // 兼容旧 Facade：逐个 reload
-        Set<BukkitFacadeImpl> snapshot;
-        synchronized (facades) {
-            snapshot = new LinkedHashSet<>(facades);
-        }
-        for (BukkitFacadeImpl facade : snapshot) {
-            try {
-                facade.reload();
-            } catch (Throwable ignore) {
-            }
-        }
+    /**
+     * 执行软重载并返回失败数量。
+     */
+    public int reloadAndCountFailures() {
+        core.attachRuntimeFileServices(bootstrap.getConfig(), bootstrap.getLanguage());
+        return core.reloadAndCountFailures();
     }
 
     /**
      * 硬重启所有已注册门面，并返回成功数量。
      */
     public int restart() {
-        int success = 0;
-
-        // 先让 core 做 facadeCore 的 restart（如果已经接入）
-        try {
-            success += core.restart();
-        } catch (Throwable ignore) {
-        }
-
-        // 再兼容旧 Facade
-        Set<BukkitFacadeImpl> snapshot;
-        synchronized (facades) {
-            snapshot = new LinkedHashSet<>(facades);
-        }
-        for (BukkitFacadeImpl facade : snapshot) {
-            try {
-                facade.restart();
-                success++;
-            } catch (Throwable ignore) {
-            }
-        }
-        return success;
+        return core.restart();
     }
 
     /**
@@ -258,7 +244,12 @@ public final class BukkitRuntimeImpl implements AutoCloseable {
             for (BukkitFacadeImpl f : facades.toArray(new BukkitFacadeImpl[0])) {
                 try {
                     f.close();
-                } catch (Throwable ignore) {
+                } catch (RuntimeException exception) {
+                    audit().problem().report(
+                            BuiltinProblemCatalog.FACADE_CLOSE_FAILED,
+                            exception,
+                            "owner", f.owner().getName()
+                    );
                 }
             }
             facades.clear();
@@ -267,7 +258,12 @@ public final class BukkitRuntimeImpl implements AutoCloseable {
         // 再关 core
         try {
             core.close();
-        } catch (Throwable ignore) {
+        } catch (RuntimeException exception) {
+            audit().problem().report(
+                    BuiltinProblemCatalog.RESOURCE_CLOSE_FAILED,
+                    exception,
+                    "resource", "runtime-core"
+            );
         }
 
         LinLog.info("[linlang] Runtime closed.");

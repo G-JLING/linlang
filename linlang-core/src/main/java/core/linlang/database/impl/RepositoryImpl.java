@@ -1,5 +1,7 @@
 package core.linlang.database.impl;
 
+import api.linlang.audit.LinAudit;
+import api.linlang.audit.LinLog;
 import api.linlang.file.database.annotations.Column;
 import api.linlang.file.database.annotations.Entity;
 import api.linlang.file.database.annotations.Id;
@@ -7,6 +9,7 @@ import api.linlang.file.database.annotations.Transient;
 import api.linlang.file.database.dto.Page;
 import api.linlang.file.database.dto.QuerySpec;
 import api.linlang.file.database.repo.Repository;
+import core.linlang.audit.problem.BuiltinProblemCatalog;
 
 import javax.sql.DataSource;
 import java.lang.reflect.Field;
@@ -23,11 +26,17 @@ public final class RepositoryImpl<T, ID> implements Repository<T, ID> {
     private final List<Field> fields;      // 可持久化字段
     private final Field idField;
     private final Map<Field, String> colName;
+    private final LinAudit audit;
 
     RepositoryImpl(DataSource ds, Class<T> type, String table) {
+        this(ds, type, table, LinLog.forOwner(null));
+    }
+
+    RepositoryImpl(DataSource ds, Class<T> type, String table, LinAudit audit) {
         this.ds = ds;
         this.type = type;
         this.table = table;
+        this.audit = Objects.requireNonNull(audit, "audit");
         List<Field> tmp = new ArrayList<>();
         Map<Field, String> names = new LinkedHashMap<>();
         Field idF = null;
@@ -63,7 +72,7 @@ public final class RepositoryImpl<T, ID> implements Repository<T, ID> {
         try (Connection connection = ds.getConnection()) {
             return save(connection, e);
         } catch (Exception ex) {
-            throw new RuntimeException(ex);
+            throw operationFailed("save", ex);
         }
     }
 
@@ -124,7 +133,7 @@ public final class RepositoryImpl<T, ID> implements Repository<T, ID> {
             ps.setObject(1, id);
             ps.executeUpdate();
         } catch (SQLException e) {
-            throw new RuntimeException(e);
+            throw operationFailed("delete-by-id", e);
         }
     }
 
@@ -139,7 +148,7 @@ public final class RepositoryImpl<T, ID> implements Repository<T, ID> {
                 return Optional.empty();
             }
         } catch (Exception e) {
-            throw new RuntimeException(e);
+            throw operationFailed("find-by-id", e);
         }
     }
 
@@ -153,7 +162,7 @@ public final class RepositoryImpl<T, ID> implements Repository<T, ID> {
             while (rs.next()) out.add(fromRow(rs));
             return out;
         } catch (Exception e) {
-            throw new RuntimeException(e);
+            throw operationFailed("find-all", e);
         }
     }
 
@@ -177,7 +186,7 @@ public final class RepositoryImpl<T, ID> implements Repository<T, ID> {
             }
             return new Page<>(out, out.size(), spec.offset());
         } catch (Exception e) {
-            throw new RuntimeException(e);
+            throw operationFailed("query", e);
         }
     }
 
@@ -208,7 +217,7 @@ public final class RepositoryImpl<T, ID> implements Repository<T, ID> {
             if (rs.next()) return rs.getLong(1);
             return 0L;
         } catch (SQLException e) {
-            throw new RuntimeException(e);
+            throw operationFailed("count", e);
         }
     }
 
@@ -223,7 +232,7 @@ public final class RepositoryImpl<T, ID> implements Repository<T, ID> {
                 return rs.next();
             }
         } catch (SQLException e) {
-            throw new RuntimeException(e);
+            throw operationFailed("exists-by-id", e);
         }
     }
 
@@ -241,7 +250,7 @@ public final class RepositoryImpl<T, ID> implements Repository<T, ID> {
                 return Optional.empty();
             }
         } catch (Exception e) {
-            throw new RuntimeException(e);
+            throw operationFailed("find-one-where", e);
         }
     }
 
@@ -266,7 +275,7 @@ public final class RepositoryImpl<T, ID> implements Repository<T, ID> {
                 return out;
             }
         } catch (Exception e) {
-            throw new RuntimeException(e);
+            throw operationFailed("find-all-where", e);
         }
     }
 
@@ -278,7 +287,7 @@ public final class RepositoryImpl<T, ID> implements Repository<T, ID> {
         try (Connection c = ds.getConnection(); PreparedStatement ps = c.prepareStatement(sql)) {
             ps.executeUpdate();
         } catch (SQLException e) {
-            throw new RuntimeException(e);
+            throw operationFailed("delete-all", e);
         }
     }
 
@@ -303,7 +312,7 @@ public final class RepositoryImpl<T, ID> implements Repository<T, ID> {
                 c.setAutoCommit(true);
             }
         } catch (Exception ex) {
-            throw new RuntimeException(ex);
+            throw operationFailed("save-all", ex);
         }
     }
 
@@ -327,7 +336,7 @@ public final class RepositoryImpl<T, ID> implements Repository<T, ID> {
                         try {
                             hasNext = rs.next();
                         } catch (SQLException e) {
-                            throw new RuntimeException(e);
+                            throw operationFailed("stream-next", e);
                         }
                         computed = true;
                     }
@@ -341,7 +350,7 @@ public final class RepositoryImpl<T, ID> implements Repository<T, ID> {
                     try {
                         return fromRow(rs);
                     } catch (Exception e) {
-                        throw new RuntimeException(e);
+                        throw operationFailed("stream-map-row", e);
                     }
                 }
             };
@@ -351,17 +360,38 @@ public final class RepositoryImpl<T, ID> implements Repository<T, ID> {
                     .onClose(() -> {
                         try {
                             rs.close();
-                        } catch (SQLException ignored) {}
+                        } catch (SQLException exception) {
+                            reportCloseFailure("result-set", exception);
+                        }
                         try {
                             ps.close();
-                        } catch (SQLException ignored) {}
+                        } catch (SQLException exception) {
+                            reportCloseFailure("statement", exception);
+                        }
                         try {
                             c.close();
-                        } catch (SQLException ignored) {}
+                        } catch (SQLException exception) {
+                            reportCloseFailure("connection", exception);
+                        }
                     });
         } catch (SQLException e) {
-            throw new RuntimeException(e);
+            throw operationFailed("stream-open", e);
         }
+    }
+
+    private IllegalStateException operationFailed(String operation, Throwable cause) {
+        audit.problem().report(BuiltinProblemCatalog.DATA_OPERATION_FAILED, cause,
+                "operation", operation,
+                "entity", type.getName(),
+                "table", table);
+        return new IllegalStateException(BuiltinProblemCatalog.DATA_OPERATION_FAILED, cause);
+    }
+
+    private void reportCloseFailure(String resource, SQLException cause) {
+        audit.problem().report(BuiltinProblemCatalog.DATA_RESOURCE_CLOSE_FAILED, cause,
+                "resource", resource,
+                "entity", type.getName(),
+                "table", table);
     }
 
     private String requireColumn(String column) {

@@ -31,7 +31,7 @@ public interface PlatformAdapter<P> {
     LinCommand createCommands(P owner, String locale, Supplier<String> totalPrefix, CommandMessages messages);
 
     /** 创建消息服务（通常与平台无关，但可注入平台特性） */
-    LinMessenger createMessenger(LangServiceImpl lang);
+    LinMessenger createMessenger(P owner, LangServiceImpl lang);
 
     /** 为指定 owner 创建界面平台适配器 */
     InteractPlatformAdapter createViewAdapter(P owner);

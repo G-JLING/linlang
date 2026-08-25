@@ -1,5 +1,7 @@
 package adapter.linlang.bukkit.messenger;
 
+import api.linlang.audit.LinAudit;
+import api.linlang.audit.LinLog;
 import api.linlang.file.file.LangService;
 import api.linlang.messenger.FallbackPolicy;
 import api.linlang.messenger.LinMessage;
@@ -7,6 +9,7 @@ import api.linlang.messenger.LinMessenger;
 import api.linlang.messenger.TitleTimes;
 import api.linlang.messenger.transport.MessageTransport;
 import api.linlang.messenger.transport.TransportMessage;
+import core.linlang.audit.problem.BuiltinProblemCatalog;
 import core.linlang.messenger.MessageNormalizer;
 import core.linlang.total.prefix.PrefixAware;
 import org.bukkit.entity.Player;
@@ -24,6 +27,7 @@ import java.util.function.Supplier;
 public final class MessengerImpl implements LinMessenger, PrefixAware {
 
     private final Function<String, String> legacyTranslator;
+    private final LinAudit audit;
     private final MessageNormalizer normalizer = new MessageNormalizer();
     private final CopyOnWriteArrayList<MessageTransport> transports = new CopyOnWriteArrayList<>();
 
@@ -36,7 +40,11 @@ public final class MessengerImpl implements LinMessenger, PrefixAware {
      * @param language 语言服务
      */
     public MessengerImpl(LangService language) {
-        this(language == null ? null : language::tr);
+        this(null, language);
+    }
+
+    public MessengerImpl(Object owner, LangService language) {
+        this(owner, language == null ? null : language::tr);
     }
 
     /**
@@ -45,6 +53,11 @@ public final class MessengerImpl implements LinMessenger, PrefixAware {
      * @param translator 旧版语言键翻译函数
      */
     public MessengerImpl(Function<String, String> translator) {
+        this(null, translator);
+    }
+
+    public MessengerImpl(Object owner, Function<String, String> translator) {
+        this.audit = LinLog.forOwner(owner);
         this.legacyTranslator = translator == null ? key -> key : translator;
         registerTransport(new BukkitMessageTransport(new BukkitTextRenderer()));
     }
@@ -80,9 +93,27 @@ public final class MessengerImpl implements LinMessenger, PrefixAware {
     public void send(Object recipient, LinMessage message) {
         TransportMessage normalized = normalizer.normalize(message, prefix());
         for (MessageTransport transport : transports) {
-            if (!transport.supports(recipient)) continue;
-            transport.send(recipient, normalized);
-            return;
+            boolean supported;
+            try {
+                supported = transport.supports(recipient);
+            } catch (RuntimeException exception) {
+                audit.problem().report(BuiltinProblemCatalog.MESSAGE_DELIVERY_FAILED, exception,
+                        "transport", transportId(transport),
+                        "recipient", recipient == null ? "null" : recipient.getClass().getName(),
+                        "operation", "supports");
+                continue;
+            }
+            if (!supported) continue;
+            try {
+                transport.send(recipient, normalized);
+                return;
+            } catch (RuntimeException exception) {
+                audit.problem().report(BuiltinProblemCatalog.MESSAGE_DELIVERY_FAILED, exception,
+                        "transport", transportId(transport),
+                        "recipient", recipient == null ? "null" : recipient.getClass().getName(),
+                        "operation", "send");
+                throw new IllegalStateException(BuiltinProblemCatalog.MESSAGE_DELIVERY_FAILED, exception);
+            }
         }
         throw new IllegalArgumentException(
                 "No message transport supports recipient type: "
@@ -208,11 +239,23 @@ public final class MessengerImpl implements LinMessenger, PrefixAware {
         return Objects.requireNonNullElse(value, key == null ? "" : key);
     }
 
+    private static String transportId(MessageTransport transport) {
+        try {
+            return Objects.requireNonNullElse(transport.id(), transport.getClass().getName());
+        } catch (RuntimeException exception) {
+            return transport.getClass().getName();
+        }
+    }
+
     private String prefix() {
         String local;
         try {
             local = localPrefixSupplier.get();
         } catch (RuntimeException exception) {
+            audit.problem().report(
+                    BuiltinProblemCatalog.MESSAGE_PREFIX_RESOLVE_FAILED, exception,
+                    "resource", "messenger-local-prefix"
+            );
             local = "";
         }
         return Objects.requireNonNullElse(totalPrefix, "") + Objects.requireNonNullElse(local, "");

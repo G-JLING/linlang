@@ -6,6 +6,7 @@ package core.linlang.command.impl;
  * 又接受执行的命令，处理后回复
  * */
 
+import api.linlang.audit.LinAudit;
 import api.linlang.audit.LinLog;
 import api.linlang.command.LinCommand;
 import api.linlang.command.message.CommandMessages;
@@ -15,6 +16,7 @@ import core.linlang.command.model.Registration;
 import core.linlang.command.parser.ArgEngine;
 import core.linlang.command.parser.SpecParser;
 import core.linlang.command.signal.Interact;
+import core.linlang.audit.problem.BuiltinProblemCatalog;
 
 import java.util.*;
 import java.util.function.Function;
@@ -22,6 +24,8 @@ import core.linlang.total.i18n.LocaleAware;
 import core.linlang.total.prefix.PrefixAware;
 
 public final class LinCommandImpl implements LinCommand, LocaleAware, PrefixAware {
+
+    private LinAudit audit = LinLog.forOwner(null);
 
     // help 单页打印的条目刷数量
     private int help_page_size = 8;
@@ -80,6 +84,7 @@ public final class LinCommandImpl implements LinCommand, LocaleAware, PrefixAwar
     public LinCommand install(String pluginPrefix, Object platform, CommandMessages msgs) {
         this.prefix = pluginPrefix;
         this.platform = platform;
+        this.audit = LinLog.forOwner(platform);
         this.messages = msgs == null ? CommandMessages.defaults() : msgs;
         return this;
     }
@@ -137,7 +142,9 @@ public final class LinCommandImpl implements LinCommand, LocaleAware, PrefixAwar
                 if (n == null) continue;
                 n.usage = buildUsage(n);
             }
-        } catch (Throwable ignore) {
+        } catch (Throwable exception) {
+            audit.problem().report(BuiltinProblemCatalog.COMMAND_LOCALE_REFRESH_FAILED, exception,
+                    "locale", next.tag());
         }
     }
 
@@ -222,7 +229,10 @@ public final class LinCommandImpl implements LinCommand, LocaleAware, PrefixAwar
                 sendTo(sender, "§7   |- §f访问: jling.me | magicpowered.cn");
                 return true;
             } catch (Exception e) {
-                LinLog.warn("info.cmd.error", e);
+                audit.problem().report(
+                        BuiltinProblemCatalog.COMMAND_INFO_FAILED, e,
+                        "command", root + " info"
+                );
             }
         }
 
@@ -381,7 +391,11 @@ public final class LinCommandImpl implements LinCommand, LocaleAware, PrefixAwar
                 try {
                     n.exec.fn.run(ctx);
                 } catch (Exception ex) {
-                    LinLog.warn("cmd.exec.exception", ex);
+                    audit.problem().report(
+                            BuiltinProblemCatalog.COMMAND_EXECUTION_FAILED, ex,
+                            "command", n.usage,
+                            "sender", sender == null ? "null" : sender.getClass().getName()
+                    );
                     bridge.msg(sender, prefix + messages.get("error.exception"));
                     return true;
                 }
@@ -394,9 +408,12 @@ public final class LinCommandImpl implements LinCommand, LocaleAware, PrefixAwar
             } catch (Exception e) {
                 // 参数阶段出错
                 if (!(e instanceof IllegalArgumentException)) {
-                    // 明确的运行，类型异常：直接提示异常消息，并在控制台打印
                     bridge.msg(sender, prefix + messages.get("error.exception"));
-                    LinLog.warn("LinCommand IllegalArgumentException", e);
+                    audit.problem().report(
+                            BuiltinProblemCatalog.COMMAND_ARGUMENT_PARSE_FAILED, e,
+                            "command", n.usage,
+                            "sender", sender == null ? "null" : sender.getClass().getName()
+                    );
                     return true;
                 }
                 if (bestUsage == null) bestUsage = buildUsage(n);
@@ -668,8 +685,12 @@ public final class LinCommandImpl implements LinCommand, LocaleAware, PrefixAwar
             if (lazyDesc != null) {
                 try {
                     desc = lazyDesc.get(localeTag);
-                } catch (Throwable ignore) {
+                } catch (Throwable exception) {
                     desc = "";
+                    audit.problem().report(BuiltinProblemCatalog.COMMAND_LOCALE_REFRESH_FAILED, exception,
+                            "command", n.usage,
+                            "locale", localeTag,
+                            "resource", "description");
                 }
             }
 
@@ -742,9 +763,9 @@ public final class LinCommandImpl implements LinCommand, LocaleAware, PrefixAwar
 
     }
 
-    private static void sendTo(Object sender, String text) {
+    private void sendTo(Object sender, String text) {
         if (sender == null) {
-            LinLog.info(text);
+            audit.logger().info(text);
             return;
         }
         try {
@@ -752,7 +773,7 @@ public final class LinCommandImpl implements LinCommand, LocaleAware, PrefixAwar
             var m = sender.getClass().getMethod("sendMessage", String.class);
             m.invoke(sender, text);
         } catch (Throwable t) {
-            LinLog.info(text);
+            audit.logger().info(text);
         }
     }
 
@@ -882,7 +903,11 @@ public final class LinCommandImpl implements LinCommand, LocaleAware, PrefixAwar
                         if (v != null && !v.isBlank()) {
                             displayName = v;
                         }
-                    } catch (Throwable ignore) {
+                    } catch (Throwable exception) {
+                        audit.problem().report(BuiltinProblemCatalog.COMMAND_LOCALE_REFRESH_FAILED, exception,
+                                "command", n.usage,
+                                "locale", localeTag,
+                                "argument", namePart);
                     }
                 }
             }

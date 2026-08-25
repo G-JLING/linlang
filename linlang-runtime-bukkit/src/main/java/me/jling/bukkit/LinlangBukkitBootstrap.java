@@ -1,5 +1,6 @@
 package me.jling.bukkit;
 
+import api.linlang.audit.LinAudit;
 import api.linlang.audit.LinLog;
 import api.linlang.command.LinCommand;
 import api.linlang.file.LinFile;
@@ -11,6 +12,7 @@ import api.linlang.view.LinView;
 
 import core.linlang.file.impl.ConfigServiceImpl;
 import core.linlang.file.impl.LangServiceImpl;
+import core.linlang.audit.problem.BuiltinProblemCatalog;
 import core.linlang.total.prefix.PrefixAware;
 
 import lombok.Getter;
@@ -39,6 +41,7 @@ public final class LinlangBukkitBootstrap implements AutoCloseable, Linlang, Lin
 
     private LinCommand command;              // 命令接口
     private LinMessenger messenger;          // 消息接口
+    private final LinAudit audit;
 
     @Getter
     private final BukkitRuntimeImpl runtime;  // 运行时引导程序
@@ -70,16 +73,15 @@ public final class LinlangBukkitBootstrap implements AutoCloseable, Linlang, Lin
         this.config = runtime.createConfigService(runtimePlugin);
         this.language = runtime.createLangService(runtimePlugin);
 
-        this.runtime.installLinMsg();
-
-        // 审计
+        this.audit = LinLog.forOwner(runtimePlugin);
         this.runtime.installAudit(false);
+        this.runtime.installLinMsg();
 
         // 运行时自身的有关命令
         this.command = runtime.createCommands(runtimePlugin, locale, prefixFn);
 
         // 发送者
-        this.messenger = runtime.createMessenger(this.language);
+        this.messenger = runtime.createMessenger(runtimePlugin, this.language);
         wireMessengerPrefix();
 
         // 运行时自身配套
@@ -163,6 +165,11 @@ public final class LinlangBukkitBootstrap implements AutoCloseable, Linlang, Lin
     }
 
     @Override
+    public LinAudit linAudit() {
+        return audit;
+    }
+
+    @Override
     public LinlangBukkitBootstrap withPlatformContext(Object platformContext) {
         return this;
     }
@@ -196,15 +203,28 @@ public final class LinlangBukkitBootstrap implements AutoCloseable, Linlang, Lin
     public void reload() {
         try {
             this.config.reload();
-        } catch (Throwable ignore) {
+        } catch (RuntimeException exception) {
+            audit.problem().report(
+                    BuiltinProblemCatalog.RUNTIME_CONFIG_RELOAD_FAILED,
+                    exception
+            );
         }
         try {
             this.language.reload();
-        } catch (Throwable ignore) {
+        } catch (RuntimeException exception) {
+            audit.problem().report(
+                    BuiltinProblemCatalog.RUNTIME_LANGUAGE_RELOAD_FAILED,
+                    exception
+            );
         }
         try {
             this.language.setLocale(this.locale);
-        } catch (Throwable ignore) {
+        } catch (RuntimeException exception) {
+            audit.problem().report(
+                    BuiltinProblemCatalog.LANGUAGE_LOCALE_SWITCH_FAILED,
+                    exception,
+                    "locale", this.locale
+            );
         }
         rebuildCommands();
         wireMessengerPrefix();
@@ -223,7 +243,12 @@ public final class LinlangBukkitBootstrap implements AutoCloseable, Linlang, Lin
     private void rebuildCommands() {
         try {
             if (command instanceof AutoCloseable) ((AutoCloseable) command).close();
-        } catch (Throwable ignore) {
+        } catch (Exception exception) {
+            audit.problem().report(
+                    BuiltinProblemCatalog.RESOURCE_CLOSE_FAILED,
+                    exception,
+                    "resource", "runtime-command"
+            );
         }
         this.command = runtime.createCommands(runtimePlugin, locale, prefixFn);
     }
@@ -237,6 +262,11 @@ public final class LinlangBukkitBootstrap implements AutoCloseable, Linlang, Lin
         try {
             prefix = prefixFn.apply(runtimePlugin);
         } catch (RuntimeException exception) {
+            audit.problem().report(
+                    BuiltinProblemCatalog.MESSAGE_PREFIX_RESOLVE_FAILED,
+                    exception,
+                    "resource", "runtime-prefix-provider"
+            );
             prefix = "";
         }
         aware.setTotalPrefix(prefix == null ? "" : prefix.trim());
@@ -245,16 +275,31 @@ public final class LinlangBukkitBootstrap implements AutoCloseable, Linlang, Lin
     @Override
     public void close() {
         try {
-            runtime.close();
-        } catch (Throwable ignore) {
-        }
-        try {
             if (command instanceof AutoCloseable) ((AutoCloseable) command).close();
-        } catch (Throwable ignore) {
+        } catch (Exception exception) {
+            audit.problem().report(
+                    BuiltinProblemCatalog.RESOURCE_CLOSE_FAILED,
+                    exception,
+                    "resource", "runtime-command"
+            );
         }
         try {
             if (messenger instanceof AutoCloseable) ((AutoCloseable) messenger).close();
-        } catch (Throwable ignore) {
+        } catch (Exception exception) {
+            audit.problem().report(
+                    BuiltinProblemCatalog.RESOURCE_CLOSE_FAILED,
+                    exception,
+                    "resource", "runtime-messenger"
+            );
+        }
+        try {
+            runtime.close();
+        } catch (RuntimeException exception) {
+            audit.problem().report(
+                    BuiltinProblemCatalog.RESOURCE_CLOSE_FAILED,
+                    exception,
+                    "resource", "bukkit-runtime"
+            );
         }
     }
 }

@@ -5,6 +5,8 @@ package core.linlang.yaml;
  * */
 
 import api.linlang.audit.LinLog;
+import api.linlang.audit.problem.LinProblem;
+import core.linlang.audit.problem.BuiltinProblemCatalog;
 
 import java.util.*;
 
@@ -47,8 +49,14 @@ public final class YamlCodec {
                 }
                 return YAML;
             } catch (Throwable t) {
-                LinLog.error("YamlCodec init failed", t);
-                throw new IllegalStateException("[linlang] SnakeYAML not available or failed to initialize", t);
+                LinLog.problem(LinProblem.of(
+                        BuiltinProblemCatalog.YAML_INITIALIZATION_FAILED,
+                        t
+                ));
+                throw new IllegalStateException(
+                        BuiltinProblemCatalog.YAML_INITIALIZATION_FAILED,
+                        t
+                );
             }
         }
     }

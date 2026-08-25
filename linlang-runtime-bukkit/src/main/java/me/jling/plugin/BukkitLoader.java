@@ -3,12 +3,15 @@ package me.jling.plugin;
 import api.linlang.audit.LinLog;
 import api.linlang.runtime.Lin;
 import api.linlang.runtime.Linlang;
+import core.linlang.audit.problem.BuiltinProblemCatalog;
 import me.jling.bukkit.LinlangBukkitBootstrap;
 import me.jling.plugin.command.CommandListener;
 import me.jling.runtime.BukkitRuntimeImpl;
 import org.bukkit.plugin.java.JavaPlugin;
 
 import org.bukkit.plugin.ServicePriority;
+
+import java.util.logging.Level;
 
 public class BukkitLoader extends JavaPlugin {
 
@@ -29,7 +32,8 @@ public class BukkitLoader extends JavaPlugin {
             var sm = getServer().getServicesManager();
             try {
                 sm.unregisterAll(this);
-            } catch (Throwable ignored) {
+            } catch (RuntimeException exception) {
+                reportCloseFailure(exception, "stale-bukkit-service-registration");
             }
             sm.register(Linlang.class, bootstrap, this, ServicePriority.Highest);
 
@@ -44,10 +48,23 @@ public class BukkitLoader extends JavaPlugin {
 //            LinLog.info("[linlang] Linlang interface classloader: {}", api.linlang.runtime.Linlang.class.getClassLoader());
 
         } catch (Throwable t) {
-            LinLog.error("琳琅运行时启动失败 Failed to enable LinlangRuntimeBukkit: ", t);
+            if (runtime != null) {
+                runtime.audit().problem().report(
+                        BuiltinProblemCatalog.RUNTIME_ENABLE_FAILED,
+                        t,
+                        "plugin", getName()
+                );
+            } else {
+                getLogger().log(
+                        Level.SEVERE,
+                        '[' + BuiltinProblemCatalog.RUNTIME_ENABLE_FAILED + "] plugin=" + getName(),
+                        t
+                );
+            }
             try {
                 getServer().getServicesManager().unregisterAll(this);
-            } catch (Throwable ignored) {
+            } catch (RuntimeException exception) {
+                reportCloseFailure(exception, "failed-enable-service-registration");
             }
             getServer().getPluginManager().disablePlugin(this);
         }
@@ -55,18 +72,37 @@ public class BukkitLoader extends JavaPlugin {
 
     @Override
     public void onDisable() {
+        LinLog.info("[linlang] Linlang bootstrap disabling.");
         try {
             getServer().getServicesManager().unregisterAll(this);
-        } catch (Throwable ignored) {
+        } catch (RuntimeException exception) {
+            reportCloseFailure(exception, "bukkit-service-registration");
         }
 
         if (bootstrap != null) {
             try {
                 bootstrap.close();
-            } catch (Exception ignored) {
+            } catch (Exception exception) {
+                reportCloseFailure(exception, "bootstrap");
             }
             bootstrap = null;
         }
-        LinLog.info("[linlang] Linlang bootstrap disabled.");
+        getLogger().info("[linlang] Linlang bootstrap disabled.");
+    }
+
+    private void reportCloseFailure(Throwable cause, String resource) {
+        if (runtime != null) {
+            runtime.audit().problem().report(
+                    BuiltinProblemCatalog.RESOURCE_CLOSE_FAILED,
+                    cause,
+                    "resource", resource
+            );
+            return;
+        }
+        getLogger().log(
+                Level.WARNING,
+                '[' + BuiltinProblemCatalog.RESOURCE_CLOSE_FAILED + "] resource=" + resource,
+                cause
+        );
     }
 }

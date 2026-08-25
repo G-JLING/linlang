@@ -1,5 +1,6 @@
 package core.linlang.file.runtime;
 
+import core.linlang.audit.problem.BuiltinProblemCatalog;
 import api.linlang.file.file.LangList;
 import api.linlang.file.file.LangMap;
 import api.linlang.file.file.LangText;
@@ -91,7 +92,9 @@ public final class TreeMapper {
                     // 嵌套类/POJO → 递归
                     writeObject(v, path, doc, styleOf(f.getType()));
                 }
-            } catch (IllegalAccessException ignore){}
+            } catch (IllegalAccessException exception) {
+                throw mappingFailure(bean, f, exception);
+            }
         }
     }
 
@@ -127,7 +130,9 @@ public final class TreeMapper {
                     if (child==null){ child = f.getType().getDeclaredConstructor().newInstance(); f.set(bean, child); }
                     readObject(child, path, doc, styleOf(f.getType()));
                 }
-            } catch (Exception ignore){}
+            } catch (ReflectiveOperationException | IllegalArgumentException exception) {
+                throw mappingFailure(bean, f, exception);
+            }
         }
     }
 
@@ -169,7 +174,8 @@ public final class TreeMapper {
                     f.set(bean, child);
                 }
                 bindLangValues(child, path, styleOf(fieldType), factory);
-            } catch (ReflectiveOperationException ignored) {
+            } catch (ReflectiveOperationException | IllegalArgumentException exception) {
+                throw mappingFailure(bean, f, exception);
             }
         }
     }
@@ -311,7 +317,15 @@ public final class TreeMapper {
                     return;
                 }
             }
-        } catch (Exception ignore){}
+        } catch (ReflectiveOperationException | IllegalArgumentException exception) {
+            throw new IllegalStateException(BuiltinProblemCatalog.FILE_MAPPING_FAILED
+                    + ": " + bean.getClass().getName(), exception);
+        }
+    }
+
+    private static IllegalStateException mappingFailure(Object bean, Field field, Throwable cause) {
+        return new IllegalStateException(BuiltinProblemCatalog.FILE_MAPPING_FAILED
+                + ": " + bean.getClass().getName() + "." + field.getName(), cause);
     }
 
     // 注释收集（Config 用）

@@ -6,6 +6,7 @@ import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
 import org.bukkit.plugin.java.JavaPlugin;
 
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.logging.Logger;
@@ -54,7 +55,30 @@ public final class BukkitAuditProvider extends AbstractAuditProvider {
     }
 
     @Override
-    protected void platformDeliverOpLine(String line) {
+    protected String ownerName(Object ownerKey) {
+        if (ownerKey instanceof JavaPlugin plugin) {
+            return plugin.getName();
+        }
+        return runtimePlugin.getName();
+    }
+
+    @Override
+    protected Path resolveOutputPath(Object ownerKey, String configuredPath) {
+        Path path = Path.of(configuredPath);
+        JavaPlugin plugin = ownerKey instanceof JavaPlugin value ? value : runtimePlugin;
+        Path root = plugin.getDataFolder().toPath().toAbsolutePath().normalize();
+        if (path.isAbsolute()) {
+            throw new IllegalArgumentException("日志输出路径必须位于插件数据目录内");
+        }
+        Path resolved = root.resolve(path).normalize();
+        if (!resolved.startsWith(root)) {
+            throw new IllegalArgumentException("日志输出路径不能离开插件数据目录");
+        }
+        return resolved;
+    }
+
+    @Override
+    protected boolean platformDeliverOpLine(Object ownerKey, String line) {
         boolean any = false;
         for (Player p : Bukkit.getOnlinePlayers()) {
             if (p.isOp()) {
@@ -62,24 +86,18 @@ public final class BukkitAuditProvider extends AbstractAuditProvider {
                 p.sendMessage(line);
             }
         }
-        if (!any) {
-            enqueueBounded(pendingOp, line);
-        }
+        return any;
     }
 
     @Override
-    protected void platformDeliverStartupLine(String line) {
-        enqueueBounded(pendingStartup, line);
+    protected boolean platformDeliverStartupLine(Object ownerKey, String line) {
+        return false;
     }
 
     @Override
-    public void flushOpToOnlineOps() {
-        List<String> batch;
-        synchronized (pendingOp) {
-            if (pendingOp.isEmpty()) return;
-            batch = new ArrayList<>(pendingOp);
-            pendingOp.clear();
-        }
+    public void flushOpToOnlineOps(Object owner) {
+        List<String> batch = new ArrayList<>(drainPendingOp(owner));
+        if (batch.isEmpty()) return;
         boolean anyOp = false;
         for (Player p : Bukkit.getOnlinePlayers()) {
             if (!p.isOp()) continue;
@@ -89,41 +107,24 @@ public final class BukkitAuditProvider extends AbstractAuditProvider {
             }
         }
         if (!anyOp) {
-            for (String s : batch) {
-                enqueueBounded(pendingOp, s);
-            }
+            restorePendingOp(owner, batch);
         }
     }
 
     @Override
-    public void flushStartupToConsole() {
-        List<String> batch;
-        synchronized (pendingStartup) {
-            if (pendingStartup.isEmpty()) return;
-            batch = new ArrayList<>(pendingStartup);
-            pendingStartup.clear();
-        }
-        Logger lg = Bukkit.getLogger();
-        boolean hasPlayers = !Bukkit.getOnlinePlayers().isEmpty();
+    public void flushStartupToConsole(Object owner) {
+        List<String> batch = drainPendingStartup(owner);
+        Logger logger = loggerFor(owner);
         for (String s : batch) {
-            if (hasPlayers) {
-                Bukkit.broadcastMessage(s);
-            } else {
-                lg.info(s);
-            }
+            logger.info(s);
         }
     }
 
     @Override
-    public void flushOpTo(Object op) {
+    public void flushOpTo(Object owner, Object op) {
         if (!(op instanceof Player p)) return;
         if (!p.isOp()) return;
-        List<String> batch;
-        synchronized (pendingOp) {
-            if (pendingOp.isEmpty()) return;
-            batch = new ArrayList<>(pendingOp);
-            pendingOp.clear();
-        }
+        List<String> batch = drainPendingOp(owner);
         for (String s : batch) {
             p.sendMessage(s);
         }

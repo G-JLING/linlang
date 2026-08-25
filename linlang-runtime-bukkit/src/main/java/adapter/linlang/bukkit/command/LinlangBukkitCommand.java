@@ -5,12 +5,15 @@ package adapter.linlang.bukkit.command;
 import adapter.linlang.bukkit.command.interact.InteractionHub;
 import adapter.linlang.bukkit.command.interact.InteractiveResolvers;
 import adapter.linlang.bukkit.command.resolvers.BukkitResolvers;
+import api.linlang.audit.LinAudit;
+import api.linlang.audit.LinLog;
 import api.linlang.command.LinCommand;
 import api.linlang.command.message.CommandMessages;
 import core.linlang.command.impl.LinCommandImpl;
 import core.linlang.command.model.Model;
 import core.linlang.command.parser.ArgEngine;
 import core.linlang.command.signal.Interact;
+import core.linlang.audit.problem.BuiltinProblemCatalog;
 import org.bukkit.command.*;
 import org.bukkit.entity.Player;
 import org.bukkit.plugin.Plugin;
@@ -27,6 +30,7 @@ import net.md_5.bungee.api.chat.TextComponent;
 public final class LinlangBukkitCommand implements LinCommand, CommandExecutor, TabCompleter, AutoCloseable {
     private final LinCommandImpl core = new LinCommandImpl();
     private JavaPlugin plugin;
+    private LinAudit audit = LinLog.forOwner(null);
     private String root = null;
     private InteractionHub hub;
     private CommandMessages messages = CommandMessages.defaults();
@@ -36,6 +40,7 @@ public final class LinlangBukkitCommand implements LinCommand, CommandExecutor, 
 
     public LinlangBukkitCommand install(String pluginPrefix, Object platform, CommandMessages msgs) {
         this.plugin = (JavaPlugin) platform;
+        this.audit = LinLog.forOwner(this.plugin);
         this.hub = new InteractionHub(this.plugin);
         this.messages = (msgs != null ? msgs : CommandMessages.defaults());
         core.install(pluginPrefix, platform, msgs);
@@ -93,7 +98,10 @@ public final class LinlangBukkitCommand implements LinCommand, CommandExecutor, 
         }
 
         if (pc == null) {
-            throw new IllegalStateException("应在 bukkit.yml 中注册插件命令 '" + first + "'");
+            throw new IllegalStateException(
+                    BuiltinProblemCatalog.COMMAND_BUKKIT_BIND_FAILED
+                            + ": command=" + first
+            );
         }
         pc.setExecutor(this);
         pc.setTabCompleter(this);
@@ -322,6 +330,13 @@ public final class LinlangBukkitCommand implements LinCommand, CommandExecutor, 
             var ctx = new LinCommandImpl.CtxImpl(sender, vars);
             node.exec.fn.run(ctx);
         } catch (Exception e) {
+            if (!(e instanceof IllegalArgumentException)) {
+                audit.problem().report(
+                        BuiltinProblemCatalog.COMMAND_ARGUMENT_PARSE_FAILED, e,
+                        "command", node.usage,
+                        "sender", sender == null ? "null" : sender.getClass().getName()
+                );
+            }
             bridge.msg(sender, "§c参数错误: " + e.getMessage());
             bridge.msg(sender, "§7用法: §f" + node.usage);
         }
@@ -329,6 +344,11 @@ public final class LinlangBukkitCommand implements LinCommand, CommandExecutor, 
 
     @Override
     public void close(){
-        try { if (hub != null) hub.close(); } catch (Exception ignore) {}
+        try {
+            if (hub != null) hub.close();
+        } catch (Exception exception) {
+            audit.problem().report(BuiltinProblemCatalog.RESOURCE_CLOSE_FAILED, exception,
+                    "resource", "command-interaction-hub");
+        }
     }
 }

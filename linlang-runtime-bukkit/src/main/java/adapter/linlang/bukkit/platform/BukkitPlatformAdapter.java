@@ -7,11 +7,14 @@ import adapter.linlang.bukkit.messenger.MessengerImpl;
 import adapter.linlang.bukkit.view.BukkitInteractAdapter;
 import adapter.linlang.bukkit.view.event.BukkitInteractListener;
 import api.linlang.command.LinCommand;
+import api.linlang.audit.LinLog;
+import api.linlang.audit.LinAudit;
 import api.linlang.command.message.CommandMessages;
 import api.linlang.file.file.path.PathResolver;
 import api.linlang.messenger.LinMessenger;
 import core.linlang.audit.AbstractAuditProvider;
 import core.linlang.audit.config.AuditConfig;
+import core.linlang.audit.problem.BuiltinProblemCatalog;
 import core.linlang.event.dispatcher.EventDispatcher;
 import core.linlang.platform.PlatformAdapter;
 import core.linlang.file.impl.LangServiceImpl;
@@ -22,7 +25,6 @@ import org.bukkit.event.HandlerList;
 import org.bukkit.event.Listener;
 import org.bukkit.plugin.java.JavaPlugin;
 
-import java.lang.reflect.Method;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Supplier;
@@ -59,8 +61,8 @@ public final class BukkitPlatformAdapter implements PlatformAdapter<JavaPlugin> 
     }
 
     @Override
-    public LinMessenger createMessenger(LangServiceImpl lang) {
-        return new MessengerImpl(lang);
+    public LinMessenger createMessenger(JavaPlugin owner, LangServiceImpl lang) {
+        return new MessengerImpl(owner, lang);
     }
 
     @Override
@@ -93,12 +95,7 @@ public final class BukkitPlatformAdapter implements PlatformAdapter<JavaPlugin> 
     @Override
     public void registerAuditTenant(AbstractAuditProvider globalAudit, JavaPlugin owner, AuditConfig cfg, boolean usePluginLogger) {
         if (globalAudit == null || owner == null || cfg == null) return;
-        // 这里用反射，避免你的 AbstractAuditProvider / BukkitAuditProvider 接口变动导致编译碎裂
-        try {
-            Method m = globalAudit.getClass().getMethod("registerTenant", JavaPlugin.class, AuditConfig.class, boolean.class);
-            m.invoke(globalAudit, owner, cfg, usePluginLogger);
-        } catch (Throwable ignore) {
-        }
+        globalAudit.registerTenant(owner, cfg, usePluginLogger);
     }
 
     @Override
@@ -149,19 +146,35 @@ public final class BukkitPlatformAdapter implements PlatformAdapter<JavaPlugin> 
     /** Bukkit 平台事件调度器：确保 MAIN 在主线程执行。 */
     private static final class BukkitDispatcher implements EventDispatcher {
         private final JavaPlugin plugin;
+        private final LinAudit audit;
 
         private BukkitDispatcher(JavaPlugin plugin) {
             this.plugin = plugin;
+            this.audit = LinLog.forOwner(plugin);
         }
 
         @Override
         public void executeMain(Runnable task) {
             if (task == null) return;
+            if (Bukkit.isPrimaryThread()) {
+                task.run();
+                return;
+            }
             try {
-                if (Bukkit.isPrimaryThread()) task.run();
-                else Bukkit.getScheduler().runTask(plugin, task);
+                Bukkit.getScheduler().runTask(plugin, task);
             } catch (Throwable t) {
-                try { task.run(); } catch (Throwable ignore) {}
+                audit.problem().report(
+                        BuiltinProblemCatalog.MAIN_DISPATCH_FAILED, t,
+                        "stage", "schedule"
+                );
+                try {
+                    task.run();
+                } catch (Throwable fallback) {
+                    audit.problem().report(
+                            BuiltinProblemCatalog.MAIN_DISPATCH_FAILED, fallback,
+                            "stage", "fallback"
+                    );
+                }
             }
         }
 
@@ -171,7 +184,18 @@ public final class BukkitPlatformAdapter implements PlatformAdapter<JavaPlugin> 
             try {
                 Bukkit.getScheduler().runTaskAsynchronously(plugin, task);
             } catch (Throwable t) {
-                try { task.run(); } catch (Throwable ignore) {}
+                audit.problem().report(
+                        BuiltinProblemCatalog.ASYNC_DISPATCH_FAILED, t,
+                        "stage", "schedule"
+                );
+                try {
+                    task.run();
+                } catch (Throwable fallback) {
+                    audit.problem().report(
+                            BuiltinProblemCatalog.ASYNC_DISPATCH_FAILED, fallback,
+                            "stage", "fallback"
+                    );
+                }
             }
         }
     }

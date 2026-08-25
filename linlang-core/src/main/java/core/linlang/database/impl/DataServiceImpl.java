@@ -1,5 +1,6 @@
 package core.linlang.database.impl;
 
+import api.linlang.audit.LinAudit;
 import api.linlang.audit.LinLog;
 import api.linlang.file.database.DataService;
 import api.linlang.file.database.annotations.Entity;
@@ -12,6 +13,7 @@ import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
 import api.linlang.file.database.repo.Repository;
 import core.linlang.audit.internal.LinMsg;
+import core.linlang.audit.problem.BuiltinProblemCatalog;
 import core.linlang.file.runtime.Binder;
 
 
@@ -25,6 +27,7 @@ import java.util.stream.Collectors;
 
 public final class DataServiceImpl implements DataService {
     private final Path dataDocRoot;
+    private final LinAudit audit;
     private DbType mode = DbType.H2;
     private HikariDataSource ds;
     private final java.util.Set<Class<?>> registeredEntities = new java.util.LinkedHashSet<>();
@@ -36,11 +39,19 @@ public final class DataServiceImpl implements DataService {
     }
 
     public DataServiceImpl(PathResolver resolver) {
+        this(resolver, null);
+    }
+
+    public DataServiceImpl(PathResolver resolver, Object owner) {
+        this.audit = LinLog.forOwner(owner);
         this.dataDocRoot = resolver.sub("data");
         try {
             Files.createDirectories(this.dataDocRoot);
         } catch (Exception e) {
-            throw new IllegalStateException("Cannot create database directory: " + this.dataDocRoot, e);
+            audit.problem().report(BuiltinProblemCatalog.DATA_INITIALIZATION_FAILED, e,
+                    "directory", this.dataDocRoot,
+                    "operation", "create-directory");
+            throw new IllegalStateException(BuiltinProblemCatalog.DATA_INITIALIZATION_FAILED, e);
         }
     }
 
@@ -51,21 +62,24 @@ public final class DataServiceImpl implements DataService {
         if (type != DbType.H2 && type != DbType.MYSQL) {
             throw new IllegalArgumentException("Unsupported DbType: " + type);
         }
-        closeResources(false);
-        this.mode = type;
-        HikariConfig hc = new HikariConfig();
-        hc.setJdbcUrl(cfg.url());
-        hc.setUsername(cfg.user());
-        hc.setPassword(cfg.pass());
-        hc.setDriverClassName(type == DbType.H2 ? "org.h2.Driver" : "com.mysql.cj.jdbc.Driver");
-        hc.setMaximumPoolSize(Math.max(4, cfg.poolSize()));
-        hc.setMinimumIdle(Math.min(2, cfg.poolSize()));
-        this.ds = new HikariDataSource(hc);
-
-        // log init
         try {
-            LinLog.info(LinMsg.k("linData.dbInit"), "type", type, "url", cfg.url());
-        } catch (Throwable ignore) {}
+            closeResources(false);
+            this.mode = type;
+            HikariConfig hc = new HikariConfig();
+            hc.setJdbcUrl(cfg.url());
+            hc.setUsername(cfg.user());
+            hc.setPassword(cfg.pass());
+            hc.setDriverClassName(type == DbType.H2 ? "org.h2.Driver" : "com.mysql.cj.jdbc.Driver");
+            hc.setMaximumPoolSize(Math.max(4, cfg.poolSize()));
+            hc.setMinimumIdle(Math.min(2, cfg.poolSize()));
+            this.ds = new HikariDataSource(hc);
+            audit.logger().info(LinMsg.k("linData.dbInit"), "type", type);
+        } catch (RuntimeException exception) {
+            audit.problem().report(BuiltinProblemCatalog.DATA_INITIALIZATION_FAILED, exception,
+                    "type", type,
+                    "operation", "connection-pool");
+            throw new IllegalStateException(BuiltinProblemCatalog.DATA_INITIALIZATION_FAILED, exception);
+        }
     }
 
     @Override
@@ -91,7 +105,10 @@ public final class DataServiceImpl implements DataService {
                     }
                 }
             } catch (SQLException e) {
-                throw new RuntimeException(e);
+                audit.problem().report(BuiltinProblemCatalog.DATA_MIGRATION_FAILED, e,
+                        "entity", et.getName(),
+                        "table", t.name());
+                throw new IllegalStateException(BuiltinProblemCatalog.DATA_MIGRATION_FAILED, e);
             }
         }
     }
@@ -108,7 +125,7 @@ public final class DataServiceImpl implements DataService {
         registeredEntities.add(entityType);
         final Repository<T, ID> repo;
         ensureTable(entityType, t.name());
-        repo = new RepositoryImpl<>(dataSource, entityType, t.name());
+        repo = new RepositoryImpl<>(dataSource, entityType, t.name(), audit);
         openRepos.put(entityType, repo);
         return repo;
     }
@@ -122,7 +139,11 @@ public final class DataServiceImpl implements DataService {
         try (Connection c = dataSource.getConnection(); Statement s = c.createStatement()) {
             s.execute(ddl);
         } catch (SQLException e) {
-            throw new RuntimeException(e);
+            audit.problem().report(BuiltinProblemCatalog.DATA_MIGRATION_FAILED, e,
+                    "entity", type.getName(),
+                    "table", table,
+                    "operation", "create-table");
+            throw new IllegalStateException(BuiltinProblemCatalog.DATA_MIGRATION_FAILED, e);
         }
     }
 
@@ -186,9 +207,12 @@ public final class DataServiceImpl implements DataService {
         for (Repository<?, ?> r : openRepos.values()) {
             try {
                 r.flush();
-                LinLog.info(LinMsg.k("linData.flushOk"), "data", r);
+                audit.logger().info(LinMsg.k("linData.flushOk"), "data", r);
             } catch (Throwable e) {
-                LinLog.warn(LinMsg.k("linData.flushFailed"), "data", r, "reason", String.valueOf(e.getMessage()));
+                audit.problem().report(
+                        BuiltinProblemCatalog.DATA_FLUSH_FAILED, e,
+                        "data", r
+                );
             }
         }
     }
@@ -199,9 +223,13 @@ public final class DataServiceImpl implements DataService {
         if (r != null) {
             try {
                 r.flush();
-                LinLog.info(LinMsg.k("linData.flushOk"), "data", r);
+                audit.logger().info(LinMsg.k("linData.flushOk"), "data", r);
             } catch (Throwable e) {
-                LinLog.warn(LinMsg.k("linData.flushFailed"), "data", r, "reason", String.valueOf(e.getMessage()));
+                audit.problem().report(
+                        BuiltinProblemCatalog.DATA_FLUSH_FAILED, e,
+                        "data", r,
+                        "entity", entityType.getName()
+                );
             }
         }
     }
@@ -216,17 +244,26 @@ public final class DataServiceImpl implements DataService {
         for (Repository<?, ?> r : openRepos.values()) {
             try {
                 r.close();
-            } catch (Throwable ignore) {
+            } catch (Throwable exception) {
+                audit.problem().report(
+                        BuiltinProblemCatalog.DATA_RESOURCE_CLOSE_FAILED, exception,
+                        "resource", r
+                );
             }
         }
         openRepos.clear();
         HikariDataSource dataSource = this.ds;
         this.ds = null;
         if (dataSource != null) {
-            dataSource.close();
+            try {
+                dataSource.close();
+            } catch (RuntimeException exception) {
+                audit.problem().report(BuiltinProblemCatalog.DATA_RESOURCE_CLOSE_FAILED, exception,
+                        "resource", "connection-pool");
+            }
         }
         if (flush) {
-            try { LinLog.info(LinMsg.k("linData.flushOk"), "data", "close()"); } catch (Throwable ignore) {}
+            audit.logger().info(LinMsg.k("linData.flushOk"), "data", "close()");
         }
     }
 

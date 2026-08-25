@@ -1,6 +1,9 @@
 package core.linlang.banner;
 
 import api.linlang.banner.service.AsciiFont;
+import api.linlang.audit.LinLog;
+import api.linlang.audit.problem.LinProblem;
+import core.linlang.audit.problem.BuiltinProblemCatalog;
 import org.yaml.snakeyaml.Yaml;
 
 import java.io.InputStream;
@@ -77,7 +80,11 @@ public final class BannerFontLoader {
             REG.put(resourceName, built);
             return built;
         } catch (Exception e) {
-            // 不抛出，记录日志由调用方负责；返回 null 以供回退
+            LinLog.problem(LinProblem.of(
+                    BuiltinProblemCatalog.BANNER_FONT_LOAD_FAILED,
+                    e,
+                    "resource", resourceName
+            ));
             return null;
         }
     }

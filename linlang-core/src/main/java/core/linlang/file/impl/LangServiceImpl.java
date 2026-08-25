@@ -1,5 +1,6 @@
 package core.linlang.file.impl;
 
+import api.linlang.audit.LinAudit;
 import api.linlang.audit.LinLog;
 import api.linlang.file.file.FileType;
 import api.linlang.file.file.LangList;
@@ -11,6 +12,7 @@ import api.linlang.file.file.annotations.NoEmit;
 import api.linlang.file.file.tool.LocaleId;
 import api.linlang.file.file.path.PathResolver;
 import core.linlang.audit.internal.LinMsg;
+import core.linlang.audit.problem.BuiltinProblemCatalog;
 import core.linlang.file.runtime.TreeMapper;
 import core.linlang.file.util.IOs;
 import core.linlang.json.JsonCodec;
@@ -44,6 +46,7 @@ public final class LangServiceImpl implements LangService, LocaleAware {
     private static final String RESOURCE_ROOT = "langservice";
 
     private final PathResolver paths;
+    private final LinAudit audit;
 
     /** 当前应用的全局语言代码。 */
     private volatile String appliedLocale = "zh_CN";
@@ -88,7 +91,12 @@ public final class LangServiceImpl implements LangService, LocaleAware {
     private final Map<Class<?>, BoundMeta> bound = new ConcurrentHashMap<>();
 
     public LangServiceImpl(PathResolver paths) {
+        this(paths, null);
+    }
+
+    public LangServiceImpl(PathResolver paths, Object owner) {
         this.paths = paths;
+        this.audit = LinLog.forOwner(owner);
     }
 
     // ------------------------------------------------------------
@@ -112,10 +120,13 @@ public final class LangServiceImpl implements LangService, LocaleAware {
         try {
             switchAllHoldersTo(next);
         } catch (Throwable t) {
-            LinLog.warn("LangServiceImpl.setLocale failed: {}", t.getMessage());
+            audit.problem().report(
+                    BuiltinProblemCatalog.LANGUAGE_LOCALE_SWITCH_FAILED, t,
+                    "locale", next
+            );
         }
 
-        LinLog.debug(LinMsg.k("linFile.lang.langChangeLocale"), "locale", next);
+        audit.logger().debug(LinMsg.k("linFile.lang.langChangeLocale"), "locale", next);
     }
 
     // ------------------------------------------------------------
@@ -129,6 +140,17 @@ public final class LangServiceImpl implements LangService, LocaleAware {
 
     @Override
     public <T> T bind(Class<T> keysClass, boolean emit) {
+        try {
+            return bindInternal(keysClass, emit);
+        } catch (RuntimeException exception) {
+            audit.problem().report(BuiltinProblemCatalog.LANGUAGE_BIND_FAILED, exception,
+                    "lang", keysClass == null ? "null" : keysClass.getName(),
+                    "locale", locale());
+            throw new IllegalStateException(BuiltinProblemCatalog.LANGUAGE_BIND_FAILED, exception);
+        }
+    }
+
+    private <T> T bindInternal(Class<T> keysClass, boolean emit) {
         Objects.requireNonNull(keysClass, "keysClass");
 
         // If already bound, return the same live instance.
@@ -138,7 +160,12 @@ public final class LangServiceImpl implements LangService, LocaleAware {
             T h = (T) existing.holder;
             try {
                 loadAndPopulate(existing, h, locale());
-            } catch (Throwable ignore) {
+            } catch (Throwable exception) {
+                audit.problem().report(
+                        BuiltinProblemCatalog.LANGUAGE_RELOAD_FAILED, exception,
+                        "lang", keysClass.getName(),
+                        "locale", locale()
+                );
             }
             return h;
         }
@@ -208,7 +235,11 @@ public final class LangServiceImpl implements LangService, LocaleAware {
 
             cacheDocument(bm, loc, curr);
         } catch (Exception e) {
-            LinLog.warn(LinMsg.k("linFile.lang.langSaveFailed"), "lang", f, "reason", e.getMessage());
+            audit.problem().report(
+                    BuiltinProblemCatalog.LANGUAGE_SAVE_FAILED, e,
+                    "lang", f,
+                    "locale", loc
+            );
         }
     }
 
@@ -242,14 +273,18 @@ public final class LangServiceImpl implements LangService, LocaleAware {
                 bm.texts.put(cacheLocale, values);
                 newCache.computeIfAbsent(cacheLocale, k -> new LinkedHashMap<>()).putAll(values);
             } catch (Exception ex) {
-                LinLog.warn(LinMsg.k("linFile.lang.langReloadLangFailed"), "lang", bm.keysClass, "reason", ex.getMessage());
+                audit.problem().report(
+                        BuiltinProblemCatalog.LANGUAGE_RELOAD_FAILED, ex,
+                        "lang", bm.keysClass.getName(),
+                        "locale", cur
+                );
             }
         }
 
         cache.clear();
         cache.putAll(newCache);
 
-        LinLog.info(LinMsg.k("linFile.lang.LangReloaded"));
+        audit.logger().info(LinMsg.k("linFile.lang.LangReloaded"));
     }
 
     @Override
@@ -312,7 +347,11 @@ public final class LangServiceImpl implements LangService, LocaleAware {
                     cache.computeIfAbsent(loc, k -> new LinkedHashMap<>()).putAll(flatten(doc));
                 }
             } catch (Throwable t) {
-                LinLog.warn("ensure failed: keys={}, locale={}, err={}", keysClass.getName(), loc, t.getMessage());
+                audit.problem().report(
+                        BuiltinProblemCatalog.LANGUAGE_ENSURE_FAILED, t,
+                        "lang", keysClass.getName(),
+                        "locale", loc
+                );
             }
         }
     }
@@ -346,7 +385,7 @@ public final class LangServiceImpl implements LangService, LocaleAware {
             }
             return v;
         } catch (Exception e) {
-            LinLog.debug("tr.format-error", "key", key, "msg", v, "err", e);
+            audit.logger().debug("tr.format-error", "key", key, "msg", v, "err", e);
             return v;
         }
     }
@@ -399,8 +438,13 @@ public final class LangServiceImpl implements LangService, LocaleAware {
                     try {
                         Map<String, Object> doc = loadDocFor(meta, requested);
                         values = cacheDocument(meta, loc, doc);
-                    } catch (Throwable ignored) {
+                    } catch (Throwable exception) {
                         values = Map.of();
+                        meta.texts.put(loc, values);
+                        audit.problem().report(BuiltinProblemCatalog.LANGUAGE_LAZY_LOAD_FAILED, exception,
+                                "lang", meta.keysClass.getName(),
+                                "locale", requested,
+                                "key", key);
                     }
                 }
             }
@@ -452,8 +496,13 @@ public final class LangServiceImpl implements LangService, LocaleAware {
                         Map<String, Object> loaded = loadDocFor(meta, requested);
                         cacheDocument(meta, loc, loaded);
                         document = meta.documents.get(loc);
-                    } catch (Throwable ignored) {
+                    } catch (Throwable exception) {
                         document = Map.of();
+                        meta.documents.put(loc, document);
+                        audit.problem().report(BuiltinProblemCatalog.LANGUAGE_LAZY_LOAD_FAILED, exception,
+                                "lang", meta.keysClass.getName(),
+                                "locale", requested,
+                                "key", key);
                     }
                 }
             }
@@ -554,6 +603,9 @@ public final class LangServiceImpl implements LangService, LocaleAware {
             if (s.isBlank()) return null;
             return (fmt == FileType.YAML) ? YamlCodec.load(s) : JsonCodec.load(s);
         } catch (Throwable t) {
+            audit.problem().report(BuiltinProblemCatalog.LANGUAGE_RESOURCE_LOAD_FAILED, t,
+                    "resource", p,
+                    "locale", locale);
             return null;
         }
     }
@@ -671,7 +723,10 @@ public final class LangServiceImpl implements LangService, LocaleAware {
                             out.add(localeFor(spec.normalizeLocale, base));
                         });
             }
-        } catch (Throwable ignore) {
+        } catch (Throwable exception) {
+            audit.problem().report(BuiltinProblemCatalog.LANGUAGE_LOCALE_SCAN_FAILED, exception,
+                    "directory", dir,
+                    "format", spec.fmt);
         }
         return out;
     }
@@ -693,12 +748,19 @@ public final class LangServiceImpl implements LangService, LocaleAware {
                                 java.nio.file.Path to = dir.resolve(norm + ext);
                                 try {
                                     java.nio.file.Files.move(p, to, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
-                                } catch (Throwable ignore) {
+                                } catch (Throwable exception) {
+                                    audit.problem().report(BuiltinProblemCatalog.LANGUAGE_LOCALE_NORMALIZE_FAILED,
+                                            exception,
+                                            "source", p,
+                                            "target", to);
                                 }
                             }
                         });
             }
-        } catch (Throwable ignore) {
+        } catch (Throwable exception) {
+            audit.problem().report(BuiltinProblemCatalog.LANGUAGE_LOCALE_NORMALIZE_FAILED, exception,
+                    "directory", dir,
+                    "format", spec.fmt);
         }
     }
 
@@ -721,7 +783,7 @@ public final class LangServiceImpl implements LangService, LocaleAware {
         return m == null ? new LinkedHashMap<>() : m;
     }
 
-    private static void persist(java.nio.file.Path file,
+    private void persist(java.nio.file.Path file,
                                 FileType fmt,
                                 Map<String, Object> doc) {
         String out;
@@ -736,7 +798,7 @@ public final class LangServiceImpl implements LangService, LocaleAware {
             out = JsonCodec.dump(doc);
         }
         IOs.writeString(file, out);
-        LinLog.debug(LinMsg.k("linFile.lang.langSaved"), "lang", file);
+        audit.logger().debug(LinMsg.k("linFile.lang.langSaved"), "lang", file);
     }
 
     private boolean writeBuiltinResourceToDisk(String filePath, String locale, FileType fmt, java.nio.file.Path target) {
@@ -750,6 +812,9 @@ public final class LangServiceImpl implements LangService, LocaleAware {
             IOs.writeString(target, s);
             return true;
         } catch (Throwable t) {
+            audit.problem().report(BuiltinProblemCatalog.LANGUAGE_RESOURCE_COPY_FAILED, t,
+                    "resource", p,
+                    "target", target);
             return false;
         }
     }
@@ -922,17 +987,21 @@ public final class LangServiceImpl implements LangService, LocaleAware {
                 String base = YamlCodec.dump(pruned);
                 String marked = insertYamlMissingMarkers(base, missingVals);
                 IOs.writeString(diff, marked);
-                LinLog.info(LinMsg.k("linFile.lang.langGeneratedDifferent"), "diff", diff);
+                audit.logger().info(LinMsg.k("linFile.lang.langGeneratedDifferent"), "diff", diff);
             } else {
                 Map<String, Object> wrapper = new LinkedHashMap<>();
                 wrapper.put("_missing", new ArrayList<>(missing));
                 wrapper.put("_file", fullDoc);
                 IOs.writeString(diff, JsonCodec.dump(wrapper));
-                LinLog.info(LinMsg.k("linFile.lang.langGeneratedDifferent"), "diff", diff);
+                audit.logger().info(LinMsg.k("linFile.lang.langGeneratedDifferent"), "diff", diff);
             }
-            LinLog.warn(LinMsg.k("linFile.lang.langMissingKeys"), "lang", f, "count", missing.size(), "diff", diff);
-        } catch (Exception e) {
-            // ignore
+            audit.logger().warn(LinMsg.k("linFile.lang.langMissingKeys"), "lang", f, "count", missing.size(), "diff", diff);
+        } catch (Exception exception) {
+            audit.problem().report(
+                    BuiltinProblemCatalog.DIFF_WRITE_FAILED, exception,
+                    "file", f,
+                    "operation", "language-diff"
+            );
         }
     }
 

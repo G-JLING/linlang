@@ -1,9 +1,12 @@
 package adapter.linlang.bukkit.view;
 
+import api.linlang.audit.LinAudit;
+import api.linlang.audit.LinLog;
 import adapter.linlang.bukkit.view.asset.IconResolver;
 import adapter.linlang.bukkit.view.asset.ItemsAdderIconResolver;
 import adapter.linlang.bukkit.view.asset.VanillaIconResolver;
 import core.linlang.view.platform.InteractPlatformAdapter;
+import core.linlang.audit.problem.BuiltinProblemCatalog;
 import core.linlang.view.render.RenderModel;
 import core.linlang.view.spec.IconSpec;
 import org.bukkit.Bukkit;
@@ -17,6 +20,7 @@ import java.util.concurrent.ConcurrentHashMap;
 public final class BukkitInteractAdapter implements InteractPlatformAdapter {
 
     private final JavaPlugin plugin;
+    private final LinAudit audit;
 
     /** viewer(UUID) -> 当前打开的 GUI inventory */
     private final Map<UUID, Inventory> openInventories = new ConcurrentHashMap<>();
@@ -28,6 +32,7 @@ public final class BukkitInteractAdapter implements InteractPlatformAdapter {
 
     public BukkitInteractAdapter(JavaPlugin plugin) {
         this.plugin = Objects.requireNonNull(plugin, "plugin");
+        this.audit = LinLog.forOwner(plugin);
         this.resolvers.add(new ItemsAdderIconResolver());
         this.resolvers.add(new VanillaIconResolver());
     }
@@ -152,7 +157,13 @@ public final class BukkitInteractAdapter implements InteractPlatformAdapter {
             try {
                 org.bukkit.inventory.ItemStack out = r.resolve(p, icon, vars);
                 if (out != null) return out;
-            } catch (Throwable ignore) {}
+            } catch (Throwable exception) {
+                audit.problem().report(BuiltinProblemCatalog.VIEW_ICON_RESOLVE_FAILED, exception,
+                        "resolver", r.getClass().getName(),
+                        "icon-kind", icon.kind(),
+                        "icon-key", icon.key(),
+                        "viewer", p.getUniqueId());
+            }
         }
         return null;
     }
@@ -160,14 +171,29 @@ public final class BukkitInteractAdapter implements InteractPlatformAdapter {
     @Override
     public void runMain(Runnable task) {
         if (task == null) return;
-        if (Bukkit.isPrimaryThread()) task.run();
-        else Bukkit.getScheduler().runTask(plugin, task);
+        if (Bukkit.isPrimaryThread()) {
+            task.run();
+            return;
+        }
+        try {
+            Bukkit.getScheduler().runTask(plugin, task);
+        } catch (RuntimeException exception) {
+            audit.problem().report(BuiltinProblemCatalog.MAIN_DISPATCH_FAILED, exception,
+                    "resource", "view");
+            task.run();
+        }
     }
 
     @Override
     public void runAsync(Runnable task) {
         if (task == null) return;
-        Bukkit.getScheduler().runTaskAsynchronously(plugin, task);
+        try {
+            Bukkit.getScheduler().runTaskAsynchronously(plugin, task);
+        } catch (RuntimeException exception) {
+            audit.problem().report(BuiltinProblemCatalog.ASYNC_DISPATCH_FAILED, exception,
+                    "resource", "view");
+            task.run();
+        }
     }
 
     // ----- adapter 内部：给 listener 用的查询 -----

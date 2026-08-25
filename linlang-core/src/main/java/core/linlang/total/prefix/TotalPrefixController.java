@@ -27,9 +27,6 @@ public final class TotalPrefixController {
         if (next == null) next = "";
         if (Objects.equals(this.prefix, next)) return;
         this.prefix = next;
-        try {
-            bus.post(new TotalPrefixChanged(next, reason));
-        } catch (Throwable ignore) {
-        }
+        bus.post(new TotalPrefixChanged(next, reason));
     }
 }

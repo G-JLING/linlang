@@ -1,6 +1,8 @@
 package adapter.linlang.bukkit.file.common.file;
 
+import api.linlang.audit.LinAudit;
 import api.linlang.audit.LinLog;
+import core.linlang.audit.problem.BuiltinProblemCatalog;
 import core.linlang.file.impl.LangServiceImpl;
 import core.linlang.file.runtime.Watcher;
 import org.bukkit.plugin.Plugin;
@@ -18,6 +20,7 @@ public final class BukkitFsHotReloader implements AutoCloseable {
     private final Plugin plugin;
     private final BukkitMainThread main;
     private final Watcher watcher;
+    private final LinAudit audit;
 
     // 去抖与自触发屏蔽（基于文件名，兼容编辑器的“删除+新建”保存流程）
     private static final long COOLDOWN_MS = 800L; // 略微放宽，避免连续 CREATE/DELETE/MODIFY 抖动
@@ -26,9 +29,10 @@ public final class BukkitFsHotReloader implements AutoCloseable {
 
     public BukkitFsHotReloader(Plugin plugin){
         this.plugin = plugin;
+        this.audit = LinLog.forOwner(plugin);
         this.main = new BukkitMainThread(plugin);
-        this.watcher = new Watcher();
-        LinLog.init("File will be dynamically hot reloaded");
+        this.watcher = new Watcher(plugin);
+        audit.logger().init("File will be dynamically hot reloaded");
     }
 
     // 监听某个目录
@@ -45,7 +49,7 @@ public final class BukkitFsHotReloader implements AutoCloseable {
 
                 // 忽略一次性自触发（例如我们写回差异文件、或保存配置时）
                 if (skipOnce.remove(name)) {
-                    LinLog.debug("hot-reload skipOnce hit for: " + name);
+                    audit.logger().debug("hot-reload skipOnce hit for: " + name);
                     return;
                 }
 
@@ -64,21 +68,32 @@ public final class BukkitFsHotReloader implements AutoCloseable {
                         Path target = dir.resolve(name);
                         onChange.accept(target);
                     } catch (Throwable t){
-                        LinLog.warn("[linlang] hot reload callback failed for: " + name + ", err=" + t);
+                        audit.problem().report(
+                                BuiltinProblemCatalog.WATCH_CALLBACK_FAILED, t,
+                                "path", dir.resolve(name)
+                        );
                     }
                 });
             });
         } catch (IOException ioe){
-            LinLog.warn("[linlang] hot reload skipped, cannot ensure dir: " + dir + ", err=" + ioe);
+            audit.problem().report(
+                    BuiltinProblemCatalog.WATCH_START_FAILED, ioe,
+                    "path", dir,
+                    "stage", "ensure-directory"
+            );
         } catch (RuntimeException re){
-            LinLog.warn("[linlang] hot reload watch failed for: " + dir + ", err=" + re);
+            audit.problem().report(
+                    BuiltinProblemCatalog.WATCH_START_FAILED, re,
+                    "path", dir,
+                    "stage", "register-watcher"
+            );
         }
     }
 
 
     public void watchLangDir(Path dir, LangServiceImpl langSvc){
         if (langSvc == null) return;
-        watchLangDir(dir, () -> LinLog.info("[linlang] language changed"));
+        watchLangDir(dir, langSvc::reload);
     }
 
     public void watchConfigDir(Path dir, Runnable onChange){
@@ -86,11 +101,11 @@ public final class BukkitFsHotReloader implements AutoCloseable {
         watchDir(dir, p -> {
             String n = p.getFileName().toString().toLowerCase();
             if (n.endsWith(".yml") || n.endsWith(".yaml") || n.endsWith(".json")) {
-                LinLog.debug("hot-reload event accepted: " + p);
+                audit.logger().debug("hot-reload event accepted: " + p);
                 onChange.run();
                 // 写回可能触发新事件，屏蔽一次
                 skipOnce.add(p.getFileName().toString());
-                LinLog.info("dynamically hot reloaded config: " + p.getFileName());
+                audit.logger().info("dynamically hot reloaded config: " + p.getFileName());
             }
         });
     }
@@ -101,10 +116,10 @@ public final class BukkitFsHotReloader implements AutoCloseable {
         watchDir(dir, p -> {
             String n = p.getFileName().toString().toLowerCase();
             if (n.endsWith(".yml") || n.endsWith(".yaml") || n.endsWith(".json")) {
-                LinLog.debug("hot-reload event accepted: " + p);
+                audit.logger().debug("hot-reload event accepted: " + p);
                 onChange.run();
                 skipOnce.add(p.getFileName().toString());
-                LinLog.info("dynamically hot reloaded addon: " + p.getFileName());
+                audit.logger().info("dynamically hot reloaded addon: " + p.getFileName());
             }
         });
     }
@@ -114,10 +129,10 @@ public final class BukkitFsHotReloader implements AutoCloseable {
         watchDir(dir, p -> {
             String n = p.getFileName().toString().toLowerCase();
             if (n.endsWith(".yml") || n.endsWith(".yaml") || n.endsWith(".json")) {
-                LinLog.debug("hot-reload event accepted: " + p);
+                audit.logger().debug("hot-reload event accepted: " + p);
                 onChange.run();
                 skipOnce.add(p.getFileName().toString());
-                LinLog.info("dynamically hot reloaded language: " + p.getFileName());
+                audit.logger().info("dynamically hot reloaded language: " + p.getFileName());
             }
         });
     }
@@ -129,5 +144,15 @@ public final class BukkitFsHotReloader implements AutoCloseable {
         }
     }
 
-    @Override public void close(){ try { watcher.close(); } catch (Exception ignore) {} }
+    @Override
+    public void close() {
+        try {
+            watcher.close();
+        } catch (Exception exception) {
+            audit.problem().report(
+                    BuiltinProblemCatalog.RESOURCE_CLOSE_FAILED, exception,
+                    "resource", "file-watcher"
+            );
+        }
+    }
 }

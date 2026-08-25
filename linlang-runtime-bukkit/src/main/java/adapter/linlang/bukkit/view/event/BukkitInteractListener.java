@@ -1,6 +1,9 @@
 package adapter.linlang.bukkit.view.event;
 
 import adapter.linlang.bukkit.view.BukkitInteractAdapter;
+import api.linlang.audit.LinAudit;
+import api.linlang.audit.LinLog;
+import core.linlang.audit.problem.BuiltinProblemCatalog;
 import core.linlang.view.platform.ViewEventBridge;
 import core.linlang.view.render.ClickRoute;
 import core.linlang.view.render.RenderModel;
@@ -17,11 +20,13 @@ public final class BukkitInteractListener implements Listener {
     private final JavaPlugin plugin;
     private final BukkitInteractAdapter adapter;
     private final ViewEventBridge bridge;
+    private final LinAudit audit;
 
     public BukkitInteractListener(JavaPlugin plugin, BukkitInteractAdapter adapter, ViewEventBridge bridge) {
         this.plugin = plugin;
         this.adapter = adapter;
         this.bridge = bridge;
+        this.audit = LinLog.forOwner(plugin);
     }
 
     @EventHandler(ignoreCancelled = true)
@@ -66,18 +71,29 @@ public final class BukkitInteractListener implements Listener {
             // InventoryCloseEvent 不可取消：下一 tick 重新打开即可“拒绝关闭”
             Inventory inv = adapter.inventoryOf(p);
             if (inv != null) {
-                Bukkit.getScheduler().runTask(plugin, () -> {
-                    try {
-                        if (!p.isOnline()) return;
-                        p.openInventory(inv);
-                    } catch (Throwable ignored) {
-                    }
-                });
+                try {
+                    Bukkit.getScheduler().runTask(plugin, () -> {
+                        try {
+                            if (!p.isOnline()) return;
+                            p.openInventory(inv);
+                        } catch (Throwable exception) {
+                            reportReopenFailure(p, exception, "execute");
+                        }
+                    });
+                } catch (RuntimeException exception) {
+                    reportReopenFailure(p, exception, "schedule");
+                }
             }
             return;
         }
 
         adapter.release(p);
         bridge.closed(p);
+    }
+
+    private void reportReopenFailure(Player player, Throwable cause, String operation) {
+        audit.problem().report(BuiltinProblemCatalog.VIEW_REOPEN_FAILED, cause,
+                "player", player.getUniqueId(),
+                "operation", operation);
     }
 }

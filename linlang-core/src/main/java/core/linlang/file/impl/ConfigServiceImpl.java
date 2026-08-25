@@ -2,6 +2,7 @@ package core.linlang.file.impl;
 
 // linlang-core/src/main/java/io/linlang/file/impl/ConfigServiceImpl.java
 
+import api.linlang.audit.LinAudit;
 import api.linlang.audit.LinLog;
 import api.linlang.file.file.ConfigService;
 import api.linlang.file.file.FileType;
@@ -11,6 +12,7 @@ import api.linlang.file.file.migrator.Migrator;
 import api.linlang.file.file.migrator.MutableDocument;
 import api.linlang.file.file.path.PathResolver;
 import core.linlang.audit.internal.LinMsg;
+import core.linlang.audit.problem.BuiltinProblemCatalog;
 import core.linlang.file.runtime.TreeMapper;
 import core.linlang.json.JsonCodec;
 import core.linlang.file.runtime.Binder;
@@ -25,14 +27,20 @@ import java.util.concurrent.CopyOnWriteArrayList;
 public final class ConfigServiceImpl implements ConfigService {
     private final PathResolver paths;
     private final List<Migrator> migrators;
+    private final LinAudit audit;
     private final java.util.Map<Class<?>, Object> liveConfigs = new java.util.LinkedHashMap<>();
     private final java.util.Map<Class<?>, Boolean> emitFlags = new java.util.LinkedHashMap<>();
     private final java.util.Map<Class<?>, Map<String, Object>> defaultSnapshots = new java.util.LinkedHashMap<>();
 
     public ConfigServiceImpl(PathResolver paths, List<Migrator> migrators) {
+        this(paths, migrators, null);
+    }
+
+    public ConfigServiceImpl(PathResolver paths, List<Migrator> migrators, Object owner) {
         this.paths = paths;
         this.migrators = new CopyOnWriteArrayList<>();
         if (migrators != null) this.migrators.addAll(migrators);
+        this.audit = LinLog.forOwner(owner);
     }
 
     @Override
@@ -42,6 +50,16 @@ public final class ConfigServiceImpl implements ConfigService {
 
     @Override
     public <T> T bind(Class<T> type, boolean emit) {
+        try {
+            return bindInternal(type, emit);
+        } catch (RuntimeException exception) {
+            audit.problem().report(BuiltinProblemCatalog.CONFIG_BIND_FAILED, exception,
+                    "config", type == null ? "null" : type.getName());
+            throw new IllegalStateException(BuiltinProblemCatalog.CONFIG_BIND_FAILED, exception);
+        }
+    }
+
+    private <T> T bindInternal(Class<T> type, boolean emit) {
         Binder.BoundConfig meta = Binder.configOf(type)
                 .orElseThrow(() -> new IllegalArgumentException("[linlang] missing @ConfigFile on " + type));
         Path file = toFile(meta.path(), meta.name(), meta.fmt());
@@ -92,6 +110,24 @@ public final class ConfigServiceImpl implements ConfigService {
 
     @Override
     public <T> void save(Class<T> type, T config) {
+        save(type, config, null);
+    }
+
+    public <T> void save(Class<T> type, T config, boolean emit) {
+        save(type, config, Boolean.valueOf(emit));
+    }
+
+    private <T> void save(Class<T> type, T config, Boolean emitOverride) {
+        try {
+            saveInternal(type, config, emitOverride);
+        } catch (RuntimeException exception) {
+            audit.problem().report(BuiltinProblemCatalog.CONFIG_SAVE_FAILED, exception,
+                    "config", type == null ? "null" : type.getName());
+            throw new IllegalStateException(BuiltinProblemCatalog.CONFIG_SAVE_FAILED, exception);
+        }
+    }
+
+    private <T> void saveInternal(Class<T> type, T config, Boolean emitOverride) {
         if (config == null) throw new IllegalArgumentException("config is null");
 
         Binder.BoundConfig meta = Binder.configOf(type)
@@ -107,28 +143,10 @@ public final class ConfigServiceImpl implements ConfigService {
         boolean annotatedNoEmit = type.isAnnotationPresent(NoEmit.class);
         boolean shouldEmit;
         synchronized (emitFlags) {
-            Boolean flag = emitFlags.get(type);
-            shouldEmit = (flag != null ? flag : true) && !annotatedNoEmit;
+            Boolean flag = emitOverride == null ? emitFlags.get(type) : emitOverride;
+            shouldEmit = (flag == null || flag) && !annotatedNoEmit;
+            if (emitOverride != null) emitFlags.put(type, shouldEmit);
         }
-        if (shouldEmit) persist(file, meta.fmt(), doc, comments);
-    }
-
-    public <T> void save(Class<T> type, T config, boolean emit) {
-        if (config == null) throw new IllegalArgumentException("config is null");
-
-        Binder.BoundConfig meta = Binder.configOf(type)
-                .orElseThrow(() -> new IllegalArgumentException("[linlang] missing @ConfigFile on " + type));
-        Path file = toFile(meta.path(), meta.name(), meta.fmt());
-
-        Map<String, Object> doc = new LinkedHashMap<>();
-        export(config, meta.keyMap(), doc);
-        writeCurrentVersion(type, doc);
-
-        Map<String, List<String>> comments = TreeMapper.extractComments(type);
-
-        boolean annotatedNoEmit = type.isAnnotationPresent(NoEmit.class);
-        boolean shouldEmit = emit && !annotatedNoEmit;
-        synchronized (emitFlags) { emitFlags.put(type, shouldEmit); }
 
         if (shouldEmit) persist(file, meta.fmt(), doc, comments);
     }
@@ -160,7 +178,11 @@ public final class ConfigServiceImpl implements ConfigService {
                 Map<String, List<String>> comments = TreeMapper.extractComments(type);
                 if (shouldEmit) persist(file, meta.fmt(), doc, comments);
             } catch (Exception ex) {
-                LinLog.warn(LinMsg.k("linFile.file.fileSaveFailed"), "file", type, "reason", ex.getMessage());
+                audit.problem().report(
+                        BuiltinProblemCatalog.CONFIG_SAVE_FAILED, ex,
+                        "file", type.getName(),
+                        "operation", "save-all"
+                );
             }
         }
     }
@@ -177,10 +199,13 @@ public final class ConfigServiceImpl implements ConfigService {
             try {
                 reloadIntoExisting(type, target);
             } catch (Exception ex) {
-                LinLog.warn(LinMsg.k("linFile.file.fileReloadFailed"), "file", type, "reason", ex.getMessage());
+                audit.problem().report(
+                        BuiltinProblemCatalog.CONFIG_RELOAD_FAILED, ex,
+                        "file", type.getName()
+                );
             }
         }
-        LinLog.info(LinMsg.k("linFile.file.fileReloaded"));
+        audit.logger().info(LinMsg.k("linFile.file.fileReloaded"));
     }
 
     /**
@@ -264,10 +289,9 @@ public final class ConfigServiceImpl implements ConfigService {
                 : JsonCodec.dump(doc);
         try {
             IOs.writeString(file, out);
-            LinLog.debug(LinMsg.k("linFile.file.fileSaved"), "file", file);
+            audit.logger().debug(LinMsg.k("linFile.file.fileSaved"), "file", file);
         } catch (Exception e) {
-            LinLog.warn(LinMsg.k("linFile.file.fileSaveFailed"), "file", file, "reason", e.getMessage());
-            throw new RuntimeException(e);
+            throw new IllegalStateException(BuiltinProblemCatalog.CONFIG_SAVE_FAILED, e);
         }
     }
     private void applyMigrations(Class<?> type, Map<String, Object> doc) {
@@ -431,16 +455,21 @@ public final class ConfigServiceImpl implements ConfigService {
                 String base = YamlCodec.dump(pruned);
                 String marked = insertYamlMissingMarkers(base, missingVals);
                 IOs.writeString(diff, marked);
-                LinLog.info(LinMsg.k("linFile.file.fileGeneratedDifferent"), "diff", diff);
+                audit.logger().info(LinMsg.k("linFile.file.fileGeneratedDifferent"), "diff", diff);
             } else {
                 Map<String, Object> wrapper = new LinkedHashMap<>();
                 wrapper.put("_missing", new java.util.ArrayList<>(missing));
                 wrapper.put("_file", fullDoc);
                 IOs.writeString(diff, JsonCodec.dump(wrapper));
-                LinLog.info(LinMsg.k("linFile.file.fileGeneratedDifferent"), "diff", diff);
+                audit.logger().info(LinMsg.k("linFile.file.fileGeneratedDifferent"), "diff", diff);
             }
-            LinLog.warn(LinMsg.k("linFile.file.fileMissingKeys"), "file", f, "count", missing.size(), "diff", diff);
-        } catch (Exception ignore) {
+            audit.logger().warn(LinMsg.k("linFile.file.fileMissingKeys"), "file", f, "count", missing.size(), "diff", diff);
+        } catch (Exception exception) {
+            audit.problem().report(
+                    BuiltinProblemCatalog.DIFF_WRITE_FAILED, exception,
+                    "file", f,
+                    "operation", "config-diff"
+            );
         }
     }
 

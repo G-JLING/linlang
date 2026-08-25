@@ -14,8 +14,8 @@ import api.linlang.file.file.annotations.NamingStyle;
 @Comment({"linlang 日志与审计 主配置文件", "linlang log and audit configuration file"})
 public class AuditConfig {
 
-    @Comment({"当前日志等级。从低到高：DEBUG < INFO < WARN < ERROR < AUDIT",
-            "current log level. from low to high: DEBUG < INFO < WARN < ERROR < AUDIT"})
+    @Comment({"当前普通日志等级。从低到高：DEBUG < INFO < WARN < ERROR",
+            "current log level. from low to high: DEBUG < INFO < WARN < ERROR"})
     public String level = "INFO";
 
     @Comment({"默认是否以 JSON 格式输出（可被各输出单独覆盖）", "default: output in JSON format or not"})
@@ -29,6 +29,12 @@ public class AuditConfig {
 
     @Comment({"输出审计日志到文件", "output audit to file"})
     public Output audit = new Output("linlang/audit/audit.log", false, true);
+
+    @Comment({"输出结构化问题到文件", "output structured problems to file"})
+    public Output problem = new Output("linlang/audit/problem.log", false, true);
+
+    @Comment({"文件写入队列容量", "file writer queue capacity"})
+    public int queueCapacity = 4096;
 
     public static class Output {
 

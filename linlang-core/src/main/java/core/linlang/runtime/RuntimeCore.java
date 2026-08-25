@@ -1,7 +1,9 @@
 // core/linlang/runtime/RuntimeCore.java
 package core.linlang.runtime;
 
+import api.linlang.audit.LinAudit;
 import api.linlang.audit.LinLog;
+import api.linlang.audit.problem.LinProblem;
 import api.linlang.command.LinCommand;
 import api.linlang.command.message.CommandMessages;
 import api.linlang.file.database.DataService;
@@ -12,6 +14,7 @@ import core.linlang.audit.AbstractAuditProvider;
 import core.linlang.audit.config.AuditConfig;
 import core.linlang.audit.internal.LinMsg;
 import core.linlang.audit.internal.LinlangInternalMessageKeys;
+import core.linlang.audit.problem.BuiltinProblemCatalog;
 import core.linlang.command.message.CommandMessageKeys;
 import core.linlang.command.message.CommandMessageRouter;
 import core.linlang.database.impl.DataServiceImpl;
@@ -54,7 +57,7 @@ public final class RuntimeCore<P> implements AutoCloseable {
     public RuntimeCore(P runtimeHost, PlatformAdapter<P> adapter) {
         this.runtimeHost = Objects.requireNonNull(runtimeHost, "runtimeHost");
         this.adapter = Objects.requireNonNull(adapter, "adapter");
-        this.runtimeBus = new DefaultEventBus(adapter.dispatcher(runtimeHost));
+        this.runtimeBus = new DefaultEventBus(adapter.dispatcher(runtimeHost), runtimeHost);
     }
 
     public P runtimeHost() {
@@ -72,7 +75,14 @@ public final class RuntimeCore<P> implements AutoCloseable {
 
     /** 为每个 facade 创建独立事件总线（facade close 时应 bus.shutdown） */
     public LinEventBus newFacadeBus() {
-        return new DefaultEventBus(adapter.dispatcher(runtimeHost));
+        return newFacadeBus(runtimeHost);
+    }
+
+    /**
+     * 为指定 owner 创建独立事件总线。
+     */
+    public LinEventBus newFacadeBus(P owner) {
+        return new DefaultEventBus(adapter.dispatcher(runtimeHost), owner);
     }
 
     /** 将 bootstrap 创建的 runtime 配置/语言服务挂入 core（可选，但建议） */
@@ -88,18 +98,18 @@ public final class RuntimeCore<P> implements AutoCloseable {
 
     /** 为指定 owner 创建独立配置服务实例 */
     public ConfigServiceImpl createConfigService(P owner) {
-        return new ConfigServiceImpl(resolver(owner), List.of());
+        return new ConfigServiceImpl(resolver(owner), List.of(), owner);
     }
 
     /** 为指定 owner 创建独立语言服务实例 */
     public LangServiceImpl createLangService(P owner) {
-        return new LangServiceImpl(resolver(owner));
+        return new LangServiceImpl(resolver(owner), owner);
     }
 
     /** 为指定 owner 创建独立数据服务实例 */
     public DataService createDataService(P owner) {
         if (owner == null) throw new IllegalArgumentException("owner");
-        return dataServices.computeIfAbsent(owner, value -> new DataServiceImpl(resolver(value)));
+        return dataServices.computeIfAbsent(owner, value -> new DataServiceImpl(resolver(value), value));
     }
 
     /** 用 facade 的 LangService 创建命令消息路由（避免再 new 一套 lang） */
@@ -109,7 +119,8 @@ public final class RuntimeCore<P> implements AutoCloseable {
                     CommandMessageKeys.class
             );
             return new CommandMessageRouter(keys);
-        } catch (Throwable t) {
+        } catch (RuntimeException t) {
+            reportProblem(runtimeHost, BuiltinProblemCatalog.COMMAND_MESSAGE_LOAD_FAILED, t);
             return CommandMessages.defaults();
         }
     }
@@ -130,14 +141,15 @@ public final class RuntimeCore<P> implements AutoCloseable {
         if (owner == null) throw new IllegalArgumentException("owner");
 
         ViewCoreImpl core = interactCores.computeIfAbsent(owner, o -> {
-            var bus = newFacadeBus();
+            var bus = newFacadeBus(o);
             InteractPlatformAdapter viewAdapter = adapter.createViewAdapter(o);
-            ViewCoreImpl created = new ViewCoreImpl(resolver(o), "gui", viewAdapter, bus);
+            ViewCoreImpl created = new ViewCoreImpl(resolver(o), "gui", viewAdapter, bus, o);
             try {
                 adapter.registerViewEvents(o, viewAdapter, created);
                 return created;
             } catch (RuntimeException exception) {
                 created.close();
+                reportProblem(o, BuiltinProblemCatalog.VIEW_INITIALIZATION_FAILED, exception);
                 throw exception;
             }
         });
@@ -147,8 +159,22 @@ public final class RuntimeCore<P> implements AutoCloseable {
     }
 
     /** 创建消息服务 */
+    public LinMessenger createMessenger(P owner, LangServiceImpl lang) {
+        return adapter.createMessenger(owner, lang);
+    }
+
+    /**
+     * 创建绑定到运行时宿主的消息服务。
+     */
     public LinMessenger createMessenger(LangServiceImpl lang) {
-        return adapter.createMessenger(lang);
+        return createMessenger(runtimeHost, lang);
+    }
+
+    /**
+     * 返回绑定指定 owner 的日志与审计入口。
+     */
+    public LinAudit auditFor(P owner) {
+        return LinLog.forOwner(owner);
     }
 
     /** 创建并注册一个 facade（一般由 bootstrap 调用） */
@@ -177,13 +203,31 @@ public final class RuntimeCore<P> implements AutoCloseable {
 
         ViewCoreImpl view = interactCores.remove(owner);
         if (view != null) {
-            try { view.close(); } catch (Throwable ignore) {}
+            try {
+                view.close();
+            } catch (RuntimeException exception) {
+                reportProblem(owner, BuiltinProblemCatalog.RESOURCE_CLOSE_FAILED, exception,
+                        "resource", "view");
+            }
         }
-        try { adapter.closeView(owner); } catch (Throwable ignore) {}
+        try {
+            adapter.closeView(owner);
+        } catch (RuntimeException exception) {
+            reportProblem(owner, BuiltinProblemCatalog.RESOURCE_CLOSE_FAILED, exception,
+                    "resource", "view-adapter");
+        }
 
         DataServiceImpl data = dataServices.remove(owner);
         if (data != null) {
-            try { data.close(); } catch (Throwable ignore) {}
+            try {
+                data.close();
+            } catch (RuntimeException exception) {
+                reportProblem(owner, BuiltinProblemCatalog.RESOURCE_CLOSE_FAILED, exception,
+                        "resource", "data-service");
+            }
+        }
+        if (globalAudit != null) {
+            globalAudit.unregisterTenant(owner);
         }
     }
 
@@ -204,7 +248,10 @@ public final class RuntimeCore<P> implements AutoCloseable {
             AuditConfig fallback = new AuditConfig();
             this.globalAudit = adapter.createGlobalAudit(runtimeHost, fallback, usePluginLogger);
             LinLog.install(this.globalAudit);
-            LinLog.warn("Failed to bind runtime audit config: {}", t.getMessage());
+            LinLog.problem(LinProblem.of(
+                    BuiltinProblemCatalog.RUNTIME_CONFIG_LOAD_FAILED,
+                    t
+            ));
         }
         return this;
     }
@@ -216,8 +263,11 @@ public final class RuntimeCore<P> implements AutoCloseable {
             ConfigServiceImpl cfgSvc = createConfigService(owner);
             AuditConfig cfg = cfgSvc.bind(AuditConfig.class);
             adapter.registerAuditTenant(globalAudit, owner, cfg, usePluginLogger);
-        } catch (Throwable t) {
-            LinLog.warn("Failed to bind audit config for tenant: {}", t.getMessage());
+        } catch (RuntimeException t) {
+            auditFor(owner).problem().report(
+                    BuiltinProblemCatalog.TENANT_CONFIG_LOAD_FAILED, t,
+                    "owner", owner
+            );
         }
     }
 
@@ -225,8 +275,14 @@ public final class RuntimeCore<P> implements AutoCloseable {
     public void installLinMsg() {
         LangServiceImpl lang = this.runtimeLanguage;
         if (lang == null) {
-            // 没 attach 就尝试从 runtimeHost 自己创建一套（会落在 runtimeHost 的目录）
-            try { lang = createLangService(runtimeHost); } catch (Throwable ignore) {}
+            try {
+                lang = createLangService(runtimeHost);
+            } catch (RuntimeException exception) {
+                reportProblem(runtimeHost,
+                        BuiltinProblemCatalog.MESSAGE_TEMPLATE_INSTALL_FAILED,
+                        exception,
+                        "stage", "create-language-service");
+            }
         }
         if (lang == null) return;
 
@@ -238,22 +294,46 @@ public final class RuntimeCore<P> implements AutoCloseable {
             LinMsg.install(lang::tr);
             LinLog.info("Installed global LinMsg templates.");
         } catch (Throwable t) {
-            LinLog.warn("Failed to install LinMsg templates: {}", t.getMessage());
+            reportProblem(runtimeHost, BuiltinProblemCatalog.MESSAGE_TEMPLATE_INSTALL_FAILED, t);
         }
     }
 
     /** 软重载：运行时自身文件服务 + bootstrap（若 attach 了） + 所有 facade.reload() */
     public void reload() {
-        try { if (runtimeConfig != null) runtimeConfig.reload(); } catch (Throwable ignore) {}
-        try { if (runtimeLanguage != null) runtimeLanguage.reload(); } catch (Throwable ignore) {}
+        reloadAndCountFailures();
+    }
+
+    /**
+     * 执行软重载并返回失败的服务或门面数量。
+     */
+    public int reloadAndCountFailures() {
+        int failures = 0;
+        try {
+            if (runtimeConfig != null) runtimeConfig.reload();
+        } catch (RuntimeException exception) {
+            failures++;
+            reportProblem(runtimeHost, BuiltinProblemCatalog.RUNTIME_CONFIG_RELOAD_FAILED, exception);
+        }
+        try {
+            if (runtimeLanguage != null) runtimeLanguage.reload();
+        } catch (RuntimeException exception) {
+            failures++;
+            reportProblem(runtimeHost, BuiltinProblemCatalog.RUNTIME_LANGUAGE_RELOAD_FAILED, exception);
+        }
 
         Set<FacadeCore<P>> snapshot;
         synchronized (facades) {
             snapshot = new LinkedHashSet<>(facades);
         }
         for (FacadeCore<P> f : snapshot) {
-            try { f.reload(); } catch (Throwable ignore) {}
+            try {
+                f.reload();
+            } catch (RuntimeException exception) {
+                failures++;
+                reportProblem(f.getOwner(), BuiltinProblemCatalog.FACADE_RELOAD_FAILED, exception);
+            }
         }
+        return failures;
     }
 
     /** 硬重启：对所有 facade 执行 restart()，返回成功数量 */
@@ -264,7 +344,12 @@ public final class RuntimeCore<P> implements AutoCloseable {
         }
         int ok = 0;
         for (FacadeCore<P> f : snapshot) {
-            try { f.restart(); ok++; } catch (Throwable ignore) {}
+            try {
+                f.restart();
+                ok++;
+            } catch (RuntimeException exception) {
+                reportProblem(f.getOwner(), BuiltinProblemCatalog.FACADE_RESTART_FAILED, exception);
+            }
         }
         return ok;
     }
@@ -277,25 +362,44 @@ public final class RuntimeCore<P> implements AutoCloseable {
     public void close() {
         synchronized (facades) {
             for (FacadeCore<P> f : facades.toArray(new FacadeCore[0])) {
-                try { f.close(); } catch (Throwable ignore) {}
+                try {
+                    f.close();
+                } catch (RuntimeException exception) {
+                    reportProblem(f.getOwner(), BuiltinProblemCatalog.FACADE_CLOSE_FAILED, exception);
+                }
             }
             facades.clear();
         }
-        // globalAudit 如需关闭由 provider 自己处理；这里尽量尝试 close
-        if (globalAudit != null) {
-            try {
-                var m = globalAudit.getClass().getMethod("close");
-                m.invoke(globalAudit);
-            } catch (Throwable ignore) {}
-        }
+        LinLog.info("[linlang] RuntimeCore closed.");
         for (P owner : new ArrayList<>(interactCores.keySet())) {
             releaseOwner(owner);
         }
         for (DataServiceImpl data : dataServices.values()) {
-            try { data.close(); } catch (Throwable ignore) {}
+            try {
+                data.close();
+            } catch (RuntimeException exception) {
+                reportProblem(runtimeHost, BuiltinProblemCatalog.RESOURCE_CLOSE_FAILED, exception,
+                        "resource", "data-service");
+            }
         }
         dataServices.clear();
-        try { runtimeBus.shutdown(); } catch (Throwable ignore) {}
-        LinLog.info("[linlang] RuntimeCore closed.");
+        try {
+            runtimeBus.shutdown();
+        } catch (RuntimeException exception) {
+            reportProblem(runtimeHost, BuiltinProblemCatalog.RESOURCE_CLOSE_FAILED, exception,
+                    "resource", "runtime-event-bus");
+        }
+        if (globalAudit != null) {
+            globalAudit.flush(null);
+            LinLog.uninstall(globalAudit);
+            globalAudit.close();
+        }
+    }
+
+    private void reportProblem(P owner,
+                               String code,
+                               Throwable cause,
+                               Object... context) {
+        auditFor(owner).problem().report(code, cause, context);
     }
 }

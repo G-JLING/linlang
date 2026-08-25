@@ -54,8 +54,8 @@ public final class ItemsAdderIconResolver implements IconResolver {
                 stack.setItemMeta(meta);
             }
             return stack;
-        } catch (Throwable ignore) {
-            return null;
+        } catch (Throwable exception) {
+            throw new IllegalStateException("ItemsAdder icon resolution failed: " + key, exception);
         }
     }
 

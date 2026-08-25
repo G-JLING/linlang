@@ -1,10 +1,12 @@
 package me.jling.facade;
 
+import api.linlang.audit.LinAudit;
 import api.linlang.command.LinCommand;
 import api.linlang.file.LinFile;
 import api.linlang.messenger.LinMessenger;
 import api.linlang.runtime.Linlang;
 import api.linlang.view.LinView;
+import core.linlang.audit.problem.BuiltinProblemCatalog;
 import core.linlang.event.api.LinEventBus;
 import core.linlang.runtime.FacadeCore;
 import core.linlang.total.i18n.LocaleController;
@@ -97,6 +99,11 @@ public final class BukkitFacadeImpl implements Linlang, Linlang.Configurable, Li
         return core.linView();
     }
 
+    @Override
+    public LinAudit linAudit() {
+        return core.linAudit();
+    }
+
     /**
      * 设置平台上下文。
      * <p>Bukkit 平台下，platformContext == JavaPlugin</p>
@@ -166,7 +173,13 @@ public final class BukkitFacadeImpl implements Linlang, Linlang.Configurable, Li
     public void close() {
         try {
             runtime.unregisterFacade(this);
-        } catch (Throwable ignore) {
+        } catch (RuntimeException exception) {
+            linAudit().problem().report(
+                    BuiltinProblemCatalog.RESOURCE_CLOSE_FAILED,
+                    exception,
+                    "resource", "bukkit-facade-registration",
+                    "owner", owner.getName()
+            );
         }
         core.close();
     }

@@ -1,5 +1,7 @@
 package core.linlang.view.impl;
 
+import api.linlang.audit.LinAudit;
+import api.linlang.audit.LinLog;
 import api.linlang.view.LinView;
 import api.linlang.view.session.GuiSession;
 import api.linlang.view.spi.GuiHook;
@@ -7,6 +9,7 @@ import api.linlang.view.state.GuiState;
 import api.linlang.view.spi.GuiSource;
 import api.linlang.file.file.path.PathResolver;
 import core.linlang.event.api.LinEventBus; // 复用现有（本实现先不强依赖事件）
+import core.linlang.audit.problem.BuiltinProblemCatalog;
 import core.linlang.view.compile.CompiledView;
 import core.linlang.view.load.ViewLoader;
 import core.linlang.view.platform.InteractPlatformAdapter;
@@ -33,6 +36,7 @@ public final class ViewCoreImpl implements LinView, ViewEventBridge, AutoCloseab
 
     private final InteractPlatformAdapter adapter;
     private final LinEventBus bus; // 事件总线
+    private final LinAudit audit;
     private final HookRegistry hooks = new HookRegistry();
     private final SourceRegistry sources = new SourceRegistry();
     private final ViewRegistry views;
@@ -45,12 +49,18 @@ public final class ViewCoreImpl implements LinView, ViewEventBridge, AutoCloseab
     private record NavigationEntry(String viewId, Map<String, Object> state) {}
 
     public ViewCoreImpl(PathResolver paths, InteractPlatformAdapter adapter, LinEventBus bus) {
-        this(paths, "gui", adapter, bus);
+        this(paths, "gui", adapter, bus, null);
     }
 
     public ViewCoreImpl(PathResolver paths, String uiRoot, InteractPlatformAdapter adapter, LinEventBus bus) {
+        this(paths, uiRoot, adapter, bus, null);
+    }
+
+    public ViewCoreImpl(PathResolver paths, String uiRoot, InteractPlatformAdapter adapter,
+                        LinEventBus bus, Object owner) {
         this.adapter = adapter;
         this.bus = bus;
+        this.audit = LinLog.forOwner(owner);
         this.views = new ViewRegistry(new ViewLoader(paths, uiRoot));
     }
 
@@ -70,7 +80,14 @@ public final class ViewCoreImpl implements LinView, ViewEventBridge, AutoCloseab
             throw new IllegalArgumentException("Unsupported viewer: " + viewer);
         }
 
-        CompiledView cv = views.get(viewId);
+        CompiledView cv;
+        try {
+            cv = views.get(viewId);
+        } catch (RuntimeException exception) {
+            audit.problem().report(BuiltinProblemCatalog.VIEW_DEFINITION_LOAD_FAILED, exception,
+                    "view", viewId);
+            throw new IllegalStateException(BuiltinProblemCatalog.VIEW_DEFINITION_LOAD_FAILED, exception);
+        }
         if (cv == null) throw new IllegalStateException("View not found: " + viewId);
 
         DefaultGuiSession s = new DefaultGuiSession(
@@ -192,7 +209,11 @@ public final class ViewCoreImpl implements LinView, ViewEventBridge, AutoCloseab
                     source.load(new SimpleContext(this, session, areaId, null, null, args));
             session.dynamics().area(areaId).fill(rows);
         } catch (Exception exception) {
-            throw new IllegalStateException("Failed to load GUI source: " + spec.source().id(), exception);
+            audit.problem().report(BuiltinProblemCatalog.VIEW_SOURCE_LOAD_FAILED, exception,
+                    "view", session.viewId(),
+                    "area", areaId,
+                    "source", spec.source().id());
+            throw new IllegalStateException(BuiltinProblemCatalog.VIEW_SOURCE_LOAD_FAILED, exception);
         }
     }
 
@@ -211,7 +232,11 @@ public final class ViewCoreImpl implements LinView, ViewEventBridge, AutoCloseab
                             new SimpleContext(this, s, route.areaId(), route.uid(), resolveRow(s, route), action.args());
                     hook.handle(ctx);
                 } catch (Exception exception) {
-                    throw new IllegalStateException("Failed to execute GUI hook: " + hookId, exception);
+                    audit.problem().report(BuiltinProblemCatalog.VIEW_HOOK_EXECUTION_FAILED, exception,
+                            "view", s.viewId(),
+                            "hook", hookId,
+                            "slot", slotIndex);
+                    throw new IllegalStateException(BuiltinProblemCatalog.VIEW_HOOK_EXECUTION_FAILED, exception);
                 }
             }
         } else if ("open".equalsIgnoreCase(type)) {
