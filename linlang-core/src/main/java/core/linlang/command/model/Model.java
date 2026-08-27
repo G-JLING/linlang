@@ -4,6 +4,8 @@ package core.linlang.command.model;
 // linlang-core/src/main/java/io/linlang/lincommand/core/Model.java
 
 import api.linlang.command.LinCommand;
+import api.linlang.command.group.CommandFailureHandler;
+import api.linlang.command.group.CommandSuccessHandler;
 
 import java.util.*;
 
@@ -14,6 +16,8 @@ public final class Model {
         public Exec exec;
         public String usage;
         public Map<String,String> descI18n;
+        public List<CommandSuccessHandler> successHandlers = new ArrayList<>();
+        public List<CommandFailureHandler> failureHandlers = new ArrayList<>();
     }
     public static final class Param {
         public String name; public boolean optional; public String defVal; public String desc;
@@ -27,6 +31,7 @@ public final class Model {
     }
     public static final class Exec {
         public LinCommand.CommandExecutor fn;
-        public String perm; public LinCommand.ExecTarget target;
+        public List<String> permissions = new ArrayList<>();
+        public LinCommand.ExecTarget target;
     }
 }

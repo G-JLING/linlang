@@ -124,7 +124,7 @@ public final class CommandListener {
                 "linlang restart <bukkit:string{.+}>",
                 ctx -> {
                     CommandSender sender = (CommandSender) ctx.sender();
-                    String pluginName = String.valueOf(ctx.get("bukkit"));
+                    String pluginName = ctx.get("bukkit");
                     if (pluginName == null || pluginName.isBlank()) {
                         sender.sendMessage("§c[Linlang] 插件名称不能为空。");
                         return;
@@ -276,7 +276,7 @@ public final class CommandListener {
                 ctx -> sendProblem(
                         (CommandSender) ctx.sender(),
                         runtime.audit(),
-                        String.valueOf(ctx.get("code"))
+                        ctx.get("code")
                 ),
                 LinCommand.Permission.perms("linlangruntimebukkit.admin"),
                 LinCommand.ExecTarget.ALL,

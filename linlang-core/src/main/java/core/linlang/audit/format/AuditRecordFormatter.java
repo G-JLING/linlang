@@ -166,7 +166,7 @@ public final class AuditRecordFormatter {
         String color = switch (record.channel()) {
             case OP -> ANSI_OP;
             case INIT, STARTUP -> ANSI_START;
-            case STANDARD, BANNER -> switch (record.level()) {
+            case STANDARD, FILE, BANNER -> switch (record.level()) {
                 case DEBUG -> ANSI_DEBUG;
                 case INFO -> ANSI_INFO;
                 case WARN -> ANSI_WARN;
@@ -230,7 +230,7 @@ public final class AuditRecordFormatter {
             case OP -> "opr";
             case STARTUP -> "str";
             case BANNER -> "ban";
-            case STANDARD -> switch (record.level()) {
+            case STANDARD, FILE -> switch (record.level()) {
                 case DEBUG -> "dbg";
                 case INFO -> "inf";
                 case WARN -> "wrn";

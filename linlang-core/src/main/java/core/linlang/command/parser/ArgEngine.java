@@ -33,22 +33,22 @@ public final class ArgEngine {
 
     static List<LinCommand.TypeResolver> builtin(){
         return List.of(
-                // enum{A|B|C}
+                // 枚举类型：enum(A,B,C)
                 new LinCommand.TypeResolver(){
                     public boolean supports(String id){ return id.equals("enum"); }
                     public Object parse(LinCommand.ParseCtx c, String t){
-                        String[] opts = c.meta().getOrDefault("body","").split("\\|");
+                        String[] opts = c.meta().getOrDefault("body","").split("[|,]");
                         for (String o: opts) if (o.equalsIgnoreCase(t)) return o;
                         // Message key: error.enum.notfound
                         throw new IllegalArgumentException("error.enum.notfound");
                     }
                     public List<String> complete(LinCommand.ParseCtx c, String p){
                         var out=new ArrayList<String>();
-                        for (String o: c.meta().getOrDefault("body","").split("\\|")) if (o.toLowerCase().startsWith(p.toLowerCase())) out.add(o);
+                        for (String o: c.meta().getOrDefault("body","").split("[|,]")) if (o.toLowerCase().startsWith(p.toLowerCase())) out.add(o);
                         return out;
                     }
                 },
-                // int[ a..b ]
+                // 整数范围：int(a..b)
                 new LinCommand.TypeResolver(){
                     public boolean supports(String id){ return id.equals("int"); }
                     public Object parse(LinCommand.ParseCtx c, String t){
@@ -66,7 +66,7 @@ public final class ArgEngine {
                     }
                     public List<String> complete(LinCommand.ParseCtx c, String p){ return List.of(); }
                 },
-                // double[ a..b ]
+                // 小数范围：double(a..b)
                 new LinCommand.TypeResolver(){
                     public boolean supports(String id){ return id.equals("double"); }
                     public Object parse(LinCommand.ParseCtx c, String t){
@@ -84,11 +84,11 @@ public final class ArgEngine {
                     }
                     public List<String> complete(LinCommand.ParseCtx c, String p){ return List.of(); }
                 },
-                // string{regex}
+                // 字符串约束：string(regex=...) / text(regex=...)
                 new LinCommand.TypeResolver(){
-                    public boolean supports(String id){ return id.equals("string") || id.equals("regex"); }
+                    public boolean supports(String id){ return id.equals("string") || id.equals("text") || id.equals("regex"); }
                     public Object parse(LinCommand.ParseCtx c, String t){
-                        String re=c.meta().get("body");
+                        String re=c.meta().getOrDefault("regex", c.meta().get("body"));
                         if (re==null || re.isEmpty()) return t;
                         if (t.matches(re)) return t;
                         // Message key: error.string.regex

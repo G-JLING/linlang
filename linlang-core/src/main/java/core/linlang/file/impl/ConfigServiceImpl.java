@@ -205,7 +205,7 @@ public final class ConfigServiceImpl implements ConfigService {
                 );
             }
         }
-        audit.logger().info(LinMsg.k("linFile.file.fileReloaded"));
+        audit.logger().file(LinMsg.k("linFile.file.fileReloaded"));
     }
 
     /**

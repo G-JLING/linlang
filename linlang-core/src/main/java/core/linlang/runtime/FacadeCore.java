@@ -246,11 +246,13 @@ public final class FacadeCore<P> implements Linlang, Linlang.Configurable, Linla
         return this;
     }
 
-    /** 软重载：刷新前缀 + 发布语言变更（LocaleController 驱动模块跟随） */
+    /** 软重载：重载文件服务并刷新前缀与语言。 */
     @Override
     public void reload() {
         synchronized (lifecycleLock) {
             if (closed) return;
+            this.config.reload();
+            this.language.reload();
             this.prefixController.setPrefix(resolveTotalPrefix(), "facade.reload");
             String locale = effectiveLocale();
             this.localeController.setLocale(locale, "facade.reload");
@@ -266,6 +268,7 @@ public final class FacadeCore<P> implements Linlang, Linlang.Configurable, Linla
             this.language = runtime.createLangService(owner);
 
             String locale = effectiveLocale();
+            this.language.setLocale(locale);
             this.localeController.setLocale(locale, "facade.restart");
 
             rebuildCommands(locale);
@@ -335,10 +338,7 @@ public final class FacadeCore<P> implements Linlang, Linlang.Configurable, Linla
                     "resource", "total-prefix-provider");
         }
 
-        if (out != null) {
-            String v = out.trim();
-            if (!v.isEmpty()) return v;
-        }
+        if (out != null && !out.isBlank()) return out;
         return runtime.adapter().defaultTotalPrefix(this.owner);
     }
 

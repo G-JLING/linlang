@@ -10,6 +10,7 @@ public class CommandMessageKeys {
     public Prompt prompt = new Prompt();
     public Error error = new Error();
     public Help help = new Help();
+    public Info info = new Info();
 
     public static class Prompt {
         public String clickBlock;
@@ -48,6 +49,15 @@ public class CommandMessageKeys {
         public String hoverLeft;
         public String hoverRight;
 
+    }
+
+    public static class Info {
+        public String header;
+        public String plugin;
+        public String authors;
+        public String buildVersion;
+        public String linlangVersion;
+        public String visit;
     }
 
 

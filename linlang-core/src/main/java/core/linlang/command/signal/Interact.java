@@ -11,12 +11,16 @@ public final class Interact {
     public static class Suspend extends RuntimeException {
         public final String kind, prompt; public final long ttlMs;
         public final core.linlang.command.model.Model.Node node;
-        public final int nextIndex; public final java.util.Map<String,Object> vars; public final String[] rest;
+        public final int parameterIndex;
+        public final int tokenIndex;
+        public final java.util.Map<String,Object> vars;
+        public final String[] rest;
         public Suspend(String kind, String prompt, long ttlMs,
-                       core.linlang.command.model.Model.Node node, int nextIndex,
+                       core.linlang.command.model.Model.Node node, int parameterIndex, int tokenIndex,
                        java.util.Map<String,Object> vars, String[] rest){
             this.kind=kind; this.prompt=prompt; this.ttlMs=ttlMs;
-            this.node=node; this.nextIndex=nextIndex; this.vars=vars; this.rest=rest;
+            this.node=node; this.parameterIndex=parameterIndex; this.tokenIndex=tokenIndex;
+            this.vars=vars; this.rest=rest;
         }
     }
 }

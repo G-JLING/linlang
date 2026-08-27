@@ -19,7 +19,7 @@ public final class InteractiveResolvers {
         public boolean supports(String id){ return id.equalsIgnoreCase("event:block"); }
         public Object parse(LinCommand.ParseCtx c, String t){
             requirePlayer(c);
-            throw new Interact.Signal("Kind.CLICK_BLOCK", "prompt.event.block", 20_000);
+            throw new Interact.Signal("CLICK_BLOCK", "prompt.event.block", 20_000);
         }
         public List<String> complete(LinCommand.ParseCtx c, String p){ return List.of("点击一个方块以继续"); }
     }
@@ -28,7 +28,7 @@ public final class InteractiveResolvers {
         public boolean supports(String id){ return id.equalsIgnoreCase("break:block"); }
         public Object parse(LinCommand.ParseCtx c, String t){
             requirePlayer(c);
-            throw new Interact.Signal("Kind.BREAK_BLOCK", "prompt.break.block", 20_000);
+            throw new Interact.Signal("BREAK_BLOCK", "prompt.break.block", 20_000);
         }
         public List<String> complete(LinCommand.ParseCtx c, String p){ return List.of("破坏一个方块以继续"); }
     }
@@ -37,7 +37,7 @@ public final class InteractiveResolvers {
         public boolean supports(String id){ return id.equalsIgnoreCase("place:block"); }
         public Object parse(LinCommand.ParseCtx c, String t){
             requirePlayer(c);
-            throw new Interact.Signal("Kind.PLACE_BLOCK", "prompt.place.block", 20_000);
+            throw new Interact.Signal("PLACE_BLOCK", "prompt.place.block", 20_000);
         }
         public List<String> complete(LinCommand.ParseCtx c, String p){ return List.of("放置一个方块以继续"); }
     }
@@ -46,7 +46,7 @@ public final class InteractiveResolvers {
         public boolean supports(String id){ return id.equalsIgnoreCase("event:entity"); }
         public Object parse(LinCommand.ParseCtx c, String t){
             requirePlayer(c);
-            throw new Interact.Signal("Kind.CLICK_ENTITY", "prompt.event.entity", 20_000);
+            throw new Interact.Signal("CLICK_ENTITY", "prompt.event.entity", 20_000);
         }
         public List<String> complete(LinCommand.ParseCtx c, String p){ return List.of("点击一个实体以继续"); }
     }
@@ -55,7 +55,7 @@ public final class InteractiveResolvers {
         public boolean supports(String id){ return id.equalsIgnoreCase("damage:entity"); }
         public Object parse(LinCommand.ParseCtx c, String t){
             requirePlayer(c);
-            throw new Interact.Signal("Kind.DAMAGE_ENTITY", "prompt.damage.entity", 20_000);
+            throw new Interact.Signal("DAMAGE_ENTITY", "prompt.damage.entity", 20_000);
         }
         public List<String> complete(LinCommand.ParseCtx c, String p){ return List.of("攻击一个实体以继续"); }
     }
@@ -64,7 +64,7 @@ public final class InteractiveResolvers {
         public boolean supports(String id){ return id.equalsIgnoreCase("kill:entity"); }
         public Object parse(LinCommand.ParseCtx c, String t){
             requirePlayer(c);
-            throw new Interact.Signal("Kind.KILL_ENTITY", "prompt.kill.entity", 40_000);
+            throw new Interact.Signal("KILL_ENTITY", "prompt.kill.entity", 40_000);
         }
         public List<String> complete(LinCommand.ParseCtx c, String p){ return List.of("击杀一个实体以继续"); }
     }
@@ -73,7 +73,7 @@ public final class InteractiveResolvers {
         public boolean supports(String id){ return id.equalsIgnoreCase("event:item"); }
         public Object parse(LinCommand.ParseCtx c, String t){
             requirePlayer(c);
-            throw new Interact.Signal("Kind.CLICK_ITEMSTACK", "prompt.event.item", 20_000);
+            throw new Interact.Signal("CLICK_ITEMSTACK", "prompt.event.item", 20_000);
         }
         public List<String> complete(LinCommand.ParseCtx c, String p){ return List.of("点击一个物品以继续"); }
     }
@@ -82,7 +82,7 @@ public final class InteractiveResolvers {
         public boolean supports(String id){ return id.equalsIgnoreCase("shoot:block"); }
         public Object parse(LinCommand.ParseCtx c, String t){
             requirePlayer(c);
-            throw new Interact.Signal("Kind.SHOOT_BLOCK", "prompt.shoot.block", 30_000);
+            throw new Interact.Signal("SHOOT_BLOCK", "prompt.shoot.block", 30_000);
         }
         public List<String> complete(LinCommand.ParseCtx c, String p){ return List.of("用抛射物命中方块以继续"); }
     }

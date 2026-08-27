@@ -8,18 +8,18 @@ import adapter.linlang.bukkit.command.resolvers.BukkitResolvers;
 import api.linlang.audit.LinAudit;
 import api.linlang.audit.LinLog;
 import api.linlang.command.LinCommand;
+import api.linlang.command.group.CommandRoot;
 import api.linlang.command.message.CommandMessages;
 import core.linlang.command.impl.LinCommandImpl;
-import core.linlang.command.model.Model;
-import core.linlang.command.parser.ArgEngine;
+import core.linlang.command.parser.SpecParser;
 import core.linlang.command.signal.Interact;
 import core.linlang.audit.problem.BuiltinProblemCatalog;
+import core.linlang.total.prefix.PrefixAware;
+import org.bukkit.ChatColor;
 import org.bukkit.command.*;
 import org.bukkit.entity.Player;
-import org.bukkit.plugin.Plugin;
 import org.bukkit.plugin.java.JavaPlugin;
 
-import java.lang.reflect.Field;
 import java.util.*;
 
 import net.md_5.bungee.api.chat.BaseComponent;
@@ -27,7 +27,7 @@ import net.md_5.bungee.api.chat.ClickEvent;
 import net.md_5.bungee.api.chat.HoverEvent;
 import net.md_5.bungee.api.chat.TextComponent;
 
-public final class LinlangBukkitCommand implements LinCommand, CommandExecutor, TabCompleter, AutoCloseable {
+public final class LinlangBukkitCommand implements LinCommand, CommandExecutor, TabCompleter, PrefixAware, AutoCloseable {
     private final LinCommandImpl core = new LinCommandImpl();
     private JavaPlugin plugin;
     private LinAudit audit = LinLog.forOwner(null);
@@ -54,8 +54,8 @@ public final class LinlangBukkitCommand implements LinCommand, CommandExecutor, 
                                          ExecTarget target,
                                          Desc desc,
                                          Map<String, Map<String, String>> labelsI18n) {
-        core.register(spec, exec, perm, target, desc, labelsI18n);
         ensureBukkitBinding(spec);
+        core.register(spec, exec, perm, target, desc, labelsI18n);
         return this;
     }
 
@@ -66,50 +66,62 @@ public final class LinlangBukkitCommand implements LinCommand, CommandExecutor, 
                                              ExecTarget target,
                                              I18nSupplier descProvider,
                                              Map<String, I18nSupplier> labelProviders) {
-        core.registerLazy(spec, exec, perm, target, descProvider, labelProviders);
         ensureBukkitBinding(spec);
+        core.registerLazy(spec, exec, perm, target, descProvider, labelProviders);
         return this;
+    }
+
+    @Override
+    public CommandRoot root(String namespace) {
+        ensureBukkitBindingRoot(namespace);
+        return core.root(namespace);
+    }
+
+    @Override
+    public void setTotalPrefix(String prefix) {
+        core.setTotalPrefix(prefix);
     }
 
 
     private void ensureBukkitBinding(String spec){
-        if (root != null) return;
-        String first = spec.split("\\s+")[0];
-        this.root = first;
+        String first = SpecParser.parse(spec).literals.get(0);
+        ensureBukkitBindingRoot(first);
+    }
 
-        // 1) 试从服务器命令表直接取（会返回声明该命令的 PluginCommand）
-        PluginCommand pc = null;
-        try {
-            pc = (this.plugin != null)
-                    ? this.plugin.getServer().getPluginCommand(first)
-                    : org.bukkit.Bukkit.getServer().getPluginCommand(first);
-        } catch (Throwable ignore) { pc = null; }
-
-        // 2) 兜底：遍历所有已加载插件，尝试从各个插件获取（兼容极端情况）
-        if (pc == null) {
-            var pm = (this.plugin != null) ? this.plugin.getServer().getPluginManager()
-                    : org.bukkit.Bukkit.getPluginManager();
-            for (Plugin p : pm.getPlugins()) {
-                try {
-                    PluginCommand cand = p.getServer().getPluginCommand(first);
-                    if (cand != null) { pc = cand; break; }
-                } catch (Throwable ignored) { }
+    private synchronized void ensureBukkitBindingRoot(String first) {
+        if (first == null || first.isBlank()) throw new IllegalArgumentException("root");
+        String normalized = first.trim();
+        if (root != null) {
+            if (!root.equalsIgnoreCase(normalized)) {
+                throw new IllegalArgumentException("同一命令服务不能绑定多个根命令: " + root + ", " + normalized);
             }
+            return;
         }
+        if (plugin == null) throw new IllegalStateException("命令服务尚未安装到 Bukkit 插件");
 
+        PluginCommand pc = plugin.getCommand(normalized);
         if (pc == null) {
+            IllegalStateException exception = new IllegalStateException(
+                    BuiltinProblemCatalog.COMMAND_BUKKIT_BIND_FAILED + ": command=" + normalized
+            );
+            audit.problem().report(
+                    BuiltinProblemCatalog.COMMAND_BUKKIT_BIND_FAILED, exception,
+                    "command", normalized,
+                    "plugin", plugin.getName()
+            );
             throw new IllegalStateException(
                     BuiltinProblemCatalog.COMMAND_BUKKIT_BIND_FAILED
-                            + ": command=" + first
+                            + ": command=" + normalized
             );
         }
         pc.setExecutor(this);
         pc.setTabCompleter(this);
+        this.root = normalized;
     }
 
     // 平台桥
     private final LinCommandImpl.PlatformBridge bridge = new LinCommandImpl.PlatformBridge() {
-        public void msg(Object sender, String text){ ((org.bukkit.command.CommandSender)sender).sendMessage(text); }
+        public void msg(Object sender, String text){ ((org.bukkit.command.CommandSender)sender).sendMessage(colorize(text)); }
         public boolean hasPermission(Object sender, String node){ return node==null || node.isBlank() || ((org.bukkit.command.CommandSender)sender).hasPermission(node); }
         public boolean checkTarget(Object sender, ExecTarget target) {
             if (target == ExecTarget.ALL) return true;
@@ -127,8 +139,8 @@ public final class LinlangBukkitCommand implements LinCommand, CommandExecutor, 
         }
         public void clickable(Object sender, String text, String hover, String command, boolean append){
             if (sender instanceof Player p) {
-                String hv = (hover == null ? "" : hover);
-                BaseComponent[] comps = TextComponent.fromLegacyText(text);
+                String hv = colorize(hover == null ? "" : hover);
+                BaseComponent[] comps = TextComponent.fromLegacyText(colorize(text));
                 ClickEvent ce = new ClickEvent(ClickEvent.Action.RUN_COMMAND, command);
                 HoverEvent he = new HoverEvent(HoverEvent.Action.SHOW_TEXT, TextComponent.fromLegacyText(hv));
                 for (BaseComponent c : comps) { c.setClickEvent(ce); c.setHoverEvent(he); }
@@ -171,8 +183,8 @@ public final class LinlangBukkitCommand implements LinCommand, CommandExecutor, 
                 if (pending != null && !pending.isEmpty()) buf.addAll(pending);
 
                 for (int i = 0; i < texts.length; i++) {
-                    String t  = texts[i] != null ? texts[i] : "";
-                    String hv = (hovers != null && i < hovers.length && hovers[i] != null) ? hovers[i] : "";
+                    String t  = colorize(texts[i] != null ? texts[i] : "");
+                    String hv = colorize((hovers != null && i < hovers.length && hovers[i] != null) ? hovers[i] : "");
                     String cmd= (commands != null && i < commands.length && commands[i] != null) ? commands[i] : "";
 
                     net.md_5.bungee.api.chat.BaseComponent[] comps =
@@ -220,12 +232,7 @@ public final class LinlangBukkitCommand implements LinCommand, CommandExecutor, 
         try {
             core.dispatch(sender, label, args, bridge);
         } catch (Interact.Suspend s) {
-            Player p = (Player) sender;
-            bridge.msg(p, messages.get(s.prompt));
-            hub.await(p, InteractionHub.Kind.valueOf(s.kind), s.ttlMs, result -> {
-                s.vars.put(s.node.params.get(s.nextIndex).name, result);
-                continueParseAndExec(p, bridge, s.node, s.nextIndex + 1, s.vars, s.rest);
-            });
+            awaitInteraction((Player) sender, s);
             return true;
         }
         return true;
@@ -238,7 +245,6 @@ public final class LinlangBukkitCommand implements LinCommand, CommandExecutor, 
     public LinlangBukkitCommand withDefaultResolvers(){
         core.addResolver(new BukkitResolvers.ItemResolver());
         core.addResolver(new BukkitResolvers.PlayerResolver());
-        core.addResolver(new BukkitResolvers.ClickBlockResolver(plugin));
         return this;
     }
 
@@ -254,6 +260,10 @@ public final class LinlangBukkitCommand implements LinCommand, CommandExecutor, 
         return this;
     }
 
+    static String colorize(String text) {
+        return ChatColor.translateAlternateColorCodes('&', text == null ? "" : text);
+    }
+
     public LinlangBukkitCommand withPreferredLocaleTag(String tag) {
         core.withPreferredLocaleTag(tag);
         return this;
@@ -265,81 +275,15 @@ public final class LinlangBukkitCommand implements LinCommand, CommandExecutor, 
     }
 
 
-    public static final class PendingInteract extends RuntimeException {
-        public final InteractionHub.Kind kind; public final String prompt; public final long ttlMs;
-        public PendingInteract(InteractionHub.Kind k, String prompt, long ttlMs){ this.kind=k; this.prompt=prompt; this.ttlMs=ttlMs; }
-    }
-
-    private void continueParseAndExec(Object sender,
-                                      LinCommandImpl.PlatformBridge bridge,
-                                      Model.Node node,
-                                      int nextIndex,
-                                      Map<String,Object> vars,
-                                      String[] rest){
-        // 复制核心解析，从 nextIndex 继续；若再次遇到交互参数，则挂起并在完成后续跑
-        var engine = new ArgEngine(null);
-        var pctx = new ArgEngine.Ctx(vars, Map.of(), plugin, sender);
-        int i = nextIndex;
-        int restIdx = nextIndex; // 对齐策略：第 i 个参数对应 rest[i]
-        try {
-            for (; i < node.params.size(); i++) {
-                var p = node.params.get(i);
-                if (restIdx >= rest.length) {
-                    if (p.optional) {
-                        if (p.defVal != null) {
-                            // 仅处理常见类型的默认值转换
-                            Object dv = p.types.get(0).id.equals("int") ? Integer.parseInt(p.defVal)
-                                    : (p.types.get(0).id.equals("float") ? Double.parseDouble(p.defVal) : p.defVal);
-                            vars.put(p.name, dv);
-                        }
-                        continue;
-                    } else {
-                        throw new IllegalArgumentException("missing <" + p.name + ">");
-                    }
-                }
-
-                String tok = rest[restIdx];
-                Object val = null;
-                Exception last = null;
-                boolean parsed = false;
-                for (var ts : p.types) {
-                    try {
-                        val = engine.parseOne(pctx, ts, tok);
-                        last = null;
-                        parsed = true;
-                        break;
-                    } catch (Interact.Signal sig) {
-                        // 交互型参数：提示并挂起，等待完成后把结果放入 vars，然后从 i+1 继续
-                        Player pl = (Player) sender;
-                        bridge.msg(sender, messages.get(sig.prompt));
-                        int finalI = i;
-                        hub.await(pl, InteractionHub.Kind.valueOf(sig.kind), sig.ttlMs, obj -> {
-                            vars.put(p.name, obj);
-                            continueParseAndExec(pl, bridge, node, finalI + 1, vars, rest);
-                        });
-                        return; // 本次调用到此结束，等交互回调续跑
-                    } catch (Exception ex) {
-                        last = ex;
-                    }
-                }
-                if (!parsed) throw last != null ? last : new IllegalArgumentException("bad argument: " + p.name);
-                vars.put(p.name, val);
-                restIdx++;
+    private void awaitInteraction(Player player, Interact.Suspend suspended) {
+        bridge.msg(player, messages.get(suspended.prompt));
+        hub.await(player, InteractionHub.Kind.valueOf(suspended.kind), suspended.ttlMs, result -> {
+            try {
+                core.resume(player, suspended, result, bridge);
+            } catch (Interact.Suspend next) {
+                awaitInteraction(player, next);
             }
-            // 全部参数就绪，执行
-            var ctx = new LinCommandImpl.CtxImpl(sender, vars);
-            node.exec.fn.run(ctx);
-        } catch (Exception e) {
-            if (!(e instanceof IllegalArgumentException)) {
-                audit.problem().report(
-                        BuiltinProblemCatalog.COMMAND_ARGUMENT_PARSE_FAILED, e,
-                        "command", node.usage,
-                        "sender", sender == null ? "null" : sender.getClass().getName()
-                );
-            }
-            bridge.msg(sender, "§c参数错误: " + e.getMessage());
-            bridge.msg(sender, "§7用法: §f" + node.usage);
-        }
+        });
     }
 
     @Override

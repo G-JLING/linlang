@@ -9,7 +9,12 @@ package core.linlang.command.impl;
 import api.linlang.audit.LinAudit;
 import api.linlang.audit.LinLog;
 import api.linlang.command.LinCommand;
+import api.linlang.command.group.CommandFailure;
+import api.linlang.command.group.CommandFailureHandler;
+import api.linlang.command.group.CommandRoot;
+import api.linlang.command.group.CommandSuccessHandler;
 import api.linlang.command.message.CommandMessages;
+import core.linlang.command.group.CommandGroupImpl;
 import core.linlang.file.runtime.LocaleTag;
 import core.linlang.command.model.Model;
 import core.linlang.command.model.Registration;
@@ -32,6 +37,8 @@ public final class LinCommandImpl implements LinCommand, LocaleAware, PrefixAwar
     // 命令
     private final List<LinCommand.TypeResolver> resolvers = new ArrayList<>();
     private final List<Model.Node> nodes = new ArrayList<>();
+    private final Map<String, Model.Node> signatures = new LinkedHashMap<>();
+    private final Map<String, CommandGroupImpl> roots = new LinkedHashMap<>();
     // 为每个已注册节点保存参数 i18n 标签映射（立即值）：paramName -> ( "zh_CN" -> "行号", ... )
     public final Map<Model.Node, Map<String, Map<String, String>>> paramI18n = new IdentityHashMap<>();
 
@@ -81,6 +88,16 @@ public final class LinCommandImpl implements LinCommand, LocaleAware, PrefixAwar
     // 默认语言：用于 usage/描述/labels 的 i18n 选择与命令框架内建提示的默认回退
     private volatile LocaleTag locale = LocaleTag.parse("zh_CN");
 
+    @Override
+    public synchronized CommandRoot root(String namespace) {
+        CommandGroupImpl commandRoot = roots.computeIfAbsent(
+                normalizeLiteral(namespace),
+                ignored -> new CommandGroupImpl(this, namespace)
+        );
+        bindRoot(namespace);
+        return commandRoot;
+    }
+
     public LinCommand install(String pluginPrefix, Object platform, CommandMessages msgs) {
         this.prefix = pluginPrefix;
         this.platform = platform;
@@ -100,6 +117,7 @@ public final class LinCommandImpl implements LinCommand, LocaleAware, PrefixAwar
     }
 
     public LinCommandImpl withCustomHelpPageSize(int i) {
+        if (i <= 0) throw new IllegalArgumentException("help page size must be positive");
         this.help_page_size = i;
         return this;
     }
@@ -115,6 +133,55 @@ public final class LinCommandImpl implements LinCommand, LocaleAware, PrefixAwar
             paramI18n.put(n, labelsI18n);
         }
         n.usage = buildUsage(n);
+        return this;
+    }
+
+    /**
+     * 注册由命令组展开后的静态命令。
+     */
+    public LinCommandImpl registerGrouped(
+            String spec,
+            CommandExecutor executor,
+            List<String> permissions,
+            ExecTarget target,
+            Desc description,
+            Map<String, Map<String, String>> labels,
+            List<CommandSuccessHandler> successHandlers,
+            List<CommandFailureHandler> failureHandlers
+    ) {
+        Model.Node node = doRegister(
+                spec, executor, permissions, target, description, successHandlers, failureHandlers
+        ).node;
+        if (labels != null && !labels.isEmpty()) {
+            paramI18n.put(node, new LinkedHashMap<>(labels));
+        }
+        node.usage = buildUsage(node);
+        return this;
+    }
+
+    /**
+     * 注册由命令组展开后的动态国际化命令。
+     */
+    public LinCommandImpl registerGroupedLazy(
+            String spec,
+            CommandExecutor executor,
+            List<String> permissions,
+            ExecTarget target,
+            I18nSupplier description,
+            Map<String, I18nSupplier> labels,
+            List<CommandSuccessHandler> successHandlers,
+            List<CommandFailureHandler> failureHandlers
+    ) {
+        Model.Node node = doRegister(
+                spec, executor, permissions, target, null, successHandlers, failureHandlers
+        ).node;
+        if (description != null) {
+            descLazy.put(node, description);
+        }
+        if (labels != null && !labels.isEmpty()) {
+            paramLazy.put(node, new LinkedHashMap<>(labels));
+        }
+        node.usage = buildUsage(node);
         return this;
     }
 
@@ -177,11 +244,42 @@ public final class LinCommandImpl implements LinCommand, LocaleAware, PrefixAwar
 
     // 实际注册实现，返回 Registration 以便后续 .labels() 注入 i18n
     private Registration doRegister(String spec, CommandExecutor exec, Permission perm, ExecTarget target, Desc desc) {
+        List<String> permissions = perm == null || perm.node() == null || perm.node().isBlank()
+                ? List.of()
+                : List.of(perm.node().trim());
+        return doRegister(spec, exec, permissions, target, desc, List.of(), List.of());
+    }
+
+    private synchronized Registration doRegister(
+            String spec,
+            CommandExecutor exec,
+            List<String> permissions,
+            ExecTarget target,
+            Desc desc,
+            List<CommandSuccessHandler> successHandlers,
+            List<CommandFailureHandler> failureHandlers
+    ) {
+        Objects.requireNonNull(exec, "exec");
         var n = SpecParser.parse(spec);
+        bindRoot(n.literals.get(0));
+
+        String signature = canonicalSignature(n);
+        if (signatures.containsKey(signature)) {
+            throw new IllegalArgumentException("命令签名重复: " + signature);
+        }
+
         n.exec = new Model.Exec();
         n.exec.fn = exec;
-        n.exec.perm = (perm == null ? null : perm.node());
+        if (permissions != null) {
+            for (String permission : permissions) {
+                if (permission != null && !permission.isBlank() && !n.exec.permissions.contains(permission.trim())) {
+                    n.exec.permissions.add(permission.trim());
+                }
+            }
+        }
         n.exec.target = (target == null ? ExecTarget.ALL : target);
+        if (successHandlers != null) n.successHandlers.addAll(successHandlers);
+        if (failureHandlers != null) n.failureHandlers.addAll(failureHandlers);
 
         n.descI18n = (desc == null ? java.util.Map.of() : desc.i18n());
 
@@ -189,7 +287,39 @@ public final class LinCommandImpl implements LinCommand, LocaleAware, PrefixAwar
         n.usage = buildUsage(n);
 
         nodes.add(n);
+        signatures.put(signature, n);
         return new Registration(this, n);
+    }
+
+    private synchronized void bindRoot(String namespace) {
+        String value = namespace == null ? "" : namespace.trim();
+        if (value.isEmpty() || value.chars().anyMatch(Character::isWhitespace)) {
+            throw new IllegalArgumentException("根命令必须是单个字面量: " + namespace);
+        }
+        if (root.isEmpty()) {
+            root = value;
+            return;
+        }
+        if (!root.equalsIgnoreCase(value)) {
+            throw new IllegalArgumentException("同一命令服务不能注册多个根命令: " + root + ", " + value);
+        }
+    }
+
+    private static String normalizeLiteral(String value) {
+        if (value == null || value.isBlank()) throw new IllegalArgumentException("namespace");
+        return value.trim().toLowerCase(Locale.ROOT);
+    }
+
+    private static String canonicalSignature(Model.Node node) {
+        StringBuilder value = new StringBuilder();
+        for (String literal : node.literals) {
+            if (!value.isEmpty()) value.append(' ');
+            value.append(literal.toLowerCase(Locale.ROOT));
+        }
+        for (Model.Param parameter : node.params) {
+            value.append(parameter.optional ? " [*]" : " <*>");
+        }
+        return value.toString().trim();
     }
 
     // 命令调度入口
@@ -221,12 +351,12 @@ public final class LinCommandImpl implements LinCommand, LocaleAware, PrefixAwar
                 String authorsStr = String.join(", ", authors);
                 String libVersion = libVersion();
 
-                sendTo(sender, prefix + "§f信息:");
-                sendTo(sender, "§7   |- §f插件: " + name);
-                sendTo(sender, "§7   |- §f作者: " + authorsStr);
-                sendTo(sender, "§7   |- §f构建版本: " + version);
-                sendTo(sender, "§7   |- §f琳琅版本: " + libVersion);
-                sendTo(sender, "§7   |- §f访问: jling.me | magicpowered.cn");
+                bridge.msg(sender, prefix + messages.get("info.header"));
+                bridge.msg(sender, messages.get("info.plugin", "value", name));
+                bridge.msg(sender, messages.get("info.authors", "value", authorsStr));
+                bridge.msg(sender, messages.get("info.build-version", "value", version));
+                bridge.msg(sender, messages.get("info.linlang-version", "value", libVersion));
+                bridge.msg(sender, messages.get("info.visit", "value", "jling.me | magicpowered.cn"));
                 return true;
             } catch (Exception e) {
                 audit.problem().report(
@@ -240,7 +370,11 @@ public final class LinCommandImpl implements LinCommand, LocaleAware, PrefixAwar
         boolean anyLiteralMatched = false;
         boolean anyTargetDenied = false;
         boolean anyPermDenied = false;
-        boolean anySecondLiteralExact = false;
+        Model.Node targetDeniedNode = null;
+        Model.Node permissionDeniedNode = null;
+        Model.Node argumentFailedNode = null;
+        Map<String, Object> argumentFailedVars = Map.of();
+        Throwable argumentFailure = null;
 
         // 若首个参数恰好是某个「二级字面量」，优先只在这些分支中路由，以避免落到 root 分支
         List<Model.Node> exactSecond = new ArrayList<>();
@@ -267,147 +401,35 @@ public final class LinCommandImpl implements LinCommand, LocaleAware, PrefixAwar
             boolean ok = matchLiterals(n.literals, label, args);
             if (!ok) continue;
             anyLiteralMatched = true;
-            if (n.literals.size() > 1 && args.length >= 1 && n.literals.get(1).equalsIgnoreCase(args[0])) {
-                anySecondLiteralExact = true;
-            }
             int consumed = n.literals.size() - 1;
             if (consumed < 0) consumed = 0;
             String[] rest = Arrays.copyOfRange(args, consumed, args.length);
-            // 解析
-            var engine = new ArgEngine(resolvers);
             var vars = new LinkedHashMap<String, Object>();
-            var pctx = new ArgEngine.Ctx(vars, Map.of(), platform, sender);
-            int i = 0;
+
+            if (n.exec.target != ExecTarget.ALL && !bridge.checkTarget(sender, n.exec.target)) {
+                anyTargetDenied = true;
+                if (targetDeniedNode == null) targetDeniedNode = n;
+                continue;
+            }
+            if (!hasPermissions(sender, bridge, n.exec.permissions)) {
+                anyPermDenied = true;
+                if (permissionDeniedNode == null) permissionDeniedNode = n;
+                continue;
+            }
+
             try {
-                for (int pIdx = 0; pIdx < n.params.size(); pIdx++) {
-                    var p = n.params.get(pIdx);
-
-                    // 去掉注释(@...)与类型(:type...)以及其后的残留空格
-                    String varKey = (p.name == null ? "" : p.name.trim());
-                    int spKey = varKey.indexOf(' ');
-                    if (spKey >= 0) varKey = varKey.substring(0, spKey);
-                    int colonKey = varKey.indexOf(':');
-                    if (colonKey >= 0) varKey = varKey.substring(0, colonKey);
-
-                    // 若没有更多 token
-                    if (i >= rest.length) {
-                        if (p.optional) {
-                            // 可选参数：若存在默认值，按首个类型（默认做 String）进行简单转换
-                            if (p.defVal != null) {
-                                String t0 = (p.types == null || p.types.isEmpty()) ? typeHint(p.name) : p.types.get(0).id;
-                                if (t0 == null) t0 = "string";
-                                vars.put(varKey, coerceDefault(p.defVal, t0));
-                            }
-                            continue;
-                        } else {
-                            throw new IllegalArgumentException("missing <" + varKey + ">");
-                        }
-                    }
-
-                    // 是最后一个参数吗？
-                    boolean isLastParam = (pIdx == n.params.size() - 1);
-
-                    // 从原始 token 提取类型提示，如 int/double/string
-                    String hinted = typeHint(p.name);
-                    boolean anyStringType = (p.types == null || p.types.isEmpty())
-                            ? (hinted == null || "string".equalsIgnoreCase(hinted))
-                            : p.types.stream().anyMatch(ts -> "string".equalsIgnoreCase(ts.id));
-
-                    // 最后一个且可按字符串处理，即贪婪吞并余下 token（支持带空格的新名称等）
-                    if (isLastParam && anyStringType) {
-                        String joined = String.join(" ", java.util.Arrays.copyOfRange(rest, i, rest.length));
-                        vars.put(varKey, joined);
-                        // 消费剩余的
-                        i = rest.length;
-                        continue;
-                    }
-                    // 非字符串类型的最后一个参数，不得贪婪！若余下 token 大于 1 则该分支不匹配
-                    if (isLastParam && !anyStringType) {
-                        if ((rest.length - i) > 1) {
-                            // 回溯到外层
-                            throw new IllegalArgumentException("too many arguments for non-string tail param");
-                        }
-                    }
-
-                    String tok = rest[i];
-                    Object val = null;
-                    Exception last = null;
-
-                    // 先走解析器
-                    if (p.types != null && !p.types.isEmpty()) {
-                        for (var ts : p.types) {
-                            try {
-                                val = engine.parseOne(pctx, ts, tok);
-                                last = null;
-                                break;
-                            } catch (Exception ex) {
-                                last = ex;
-                            }
-                        }
-                    }
-
-                    // 若没有注册的类型解析器，但存在类型提示，则做基础转换（并尝试读取范围约束）
-                    if (val == null) {
-                        if (hinted != null && hinted.equalsIgnoreCase("int")) {
-                            int v = Integer.parseInt(tok);
-                            int[] range = intRange(p.name);
-                            if (range != null) {
-                                if (v < range[0] || v > range[1])
-                                    throw new IllegalArgumentException("int out of range");
-                            }
-                            val = v;
-                        } else if (hinted != null && hinted.equalsIgnoreCase("double")) {
-                            double v = Double.parseDouble(tok);
-                            val = v;
-                        } else if (anyStringType) {
-                            val = tok;
-                        }
-                    }
-
-                    if (last != null && val == null) throw last;
-                    if (val == null) throw new IllegalArgumentException("bad argument for param " + varKey);
-
-                    vars.put(varKey, val);
-                    i++;
-                }
-
-                // 若还有多余的 token 未被消费，则该分支不匹配
-                if (i < rest.length) {
-                    continue;
-                }
-
-                // 解析成功后再校验执行者与权限
-                if (n.exec.target != ExecTarget.ALL && !bridge.checkTarget(sender, n.exec.target)) {
-                    anyTargetDenied = true; // 记下被拦截
-                    continue;               // 尝试其他分支
-                }
-                if (n.exec.perm != null && !bridge.hasPermission(sender, n.exec.perm)) {
-                    anyPermDenied = true;   // 记下无权限
-                    continue;               // 尝试其他分支
-                }
-
-                // 执行
-                var ctx = new CtxImpl(sender, vars);
-                try {
-                    n.exec.fn.run(ctx);
-                } catch (Exception ex) {
-                    audit.problem().report(
-                            BuiltinProblemCatalog.COMMAND_EXECUTION_FAILED, ex,
-                            "command", n.usage,
-                            "sender", sender == null ? "null" : sender.getClass().getName()
-                    );
-                    bridge.msg(sender, prefix + messages.get("error.exception"));
-                    return true;
-                }
+                parseArguments(n, sender, vars, rest, 0, 0);
+                executeNode(n, sender, vars, bridge);
                 return true;
-            } catch (Interact.Signal sig) {
-                throw new Interact.Suspend(
-                        sig.kind, sig.prompt, sig.ttlMs, n, i, new java.util.LinkedHashMap<>(vars), rest);
             } catch (Interact.Suspend s) {
                 throw s;
             } catch (Exception e) {
                 // 参数阶段出错
                 if (!(e instanceof IllegalArgumentException)) {
+                    notifyFailure(
+                            n, new CtxImpl(sender, vars, locale(), bridge.checkTarget(sender, ExecTarget.PLAYER)),
+                            CommandFailure.Reason.ARGUMENT, e
+                    );
                     bridge.msg(sender, prefix + messages.get("error.exception"));
                     audit.problem().report(
                             BuiltinProblemCatalog.COMMAND_ARGUMENT_PARSE_FAILED, e,
@@ -416,25 +438,42 @@ public final class LinCommandImpl implements LinCommand, LocaleAware, PrefixAwar
                     );
                     return true;
                 }
-                if (bestUsage == null) bestUsage = buildUsage(n);
+                if (bestUsage == null) {
+                    bestUsage = buildUsage(n);
+                    argumentFailedNode = n;
+                    argumentFailedVars = new LinkedHashMap<>(vars);
+                    argumentFailure = e;
+                }
                 continue;
             }
         }
 
         // 匹配失败原因
-        if (!anyLiteralMatched || (!anySecondLiteralExact && args.length >= 1)) {
+        if (!anyLiteralMatched) {
             bridge.msg(sender, prefix + messages.get("error.unknown-command"));
             return false;
         }
         if (anyPermDenied) {
+            notifyFailure(
+                    permissionDeniedNode, new CtxImpl(sender, Map.of(), locale(), bridge.checkTarget(sender, ExecTarget.PLAYER)),
+                    CommandFailure.Reason.PERMISSION, null
+            );
             bridge.msg(sender, prefix + messages.get("error.no-perm"));
             return true;
         }
         if (anyTargetDenied) {
+            notifyFailure(
+                    targetDeniedNode, new CtxImpl(sender, Map.of(), locale(), bridge.checkTarget(sender, ExecTarget.PLAYER)),
+                    CommandFailure.Reason.EXECUTION_TARGET, null
+            );
             bridge.msg(sender, prefix + messages.get("error.exec-target"));
             return true;
         }
         if (bestUsage != null) {
+            notifyFailure(
+                    argumentFailedNode, new CtxImpl(sender, argumentFailedVars, locale(), bridge.checkTarget(sender, ExecTarget.PLAYER)),
+                    CommandFailure.Reason.ARGUMENT, argumentFailure
+            );
             bridge.msg(sender, prefix + messages.get("error.bad-arg"));
             bridge.msg(sender, messages.get("help.usage") + "§f" + bestUsage);
             return true;
@@ -444,54 +483,183 @@ public final class LinCommandImpl implements LinCommand, LocaleAware, PrefixAwar
         return false;
     }
 
-    // 提取类型提示
-    private static String typeHint(String rawName) {
-        if (rawName == null) return null;
-        String s = rawName.trim();
-        int sp = s.indexOf(' ');
-        if (sp >= 0) s = s.substring(0, sp);
-        int c = s.indexOf(':');
-        if (c < 0) return null;
-        s = s.substring(c + 1);
-        int brace = s.indexOf('{');
-        int bracket = s.indexOf('[');
-        int at = s.indexOf('@');
-        int end = s.length();
-        if (brace >= 0) end = Math.min(end, brace);
-        if (bracket >= 0) end = Math.min(end, bracket);
-        if (at >= 0) end = Math.min(end, at);
-        s = s.substring(0, end).trim();
-        return s.isEmpty() ? null : s;
+    /**
+     * 使用交互结果恢复被挂起的命令。
+     */
+    public void resume(Object sender, Interact.Suspend suspended, Object result, PlatformBridge bridge) {
+        Objects.requireNonNull(suspended, "suspended");
+        Model.Node node = suspended.node;
+        Map<String, Object> vars = new LinkedHashMap<>(suspended.vars);
+        Model.Param parameter = node.params.get(suspended.parameterIndex);
+        vars.put(parameter.name, result);
+        try {
+            parseArguments(
+                    node, sender, vars, suspended.rest,
+                    suspended.parameterIndex + 1, suspended.tokenIndex + 1
+            );
+            executeNode(node, sender, vars, bridge);
+        } catch (Interact.Suspend next) {
+            throw next;
+        } catch (Exception exception) {
+            CtxImpl context = new CtxImpl(
+                    sender, vars, locale(), bridge.checkTarget(sender, ExecTarget.PLAYER)
+            );
+            notifyFailure(node, context, CommandFailure.Reason.ARGUMENT, exception);
+            if (!(exception instanceof IllegalArgumentException)) {
+                audit.problem().report(
+                        BuiltinProblemCatalog.COMMAND_ARGUMENT_PARSE_FAILED, exception,
+                        "command", node.usage,
+                        "sender", sender == null ? "null" : sender.getClass().getName()
+                );
+            }
+            bridge.msg(sender, prefix + messages.get("error.bad-arg"));
+            bridge.msg(sender, messages.get("help.usage") + "§f" + buildUsage(node));
+        }
     }
 
-    // 提取整数范围约束
-    private static int[] intRange(String rawName) {
-        if (rawName == null) return null;
-        String s = rawName;
-        int lb = s.indexOf('[');
-        int rb = s.indexOf(']');
-        if (lb < 0 || rb < 0 || rb <= lb) return null;
-        String mid = s.substring(lb + 1, rb);
-        int dots = mid.indexOf("..");
-        if (dots < 0) return null;
-        try {
-            int min = Integer.parseInt(mid.substring(0, dots).trim());
-            int max = Integer.parseInt(mid.substring(dots + 2).trim());
-            return new int[]{min, max};
-        } catch (Exception ignore) {
-            return null;
+    private void parseArguments(
+            Model.Node node,
+            Object sender,
+            Map<String, Object> vars,
+            String[] tokens,
+            int startParameter,
+            int startToken
+    ) throws Exception {
+        ArgEngine engine = new ArgEngine(resolvers);
+        ArgEngine.Ctx context = new ArgEngine.Ctx(vars, Map.of(), platform, sender);
+        int tokenIndex = startToken;
 
+        for (int parameterIndex = startParameter; parameterIndex < node.params.size(); parameterIndex++) {
+            Model.Param parameter = node.params.get(parameterIndex);
+            if (tokenIndex >= tokens.length) {
+                if (!parameter.optional) {
+                    throw new IllegalArgumentException("missing <" + parameter.name + ">");
+                }
+                if (parameter.defVal != null) {
+                    vars.put(parameter.name, parseUnion(engine, context, parameter, parameter.defVal));
+                }
+                continue;
+            }
+
+            boolean text = parameter.types.stream().anyMatch(type -> "text".equalsIgnoreCase(type.id));
+            String token = text
+                    ? String.join(" ", Arrays.copyOfRange(tokens, tokenIndex, tokens.length))
+                    : tokens[tokenIndex];
+            if (!text && parameterIndex == node.params.size() - 1 && tokens.length - tokenIndex > 1) {
+                throw new IllegalArgumentException("too many arguments for tail param");
+            }
+
+            try {
+                vars.put(parameter.name, parseUnion(engine, context, parameter, token));
+            } catch (Interact.Signal signal) {
+                throw new Interact.Suspend(
+                        signal.kind, signal.prompt, signal.ttlMs,
+                        node, parameterIndex, tokenIndex,
+                        new LinkedHashMap<>(vars), tokens
+                );
+            }
+            tokenIndex = text ? tokens.length : tokenIndex + 1;
         }
+
+        if (tokenIndex < tokens.length) {
+            throw new IllegalArgumentException("too many arguments");
+        }
+    }
+
+    private static Object parseUnion(
+            ArgEngine engine,
+            ArgEngine.Ctx context,
+            Model.Param parameter,
+            String token
+    ) throws Exception {
+        Exception last = null;
+        for (Model.TypeSpec type : parameter.types) {
+            try {
+                return engine.parseOne(context, type, token);
+            } catch (Interact.Signal signal) {
+                throw signal;
+            } catch (Exception exception) {
+                last = exception;
+            }
+        }
+        if (last != null) throw last;
+        throw new IllegalArgumentException("bad argument for param " + parameter.name);
+    }
+
+    private void executeNode(
+            Model.Node node,
+            Object sender,
+            Map<String, Object> vars,
+            PlatformBridge bridge
+    ) {
+        CtxImpl context = new CtxImpl(
+                sender, vars, locale(), bridge.checkTarget(sender, ExecTarget.PLAYER)
+        );
+        try {
+            node.exec.fn.run(context);
+            notifySuccess(node, context);
+        } catch (Exception exception) {
+            notifyFailure(node, context, CommandFailure.Reason.EXECUTION, exception);
+            audit.problem().report(
+                    BuiltinProblemCatalog.COMMAND_EXECUTION_FAILED, exception,
+                    "command", node.usage,
+                    "sender", sender == null ? "null" : sender.getClass().getName()
+            );
+            bridge.msg(sender, prefix + messages.get("error.exception"));
+        }
+    }
+
+    private static boolean hasPermissions(Object sender, PlatformBridge bridge, List<String> permissions) {
+        if (permissions == null || permissions.isEmpty()) return true;
+        for (String permission : permissions) {
+            if (permission != null && !permission.isBlank() && !bridge.hasPermission(sender, permission)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private void notifySuccess(Model.Node node, CtxImpl context) {
+        if (node == null || node.successHandlers == null) return;
+        for (CommandSuccessHandler handler : node.successHandlers) {
+            try {
+                handler.handle(context);
+            } catch (Throwable exception) {
+                reportGroupCallbackFailure(node, "success", handler, exception);
+            }
+        }
+    }
+
+    private void notifyFailure(Model.Node node, CtxImpl context, CommandFailure.Reason reason, Throwable cause) {
+        if (node == null || node.failureHandlers == null) return;
+        CommandFailure failure = new CommandFailure(context, reason, node.usage, cause);
+        for (CommandFailureHandler handler : node.failureHandlers) {
+            try {
+                handler.handle(failure);
+            } catch (Throwable exception) {
+                reportGroupCallbackFailure(node, "failure", handler, exception);
+            }
+        }
+    }
+
+    private void reportGroupCallbackFailure(Model.Node node, String stage, Object handler, Throwable exception) {
+        audit.problem().report(
+                BuiltinProblemCatalog.COMMAND_GROUP_CALLBACK_FAILED, exception,
+                "command", node == null ? "unknown" : node.usage,
+                "stage", stage,
+                "handler", handler == null ? "null" : handler.getClass().getName()
+        );
     }
 
     // tab 补全实现
     public List<String> tab(Object sender, String label, String[] args, PlatformBridge bridge) {
+        String[] input = args == null ? new String[0] : args;
         // 分页
-        if (args.length >= 1 && "help".equalsIgnoreCase(args[0])) {
+        if (input.length >= 1 && "help".equalsIgnoreCase(input[0])) {
             int totalPages = Math.max(1, (int) Math.ceil(nodes.size() / (double) help_page_size));
-            if (args.length == 1) return List.of("1");
-            if (args.length == 2 && totalPages > 1) {
-                String pref = args[1];
+            if (input.length == 1) return List.of("1");
+            if (input.length == 2 && totalPages > 1) {
+                String pref = input[1];
                 List<String> pages = new ArrayList<>();
                 for (int i = 1; i <= totalPages; i++) {
                     String s = String.valueOf(i);
@@ -502,96 +670,64 @@ public final class LinCommandImpl implements LinCommand, LocaleAware, PrefixAwar
             return List.of();
         }
 
-        // 当仅输入根命令或根命令后紧跟空格时，直接枚举所有二级子命令
-        if (args.length == 0 || (args.length == 1 && (args[0] == null || args[0].isEmpty()))) {
-            java.util.LinkedHashSet<String> subs = new java.util.LinkedHashSet<>();
-            for (var n : nodes) {
-                if (n.literals.size() > 1) subs.add(n.literals.get(1));
-            }
-            return new java.util.ArrayList<>(subs);
-        }
+        ArgEngine engine = new ArgEngine(resolvers);
+        LinkedHashSet<String> literals = new LinkedHashSet<>();
+        LinkedHashSet<String> arguments = new LinkedHashSet<>();
+        int cursor = Math.max(0, input.length - 1);
+        String prefixToken = input.length == 0 || input[cursor] == null ? "" : input[cursor];
 
-        var engine = new ArgEngine(resolvers);
-        var high = new LinkedHashSet<String>(); // 有二级字面量的分支候选
-        var low = new LinkedHashSet<String>(); // 仅 root 的分支候选
+        for (Model.Node node : nodes) {
+            if (node.literals.isEmpty() || !node.literals.get(0).equalsIgnoreCase(label)) continue;
+            if (node.exec.target != ExecTarget.ALL && !bridge.checkTarget(sender, node.exec.target)) continue;
+            if (!hasPermissions(sender, bridge, node.exec.permissions)) continue;
 
-        for (var n : nodes) {
-            boolean matched = matchLiterals(n.literals, label, args, true);
-            if (!matched) continue;
-            int consumed = Math.max(0, n.literals.size() - 1);
-            if (consumed > args.length) consumed = args.length;
-            String[] rest = Arrays.copyOfRange(args, consumed, args.length);
-
-            // 若正在输入第一个参数，并且该分支有二级字面量，则优先补全该二级字面量的前缀
-            if (consumed == 0 && args.length == 1 && n.literals.size() > 1) {
-                String need = n.literals.get(1);
-                String prefTok = args[0] == null ? "" : args[0];
-                if (!prefTok.isEmpty() && need.toLowerCase(java.util.Locale.ROOT).startsWith(prefTok.toLowerCase(java.util.Locale.ROOT))) {
-                    high.add(need);
-                    // 不再为该分支填充参数候选
-                    continue;
-                }
-            }
-            if (n.params.isEmpty()) {
-                if (n.literals.size() > 1) {
-                    String need = n.literals.get(1);
-                    if (args.length == 0) {
-                        high.add(need);
-                    } else if (args.length == 1) {
-                        String prefTok = args[0] == null ? "" : args[0];
-                        if (need.toLowerCase(java.util.Locale.ROOT).startsWith(prefTok.toLowerCase(java.util.Locale.ROOT))) {
-                            high.add(need);
-                        }
-                    }
-                }
-                continue;
-            }
-            var vars = new LinkedHashMap<String, Object>();
-            var pctx = new ArgEngine.Ctx(vars, Map.of(), platform, sender);
-            int pi = 0;
-            for (; pi < n.params.size() && pi < rest.length - 1; pi++) {
-                String tok = rest[pi];
-                var param = n.params.get(pi);
-                boolean ok = false;
-                for (var ts : param.types) {
-                    try {
-                        vars.put(param.name, engine.parseOne(pctx, ts, tok));
-                        ok = true;
-                        break;
-                    } catch (Exception ignore) {
-                    }
-                }
-                if (!ok) {
-                    pi = -1;
+            int literalCount = node.literals.size() - 1;
+            boolean prefixMatches = true;
+            int completedLiterals = Math.min(cursor, literalCount);
+            for (int i = 0; i < completedLiterals; i++) {
+                if (!node.literals.get(i + 1).equalsIgnoreCase(input[i])) {
+                    prefixMatches = false;
                     break;
                 }
             }
-            if (pi < 0) continue;
-            int completeIdx = Math.min(rest.length == 0 ? 0 : rest.length - 1, n.params.size() - 1);
-            var param = n.params.get(completeIdx);
-            String prefixTok = rest.length == 0 ? "" : rest[rest.length - 1];
-            var bucket = (n.literals.size() > 1 ? high : low);
-            // 如果正在补全第一个子命令 token，也加入二级字面量候选
-            if (consumed == 0 && args.length <= 1 && n.literals.size() > 1) {
-                String need = n.literals.get(1);
-                String prefTok = (args.length == 0 ? "" : (args[0] == null ? "" : args[0]));
-                if (prefTok.isEmpty() || need.toLowerCase(java.util.Locale.ROOT).startsWith(prefTok.toLowerCase(java.util.Locale.ROOT))) {
-                    high.add(need);
+            if (!prefixMatches) continue;
+
+            if (cursor < literalCount) {
+                String candidate = node.literals.get(cursor + 1);
+                if (candidate.regionMatches(true, 0, prefixToken, 0, prefixToken.length())) {
+                    literals.add(candidate);
+                }
+                continue;
+            }
+
+            int parameterIndex = cursor - literalCount;
+            if (parameterIndex < 0 || parameterIndex >= node.params.size()) continue;
+            Map<String, Object> vars = new LinkedHashMap<>();
+            ArgEngine.Ctx context = new ArgEngine.Ctx(vars, Map.of(), platform, sender);
+            boolean valid = true;
+            for (int i = 0; i < parameterIndex; i++) {
+                Model.Param parameter = node.params.get(i);
+                try {
+                    vars.put(parameter.name, parseUnion(engine, context, parameter, input[literalCount + i]));
+                } catch (Exception exception) {
+                    valid = false;
+                    break;
                 }
             }
-            for (var ts : param.types) bucket.addAll(engine.completeOne(pctx, ts, prefixTok));
-            if (param.desc != null && !param.desc.isBlank()) bucket.add(param.desc);
+            if (!valid) continue;
+
+            Model.Param parameter = node.params.get(parameterIndex);
+            for (Model.TypeSpec type : parameter.types) {
+                List<String> values = engine.completeOne(context, type, prefixToken);
+                if (values != null) arguments.addAll(values);
+            }
         }
 
-        if (!high.isEmpty()) return new ArrayList<>(high);
-        if (!low.isEmpty()) return new ArrayList<>(low);
-
-        String pref = args.length == 0 ? "" : args[0].toLowerCase(java.util.Locale.ROOT);
-        for (var n : nodes) {
-            String first = n.literals.isEmpty() ? "" : n.literals.get(0);
-            if (first.toLowerCase(java.util.Locale.ROOT).startsWith(pref)) low.add(first);
+        if (cursor == 0) {
+            if ("help".regionMatches(true, 0, prefixToken, 0, prefixToken.length())) literals.add("help");
+            if ("info".regionMatches(true, 0, prefixToken, 0, prefixToken.length())) literals.add("info");
         }
-        return new ArrayList<>(low);
+        return new ArrayList<>(literals.isEmpty() ? arguments : literals);
     }
 
     public void addResolver(LinCommand.TypeResolver r) {
@@ -606,33 +742,10 @@ public final class LinCommandImpl implements LinCommand, LocaleAware, PrefixAwar
 
     // —— 工具 —— //
     private static boolean matchLiterals(List<String> lits, String label, String[] args) {
-        return matchLiterals(lits, label, args, false);
-    }
-
-    private static boolean matchLiterals(List<String> lits, String label, String[] args, boolean prefix) {
         if (lits.isEmpty()) return false;
         if (!lits.get(0).equalsIgnoreCase(label)) {
             return false;
         }
-        // TAB 模式：只要已有的字面量都匹配即可
-        if (prefix) {
-            int provided = Math.min(args.length, Math.max(0, lits.size() - 1));
-            for (int i = 1; i <= provided; i++) {
-                String tok = args[i - 1] == null ? "" : args[i - 1];
-                String need = lits.get(i);
-                boolean ok;
-                if (i < args.length) {
-                    // 对于已完整输入的前置字面量，要求完全匹配
-                    ok = need.equalsIgnoreCase(tok);
-                } else {
-                    // 对于当前正在输入的最后一个字面量，允许前缀匹配
-                    ok = need.regionMatches(true, 0, tok, 0, tok.length());
-                }
-                if (!ok) return false;
-            }
-            return true;
-        }
-        // 普通模式：要求完全匹配全部字面量
         for (int i = 1; i < lits.size(); i++) {
             if (i > args.length) {
                 return false;
@@ -645,15 +758,6 @@ public final class LinCommandImpl implements LinCommand, LocaleAware, PrefixAwar
         return true;
     }
 
-    private static Object coerceDefault(String s, String type) { // 简化
-        if (type == null) return s;
-        return switch (type) {
-            case "int" -> Integer.parseInt(s);
-            case "double" -> Double.parseDouble(s);
-            default -> s;
-        };
-    }
-
     // 内置 help 实现
     private void renderHelp(Object sender, PlatformBridge bridge, int page) {
         // Header
@@ -662,7 +766,10 @@ public final class LinCommandImpl implements LinCommand, LocaleAware, PrefixAwar
 
         // Pagination
         final int pageSize = help_page_size;
-        int total = nodes.size();
+        List<Model.Node> visibleNodes = nodes.stream()
+                .filter(node -> hasPermissions(sender, bridge, node.exec.permissions))
+                .toList();
+        int total = visibleNodes.size();
         int totalPages = Math.max(1, (int) Math.ceil(total / (double) pageSize));
         int cur = Math.max(1, Math.min(page, totalPages));
         int from = (cur - 1) * pageSize;
@@ -676,7 +783,7 @@ public final class LinCommandImpl implements LinCommand, LocaleAware, PrefixAwar
                 : (localeTag.contains("-") ? localeTag.substring(0, localeTag.indexOf('-')) : localeTag);
 
         for (int i = from; i < to; i++) {
-            var n = nodes.get(i);
+            var n = visibleNodes.get(i);
             String usagePerSender = buildUsage(n);
             String desc = "";
 
@@ -703,11 +810,20 @@ public final class LinCommandImpl implements LinCommand, LocaleAware, PrefixAwar
                 if (desc == null) desc = n.descI18n.get("en_GB");
                 if (desc == null && !n.descI18n.isEmpty()) desc = n.descI18n.values().iterator().next();
             }
-            bridge.msg(sender, "§7   |- §f" + usagePerSender + "§7 - " + (desc == null ? "" : desc));
+            boolean targetAvailable = n.exec.target == ExecTarget.ALL
+                    || bridge.checkTarget(sender, n.exec.target);
+            String description = desc == null ? "" : desc;
+            if (targetAvailable) {
+                bridge.msg(sender, "§7   |- §f" + usagePerSender + "§7 - " + description);
+            } else {
+                bridge.msg(sender, "§8   |- " + usagePerSender + " - §8" + description);
+            }
         }
 
         if (total > pageSize) {
-            String root = nodes.isEmpty() || nodes.get(0).literals.isEmpty() ? "" : nodes.get(0).literals.get(0);
+            String root = visibleNodes.isEmpty() || visibleNodes.get(0).literals.isEmpty()
+                    ? this.root
+                    : visibleNodes.get(0).literals.get(0);
             boolean atFirst = cur <= 1;
             boolean atLast = cur >= totalPages;
 
@@ -763,29 +879,24 @@ public final class LinCommandImpl implements LinCommand, LocaleAware, PrefixAwar
 
     }
 
-    private void sendTo(Object sender, String text) {
-        if (sender == null) {
-            audit.logger().info(text);
-            return;
-        }
-        try {
-
-            var m = sender.getClass().getMethod("sendMessage", String.class);
-            m.invoke(sender, text);
-        } catch (Throwable t) {
-            audit.logger().info(text);
-        }
-    }
-
-
     // Ctx 实现
     public static final class CtxImpl implements LinCommand.Ctx {
         final Object sender;
         final Map<String, Object> vars;
+        final java.util.Locale locale;
+        final boolean player;
 
         public CtxImpl(Object s, Map<String, Object> v) {
+            this(s, v, java.util.Locale.getDefault().toLanguageTag(), false);
+        }
+
+        public CtxImpl(Object s, Map<String, Object> v, String locale, boolean player) {
             sender = s;
             vars = v;
+            this.locale = locale == null || locale.isBlank()
+                    ? java.util.Locale.getDefault()
+                    : java.util.Locale.forLanguageTag(locale.replace('_', '-'));
+            this.player = player;
         }
 
         public Object sender() {
@@ -802,8 +913,14 @@ public final class LinCommandImpl implements LinCommand, LocaleAware, PrefixAwar
             return (T) vars.getOrDefault(n, def);
         }
 
+        @SuppressWarnings("unchecked")
+        public <T> T requirePlayer(String err) {
+            if (!player) throw new IllegalStateException(err);
+            return (T) sender;
+        }
+
         public java.util.Locale locale() {
-            return java.util.Locale.getDefault();
+            return locale;
         }
     }
 

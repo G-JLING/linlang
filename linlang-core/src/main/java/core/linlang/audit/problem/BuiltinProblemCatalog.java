@@ -36,6 +36,7 @@ public final class BuiltinProblemCatalog {
     public static final String COMMAND_EXECUTION_FAILED = "LIN-COMMAND-EXECUTE-FAIL";
     public static final String COMMAND_ARGUMENT_PARSE_FAILED = "LIN-COMMAND-ARGUMENT-PARSE-FAIL";
     public static final String COMMAND_LOCALE_REFRESH_FAILED = "LIN-COMMAND-LOCALE-REFRESH-FAIL";
+    public static final String COMMAND_GROUP_CALLBACK_FAILED = "LIN-COMMAND-GROUP-CALLBACK-FAIL";
 
     public static final String CONFIG_SAVE_FAILED = "LIN-FILE-CONFIG-SAVE-FAIL";
     public static final String CONFIG_RELOAD_FAILED = "LIN-FILE-CONFIG-RELOAD-FAIL";
@@ -157,6 +158,9 @@ public final class BuiltinProblemCatalog {
         add(values, COMMAND_LOCALE_REFRESH_FAILED, "Command",
                 "命令用法和参数说明无法刷新到新语言。",
                 "检查延迟语言字段提供者以及命令描述、参数标签的实现。");
+        add(values, COMMAND_GROUP_CALLBACK_FAILED, "Command",
+                "命令组的公共结果回调执行失败。",
+                "根据 command、stage 与 handler 上下文检查命令组回调代码。");
 
         add(values, CONFIG_SAVE_FAILED, "File",
                 "配置对象无法写入文件。",

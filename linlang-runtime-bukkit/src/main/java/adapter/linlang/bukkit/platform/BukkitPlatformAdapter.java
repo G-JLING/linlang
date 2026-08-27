@@ -135,9 +135,7 @@ public final class BukkitPlatformAdapter implements PlatformAdapter<JavaPlugin> 
     private static String safe(Supplier<String> s) {
         try {
             String v = (s == null) ? null : s.get();
-            if (v == null) return "";
-            v = v.trim();
-            return v;
+            return v == null ? "" : v;
         } catch (Throwable ignore) {
             return "";
         }

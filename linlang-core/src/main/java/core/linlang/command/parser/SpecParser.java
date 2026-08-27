@@ -5,17 +5,22 @@ package core.linlang.command.parser;
 import core.linlang.command.model.Model;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 /**
  * 解析命令 DSL：
  * <pre>
- *   root sub literal <name:type{rules} @描述> [opt:int=1 @说明]
+ *   root sub literal <name:type(options)> [opt:int(1..9)=1]
  * </pre>
  * 规则：
  * - 空格分隔，但尖括号/中括号内允许空格（按成对括号整体作为一个 token 解析）
- * - 字面量只取第一个开始到第一个参数 token 之前的连续 token
+ * - 字面量只允许出现在第一个参数 token 之前
  * - 参数 token 必须以 '<' 或 '[' 开头，以 '>' 或 ']' 结束
+ * - 类型使用 '|' 表示联合，括号内使用逗号分隔类型配置
+ * - string 只消费一个 token，text 消费剩余全部 token 且必须位于末尾
+ * - 可选参数只能位于参数列表末尾，默认值只能用于可选参数
  * - 使用反引号 <code>`...`</code> 可将内容作为 <b>字面量</b> 对待（其中的 '<'、'[' 将不会被识别为参数起始），例如：
  *   <pre>re `<' <idx:int[1..999] @行号></pre>
  */
@@ -32,6 +37,9 @@ public final class SpecParser {
         for (String t : toks){
             // 反引号包裹的一律当作字面量（并且不触发进入“参数阶段”）
             if (isQuotedLiteral(t)){
+                if (inParam) {
+                    throw new IllegalArgumentException("参数之后不能再声明字面量: " + t);
+                }
                 n.literals.add(unquote(t));
                 continue;
             }
@@ -46,7 +54,36 @@ public final class SpecParser {
             inParam = true;
             n.params.add(parseParam(t));
         }
+        validate(n);
         return n;
+    }
+
+    private static void validate(Model.Node node) {
+        if (node.literals.isEmpty()) {
+            throw new IllegalArgumentException("命令规范必须包含根字面量");
+        }
+
+        Set<String> names = new HashSet<>();
+        boolean optionalSeen = false;
+        for (int i = 0; i < node.params.size(); i++) {
+            Model.Param parameter = node.params.get(i);
+            String key = parameter.name.toLowerCase(java.util.Locale.ROOT);
+            if (!names.add(key)) {
+                throw new IllegalArgumentException("命令参数名重复: " + parameter.name);
+            }
+            if (parameter.defVal != null && !parameter.optional) {
+                throw new IllegalArgumentException("只有可选参数可以设置默认值: " + parameter.name);
+            }
+            if (parameter.optional) {
+                optionalSeen = true;
+            } else if (optionalSeen) {
+                throw new IllegalArgumentException("可选参数之后不能再声明必填参数: " + parameter.name);
+            }
+            boolean text = parameter.types.stream().anyMatch(type -> "text".equalsIgnoreCase(type.id));
+            if (text && i != node.params.size() - 1) {
+                throw new IllegalArgumentException("text 参数必须位于命令末尾: " + parameter.name);
+            }
+        }
     }
 
     /** 把 spec 按空白切分，但保留 <> 或 [] 内的空白；支持 `...` 作为字面量整体。 */
@@ -57,6 +94,7 @@ public final class SpecParser {
         char paramClose = 0;
         int squareDepth = 0;
         int braceDepth = 0;
+        int parenthesisDepth = 0;
         boolean quoted = false;
         for (int i=0;i<spec.length();i++){
             char c = spec.charAt(i);
@@ -89,6 +127,7 @@ public final class SpecParser {
                     paramClose = c == '<' ? '>' : ']';
                     squareDepth = 0;
                     braceDepth = 0;
+                    parenthesisDepth = 0;
                     cur.append(c);
                     continue;
                 }
@@ -101,9 +140,13 @@ public final class SpecParser {
                 braceDepth++;
             } else if (c == '}' && braceDepth > 0) {
                 braceDepth--;
-            } else if (braceDepth == 0 && c == '[') {
+            } else if (braceDepth == 0 && c == '(') {
+                parenthesisDepth++;
+            } else if (braceDepth == 0 && c == ')' && parenthesisDepth > 0) {
+                parenthesisDepth--;
+            } else if (braceDepth == 0 && parenthesisDepth == 0 && c == '[') {
                 squareDepth++;
-            } else if (braceDepth == 0 && c == ']') {
+            } else if (braceDepth == 0 && parenthesisDepth == 0 && c == ']') {
                 if (paramClose == ']' && squareDepth == 0) {
                     out.add(cur.toString());
                     cur.setLength(0);
@@ -111,7 +154,7 @@ public final class SpecParser {
                 } else if (squareDepth > 0) {
                     squareDepth--;
                 }
-            } else if (braceDepth == 0 && squareDepth == 0 && c == paramClose) {
+            } else if (braceDepth == 0 && squareDepth == 0 && parenthesisDepth == 0 && c == paramClose) {
                 out.add(cur.toString());
                 cur.setLength(0);
                 paramClose = 0;
@@ -176,27 +219,7 @@ public final class SpecParser {
         for (String rawType : splitTopLevel(typeUnion, '|')) {
             String type = rawType.trim();
             if (type.isEmpty()) throw new IllegalArgumentException("parameter type is empty: " + tok);
-
-            Model.TypeSpec typeSpec = new Model.TypeSpec();
-            int leftBrace = type.indexOf('{');
-            if (leftBrace >= 0) {
-                if (!type.endsWith("}")) throw new IllegalArgumentException("bad type rule: " + type);
-                typeSpec.id = type.substring(0, leftBrace).trim();
-                typeSpec.meta.put("body", type.substring(leftBrace + 1, type.length() - 1));
-            } else {
-                int leftBracket = type.indexOf('[');
-                if (leftBracket >= 0) {
-                    if (!type.endsWith("]")) throw new IllegalArgumentException("bad type range: " + type);
-                    typeSpec.id = type.substring(0, leftBracket).trim();
-                    String range = type.substring(leftBracket + 1, type.length() - 1);
-                    String[] limits = range.split("\\.\\.", -1);
-                    if (limits.length != 2) throw new IllegalArgumentException("bad type range: " + type);
-                    typeSpec.meta.put("min", limits[0].trim());
-                    typeSpec.meta.put("max", limits[1].trim());
-                } else {
-                    typeSpec.id = type;
-                }
-            }
+            Model.TypeSpec typeSpec = parseType(type);
             if (typeSpec.id == null || typeSpec.id.isBlank()) {
                 throw new IllegalArgumentException("parameter type is empty: " + tok);
             }
@@ -211,16 +234,89 @@ public final class SpecParser {
         return p;
     }
 
+    private static Model.TypeSpec parseType(String type) {
+        Model.TypeSpec result = new Model.TypeSpec();
+        int leftBrace = type.indexOf('{');
+        int leftBracket = type.indexOf('[');
+        int leftParenthesis = type.indexOf('(');
+
+        if (leftBrace >= 0 && (leftBracket < 0 || leftBrace < leftBracket)
+                && (leftParenthesis < 0 || leftBrace < leftParenthesis)) {
+            if (!type.endsWith("}")) throw new IllegalArgumentException("bad type rule: " + type);
+            result.id = type.substring(0, leftBrace).trim();
+            result.meta.put("body", type.substring(leftBrace + 1, type.length() - 1));
+            return result;
+        }
+
+        if (leftBracket >= 0 && (leftParenthesis < 0 || leftBracket < leftParenthesis)) {
+            if (!type.endsWith("]")) throw new IllegalArgumentException("bad type range: " + type);
+            result.id = type.substring(0, leftBracket).trim();
+            putRange(result, type.substring(leftBracket + 1, type.length() - 1), type);
+            return result;
+        }
+
+        if (leftParenthesis >= 0) {
+            if (!type.endsWith(")")) throw new IllegalArgumentException("bad type options: " + type);
+            result.id = type.substring(0, leftParenthesis).trim();
+            putOptions(result, type.substring(leftParenthesis + 1, type.length() - 1), type);
+            return result;
+        }
+
+        result.id = type;
+        return result;
+    }
+
+    private static void putOptions(Model.TypeSpec result, String options, String source) {
+        String value = options.trim();
+        if (value.isEmpty()) return;
+
+        List<String> entries = splitTopLevel(value, ',');
+        if (entries.size() == 1 && findTopLevel(entries.get(0), '=') < 0 && value.contains("..")) {
+            putRange(result, value, source);
+            return;
+        }
+
+        boolean keyed = entries.stream().allMatch(entry -> findTopLevel(entry, '=') >= 0);
+        if (!keyed) {
+            result.meta.put("body", String.join(",", entries).trim());
+            return;
+        }
+
+        for (String entry : entries) {
+            int equals = findTopLevel(entry, '=');
+            String key = entry.substring(0, equals).trim();
+            String optionValue = entry.substring(equals + 1).trim();
+            if (key.isEmpty() || optionValue.isEmpty()) {
+                throw new IllegalArgumentException("bad type option: " + source);
+            }
+            if (result.meta.putIfAbsent(key, optionValue) != null) {
+                throw new IllegalArgumentException("duplicate type option: " + key);
+            }
+        }
+    }
+
+    private static void putRange(Model.TypeSpec result, String range, String source) {
+        String[] limits = range.split("\\.\\.", -1);
+        if (limits.length != 2 || limits[0].isBlank() || limits[1].isBlank()) {
+            throw new IllegalArgumentException("bad type range: " + source);
+        }
+        result.meta.put("min", limits[0].trim());
+        result.meta.put("max", limits[1].trim());
+    }
+
     private static int findTopLevel(String value, char target) {
         int braces = 0;
         int brackets = 0;
+        int parentheses = 0;
         for (int i = 0; i < value.length(); i++) {
             char c = value.charAt(i);
             if (c == '{') braces++;
             else if (c == '}' && braces > 0) braces--;
             else if (c == '[') brackets++;
             else if (c == ']' && brackets > 0) brackets--;
-            else if (c == target && braces == 0 && brackets == 0) return i;
+            else if (c == '(') parentheses++;
+            else if (c == ')' && parentheses > 0) parentheses--;
+            else if (c == target && braces == 0 && brackets == 0 && parentheses == 0) return i;
         }
         return -1;
     }
@@ -230,13 +326,16 @@ public final class SpecParser {
         int start = 0;
         int braces = 0;
         int brackets = 0;
+        int parentheses = 0;
         for (int i = 0; i < value.length(); i++) {
             char c = value.charAt(i);
             if (c == '{') braces++;
             else if (c == '}' && braces > 0) braces--;
             else if (c == '[') brackets++;
             else if (c == ']' && brackets > 0) brackets--;
-            else if (c == separator && braces == 0 && brackets == 0) {
+            else if (c == '(') parentheses++;
+            else if (c == ')' && parentheses > 0) parentheses--;
+            else if (c == separator && braces == 0 && brackets == 0 && parentheses == 0) {
                 out.add(value.substring(start, i));
                 start = i + 1;
             }

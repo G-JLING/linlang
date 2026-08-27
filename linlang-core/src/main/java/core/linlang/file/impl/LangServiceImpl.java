@@ -284,7 +284,7 @@ public final class LangServiceImpl implements LangService, LocaleAware {
         cache.clear();
         cache.putAll(newCache);
 
-        audit.logger().info(LinMsg.k("linFile.lang.LangReloaded"));
+        audit.logger().file(LinMsg.k("linFile.lang.langReloaded"));
     }
 
     @Override
@@ -331,7 +331,9 @@ public final class LangServiceImpl implements LangService, LocaleAware {
 
                 boolean fileExists = IOs.exists(f);
                 if (!fileExists) {
-                    boolean wrote = writeBuiltinResourceToDisk(spec.filePath, loc, spec.fmt, f);
+                    boolean wrote = writeBuiltinResourceToDisk(
+                            keysClass.getClassLoader(), spec.filePath, loc, spec.fmt, f
+                    );
                     if (!wrote) {
                         persist(f, spec.fmt, doc);
                     }
@@ -540,28 +542,34 @@ public final class LangServiceImpl implements LangService, LocaleAware {
         Map<String, Object> doc;
         boolean exists = IOs.exists(f);
         boolean activeResource = false;
+        ClassLoader resourceLoader = meta.keysClass.getClassLoader();
+        Map<String, Object> localeResource = readBuiltinResource(
+                resourceLoader, spec.filePath, loc, spec.fmt
+        );
         if (exists) {
             doc = readDoc(f, spec.fmt);
         } else {
-            Map<String, Object> fromRes = readBuiltinResource(spec.filePath, loc, spec.fmt);
-            if (fromRes != null) {
-                doc = fromRes;
+            if (localeResource != null) {
+                doc = localeResource;
                 activeResource = true;
             } else {
                 String fallback = localeFor(spec.normalizeLocale, spec.defaultLocale);
-                Map<String, Object> fallbackDoc = readLocaleDocument(spec, fallback);
+                Map<String, Object> fallbackDoc = readLocaleDocument(resourceLoader, spec, fallback);
                 doc = fallbackDoc == null ? new LinkedHashMap<>() : fallbackDoc;
             }
         }
 
         Set<String> missing = new LinkedHashSet<>();
+        if (exists && localeResource != null) {
+            mergeDefaultsCollect(localeResource, doc, "", missing);
+        }
         mergeDefaultsCollect(meta.defaults, doc, "", missing);
 
         if (meta.emit && !meta.keysClass.isAnnotationPresent(NoEmit.class)) {
-            ensureDefaultLocaleFile(spec, meta.defaults);
+            ensureDefaultLocaleFile(resourceLoader, spec, meta.defaults);
             if (!exists) {
                 if (activeResource) {
-                    writeBuiltinResourceToDisk(spec.filePath, loc, spec.fmt, f);
+                    writeBuiltinResourceToDisk(resourceLoader, spec.filePath, loc, spec.fmt, f);
                 } else if (loc.equalsIgnoreCase(localeFor(spec.normalizeLocale, spec.defaultLocale))) {
                     persist(f, spec.fmt, doc);
                 }
@@ -578,26 +586,33 @@ public final class LangServiceImpl implements LangService, LocaleAware {
         return doc;
     }
 
-    private Map<String, Object> readLocaleDocument(PackSpec spec, String locale) {
+    private Map<String, Object> readLocaleDocument(ClassLoader resourceLoader,
+                                                   PackSpec spec,
+                                                   String locale) {
         java.nio.file.Path disk = diskFile(spec.filePath, locale, spec.fmt, false);
         if (IOs.exists(disk)) return readDoc(disk, spec.fmt);
-        return readBuiltinResource(spec.filePath, locale, spec.fmt);
+        return readBuiltinResource(resourceLoader, spec.filePath, locale, spec.fmt);
     }
 
-    private void ensureDefaultLocaleFile(PackSpec spec, Map<String, Object> defaults) {
+    private void ensureDefaultLocaleFile(ClassLoader resourceLoader,
+                                         PackSpec spec,
+                                         Map<String, Object> defaults) {
         String locale = localeFor(spec.normalizeLocale, spec.defaultLocale);
         java.nio.file.Path file = diskFile(spec.filePath, locale, spec.fmt, false);
         if (IOs.exists(file)) return;
-        if (!writeBuiltinResourceToDisk(spec.filePath, locale, spec.fmt, file)) {
+        if (!writeBuiltinResourceToDisk(resourceLoader, spec.filePath, locale, spec.fmt, file)) {
             persist(file, spec.fmt, mutableDeepCopy(defaults));
         }
     }
 
-    private Map<String, Object> readBuiltinResource(String filePath, String locale, FileType fmt) {
+    private Map<String, Object> readBuiltinResource(ClassLoader resourceLoader,
+                                                    String filePath,
+                                                    String locale,
+                                                    FileType fmt) {
         String ext = extOf(fmt);
         String p = RESOURCE_ROOT + "/" + stripLeadingSlash(filePath) + "/" + locale + ext;
 
-        try (InputStream in = LangServiceImpl.class.getClassLoader().getResourceAsStream(p)) {
+        try (InputStream in = openResource(resourceLoader, p)) {
             if (in == null) return null;
             String s = new String(in.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
             if (s.isBlank()) return null;
@@ -717,6 +732,7 @@ public final class LangServiceImpl implements LangService, LocaleAware {
             try (var st = java.nio.file.Files.list(dir)) {
                 st.filter(p -> p != null && p.getFileName() != null)
                         .filter(p -> p.getFileName().toString().endsWith(ext))
+                        .filter(p -> isLocaleDocument(p.getFileName().toString(), ext))
                         .forEach(p -> {
                             String name = p.getFileName().toString();
                             String base = name.substring(0, name.length() - ext.length());
@@ -740,6 +756,7 @@ public final class LangServiceImpl implements LangService, LocaleAware {
             try (var st = java.nio.file.Files.list(dir)) {
                 st.filter(p -> p != null && p.getFileName() != null)
                         .filter(p -> p.getFileName().toString().endsWith(ext))
+                        .filter(p -> isLocaleDocument(p.getFileName().toString(), ext))
                         .forEach(p -> {
                             String name = p.getFileName().toString();
                             String base = name.substring(0, name.length() - ext.length());
@@ -767,6 +784,13 @@ public final class LangServiceImpl implements LangService, LocaleAware {
     private static String localeFor(boolean normalizeLocale, String locale) {
         String value = (locale == null || locale.isBlank()) ? "zh_CN" : locale.trim();
         return normalizeLocale ? LocaleId.normalize(value) : value;
+    }
+
+    private static boolean isLocaleDocument(String fileName, String extension) {
+        if (fileName == null || extension == null || !fileName.endsWith(extension)) return false;
+        String base = fileName.substring(0, fileName.length() - extension.length());
+        String lower = base.toLowerCase(Locale.ROOT);
+        return !lower.endsWith("-diff") && !lower.endsWith("_diff");
     }
 
     // ------------------------------------------------------------
@@ -801,10 +825,14 @@ public final class LangServiceImpl implements LangService, LocaleAware {
         audit.logger().debug(LinMsg.k("linFile.lang.langSaved"), "lang", file);
     }
 
-    private boolean writeBuiltinResourceToDisk(String filePath, String locale, FileType fmt, java.nio.file.Path target) {
+    private boolean writeBuiltinResourceToDisk(ClassLoader resourceLoader,
+                                               String filePath,
+                                               String locale,
+                                               FileType fmt,
+                                               java.nio.file.Path target) {
         String ext = extOf(fmt);
         String p = RESOURCE_ROOT + "/" + stripLeadingSlash(filePath) + "/" + locale + ext;
-        try (InputStream in = LangServiceImpl.class.getClassLoader().getResourceAsStream(p)) {
+        try (InputStream in = openResource(resourceLoader, p)) {
             if (in == null) return false;
             String s = new String(in.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
             if (s.isBlank()) return false;
@@ -817,6 +845,15 @@ public final class LangServiceImpl implements LangService, LocaleAware {
                     "target", target);
             return false;
         }
+    }
+
+    static InputStream openResource(ClassLoader preferred, String path) {
+        InputStream input = preferred == null ? null : preferred.getResourceAsStream(path);
+        ClassLoader fallback = LangServiceImpl.class.getClassLoader();
+        if (input == null && fallback != preferred) {
+            input = fallback.getResourceAsStream(path);
+        }
+        return input;
     }
 
     // ------------------------------------------------------------
@@ -901,6 +938,11 @@ public final class LangServiceImpl implements LangService, LocaleAware {
             }
 
             Object cv = ((Map) doc).get(existingKey);
+            if (cv == null && dv != null) {
+                ((Map) doc).put(existingKey, mutableDeepCopyValue(dv));
+                missing.add(path);
+                continue;
+            }
             if (dv instanceof Map && cv instanceof Map) {
                 mergeDefaultsCollect((Map<?, ?>) dv, (Map<?, ?>) cv, path, missing);
             }
@@ -995,7 +1037,7 @@ public final class LangServiceImpl implements LangService, LocaleAware {
                 IOs.writeString(diff, JsonCodec.dump(wrapper));
                 audit.logger().info(LinMsg.k("linFile.lang.langGeneratedDifferent"), "diff", diff);
             }
-            audit.logger().warn(LinMsg.k("linFile.lang.langMissingKeys"), "lang", f, "count", missing.size(), "diff", diff);
+            audit.logger().warn(LinMsg.k("linFile.lang.langMissingKeys"), "file", f, "count", missing.size(), "diff", diff);
         } catch (Exception exception) {
             audit.problem().report(
                     BuiltinProblemCatalog.DIFF_WRITE_FAILED, exception,

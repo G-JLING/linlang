@@ -159,6 +159,10 @@ public abstract class AbstractAuditProvider implements LinLog.Provider, AutoClos
             submitLogFile(tenant, config, record, formatted);
             return;
         }
+        if (record.channel() == LogChannel.FILE) {
+            submitLogFile(tenant, config, record, formatted);
+            return;
+        }
 
         if (isEnabled(config == null ? null : config.console, true)) {
             String output = useJsonFor(config, config == null ? null : config.console)

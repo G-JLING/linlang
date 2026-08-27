@@ -1,7 +1,7 @@
 name: LinlangRuntimeBukkit
 main: me.jling.plugin.BukkitLoader
 version: ${project.version}
-api-version: '1.13'
+api-version: '1.18'
 load: STARTUP
 authors: [JLING]
 website: https://jling.me

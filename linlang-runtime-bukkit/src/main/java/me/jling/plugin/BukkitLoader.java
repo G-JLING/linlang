@@ -1,12 +1,14 @@
 package me.jling.plugin;
 
 import api.linlang.audit.LinLog;
+import api.linlang.banner.LinBanner;
 import api.linlang.runtime.Lin;
 import api.linlang.runtime.Linlang;
 import core.linlang.audit.problem.BuiltinProblemCatalog;
 import me.jling.bukkit.LinlangBukkitBootstrap;
 import me.jling.plugin.command.CommandListener;
 import me.jling.runtime.BukkitRuntimeImpl;
+import org.bukkit.plugin.PluginDescriptionFile;
 import org.bukkit.plugin.java.JavaPlugin;
 
 import org.bukkit.plugin.ServicePriority;
@@ -22,13 +24,13 @@ public class BukkitLoader extends JavaPlugin {
     public void onEnable() {
         long t0 = System.nanoTime();
         try {
-            // 1) 初始化运行时装配器
+            // 初始化运行时装配器
             this.bootstrap = LinlangBukkitBootstrap.install(this);
             this.runtime = bootstrap.getRuntime();
             this.bootstrap.totalPrefix("§f[§dlinlang§f] ").reload();
             new CommandListener(this, runtime).register(bootstrap.linCommand());
 
-            // 2) 确保服务总线上只保留本次注册（兼容热重载/重复启用）
+            // 重复实例处理
             var sm = getServer().getServicesManager();
             try {
                 sm.unregisterAll(this);
@@ -38,9 +40,11 @@ public class BukkitLoader extends JavaPlugin {
             sm.register(Linlang.class, bootstrap, this, ServicePriority.Highest);
 
             long ms = (System.nanoTime() - t0) / 1_000_000L;
-            LinLog.info("Linlang bootstrap enabled in " + ms + "ms. API=" + Lin.API_VERSION
+            LinLog.info("Linlang runtime enabled in " + ms + "ms. API=" + Lin.API_VERSION
                     + ", Runtime=" + bootstrap.runtimeVersion()
                     + ", Plugin=" + getDescription().getVersion());
+
+            printBanner();
 
 //            LinLog.info("[linlang] registered Linlang provider: providerClass={}, providerCL={}",
 //                    bootstrap.getClass().getName(), bootstrap.getClass().getClassLoader());
@@ -72,7 +76,7 @@ public class BukkitLoader extends JavaPlugin {
 
     @Override
     public void onDisable() {
-        LinLog.info("[linlang] Linlang bootstrap disabling.");
+        LinLog.info("Linlang runtime disabling.");
         try {
             getServer().getServicesManager().unregisterAll(this);
         } catch (RuntimeException exception) {
@@ -83,11 +87,21 @@ public class BukkitLoader extends JavaPlugin {
             try {
                 bootstrap.close();
             } catch (Exception exception) {
-                reportCloseFailure(exception, "bootstrap");
+                reportCloseFailure(exception, "runtime");
             }
             bootstrap = null;
         }
-        getLogger().info("[linlang] Linlang bootstrap disabled.");
+        getLogger().info("Linlang runtime disabled.");
+    }
+
+    private void printBanner() {
+        PluginDescriptionFile description = getDescription();
+        LinBanner.print(LinBanner.options()
+                .initials("LIN")
+                .plugin("琳琅", description.getName(), description.getVersion())
+                .developers(description.getAuthors())
+                .site(null)
+                .build());
     }
 
     private void reportCloseFailure(Throwable cause, String resource) {

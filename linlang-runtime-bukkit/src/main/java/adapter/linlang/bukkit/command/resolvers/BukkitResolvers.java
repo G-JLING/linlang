@@ -6,7 +6,6 @@ import api.linlang.command.LinCommand;
 import org.bukkit.Bukkit;
 import org.bukkit.Material;
 import org.bukkit.entity.Player;
-import org.bukkit.plugin.java.JavaPlugin;
 
 import java.util.*;
 
@@ -47,16 +46,5 @@ public final class BukkitResolvers {
             }
             return out;
         }
-    }
-
-    // event:block{predicate} 交互：下一次点击回填（简化示例：直接报错占位）
-    public static final class ClickBlockResolver implements LinCommand.TypeResolver {
-        private final JavaPlugin plugin;
-        public ClickBlockResolver(JavaPlugin p){ this.plugin = p; }
-        public boolean supports(String id){ return id.equalsIgnoreCase("event:block"); }
-        public Object parse(LinCommand.ParseCtx c, String t){
-            throw new IllegalArgumentException("event:block requires interactive flow");
-        }
-        public List<String> complete(LinCommand.ParseCtx c, String p){ return List.of("点击以继续"); }
     }
 }
