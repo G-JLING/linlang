@@ -717,9 +717,18 @@ public final class LinCommandImpl implements LinCommand, LocaleAware, PrefixAwar
             if (!valid) continue;
 
             Model.Param parameter = node.params.get(parameterIndex);
+            boolean completed = false;
             for (Model.TypeSpec type : parameter.types) {
                 List<String> values = engine.completeOne(context, type, prefixToken);
-                if (values != null) arguments.addAll(values);
+                if (values == null || values.isEmpty()) continue;
+                for (String value : values) {
+                    if (value == null || value.isBlank()) continue;
+                    arguments.add(value);
+                    completed = true;
+                }
+            }
+            if (!completed && prefixToken.isEmpty()) {
+                arguments.add(parameterDisplayName(node, parameter));
             }
         }
 
@@ -982,92 +991,66 @@ public final class LinCommandImpl implements LinCommand, LocaleAware, PrefixAwar
 
     // 根据节点与本地化环境构建 usage 文本（支持 @i18n）
     private String buildUsage(Model.Node n) {
-        LocaleTag eff = (this.locale == null ? (LocaleTag.parse("zh_CN")) : this.locale);
-        final String localeTag = eff.tag();
-
         String head = "/" + String.join(" ", n.literals);
         if (n.params == null || n.params.isEmpty()) return head;
 
-        Map<String, Map<String, String>> labels = paramI18n.get(n);
-        Map<String, LinCommand.I18nSupplier> lazyLabels = paramLazy.get(n);
         java.util.List<String> parts = new java.util.ArrayList<>();
 
         for (var p : n.params) {
-            // 使用原始 token（含类型/约束/注释），用于可靠解析
-            String raw = (p.name == null ? "" : p.name);
-            String trimmed = raw.trim();
-
-            // 变量名（去空格、去类型提示、去其后的残留）
-            String varKey = trimmed;
-            int sp = varKey.indexOf(' ');
-            if (sp >= 0) varKey = varKey.substring(0, sp);
-            int colon = varKey.indexOf(':');
-            String namePart = (colon >= 0 ? varKey.substring(0, colon) : varKey);
-
-            // inline 注释（@后面的内容）
-            String descInline = null;
-            int atPos = trimmed.indexOf('@');
-            if (atPos >= 0) descInline = trimmed.substring(atPos + 1).trim();
-
-            String displayName = null;
-
-            // 1) 优先使用外部参数标签，不再要求命令规范包含 @i18n
-            if (lazyLabels != null) {
-                LinCommand.I18nSupplier sup = lazyLabels.get(namePart);
-                if (sup != null) {
-                    try {
-                        String v = sup.get(localeTag);
-                        if (v != null && !v.isBlank()) {
-                            displayName = v;
-                        }
-                    } catch (Throwable exception) {
-                        audit.problem().report(BuiltinProblemCatalog.COMMAND_LOCALE_REFRESH_FAILED, exception,
-                                "command", n.usage,
-                                "locale", localeTag,
-                                "argument", namePart);
-                    }
-                }
-            }
-
-            // 2) 静态映射继续作为兼容来源
-            if ((displayName == null || displayName.isBlank()) && labels != null) {
-                Map<String, String> byLocale = labels.get(namePart);
-                if (byLocale != null && !byLocale.isEmpty()) {
-                    String tagNorm = localeTag;
-                    String tagDash = tagNorm.replace('_', '-');
-                    String langOnly = tagNorm.contains("_")
-                            ? tagNorm.substring(0, tagNorm.indexOf('_'))
-                            : (tagNorm.contains("-") ? tagNorm.substring(0, tagNorm.indexOf('-')) : tagNorm);
-
-                    String v = byLocale.get(tagNorm);
-                    if (v == null) v = byLocale.get(tagDash);
-                    if (v == null) v = byLocale.get(langOnly);
-                    if (v == null) v = byLocale.get("zh_CN");
-                    if (v == null) v = byLocale.get("en_GB");
-                    if (v == null && !byLocale.isEmpty()) v = byLocale.values().iterator().next();
-                    displayName = v;
-                }
-            }
-
-            // 3) 外部标签不可用时使用内联说明
-            if (displayName == null && p.desc != null && !p.desc.isBlank()) {
-                displayName = p.desc;
-            }
-
-            // 4) 兼容原始 token 中的内联说明
-            if (displayName == null && descInline != null && !descInline.isEmpty()) {
-                displayName = descInline;
-            }
-
-            // 5) 最后回退到参数名
-            if (displayName == null || displayName.isBlank()) {
-                displayName = namePart;
-            }
-
+            String displayName = parameterDisplayName(n, p);
             parts.add(p.optional ? "[" + displayName + "]" : "<" + displayName + ">");
         }
 
         return head + " " + String.join(" ", parts);
+    }
+
+    private String parameterDisplayName(Model.Node node, Model.Param parameter) {
+        LocaleTag effectiveLocale = this.locale == null ? LocaleTag.parse("zh_CN") : this.locale;
+        String localeTag = effectiveLocale.tag();
+        String parameterName = parameter.name == null ? "" : parameter.name.trim();
+
+        Map<String, LinCommand.I18nSupplier> lazyLabels = paramLazy.get(node);
+        if (lazyLabels != null) {
+            LinCommand.I18nSupplier supplier = lazyLabels.get(parameterName);
+            if (supplier != null) {
+                try {
+                    String value = supplier.get(localeTag);
+                    if (value != null && !value.isBlank()) return value;
+                } catch (Throwable exception) {
+                    audit.problem().report(BuiltinProblemCatalog.COMMAND_LOCALE_REFRESH_FAILED, exception,
+                            "command", node.usage,
+                            "locale", localeTag,
+                            "argument", parameterName);
+                }
+            }
+        }
+
+        Map<String, Map<String, String>> labels = paramI18n.get(node);
+        if (labels != null) {
+            String value = localizedLabel(labels.get(parameterName), localeTag);
+            if (value != null && !value.isBlank()) return value;
+        }
+        if (parameter.desc != null && !parameter.desc.isBlank()) return parameter.desc;
+        return parameterName;
+    }
+
+    private String localizedLabel(Map<String, String> labels, String localeTag) {
+        if (labels == null || labels.isEmpty()) return null;
+        String normalized = localeTag == null ? "zh_CN" : localeTag;
+        String dashed = normalized.replace('_', '-');
+        String language = normalized.contains("_")
+                ? normalized.substring(0, normalized.indexOf('_'))
+                : (normalized.contains("-")
+                ? normalized.substring(0, normalized.indexOf('-'))
+                : normalized);
+
+        String value = labels.get(normalized);
+        if (value == null) value = labels.get(dashed);
+        if (value == null) value = labels.get(language);
+        if (value == null) value = labels.get("zh_CN");
+        if (value == null) value = labels.get("en_GB");
+        if (value == null) value = labels.values().iterator().next();
+        return value;
     }
 
     public void rebuildUsage(Model.Node n) {

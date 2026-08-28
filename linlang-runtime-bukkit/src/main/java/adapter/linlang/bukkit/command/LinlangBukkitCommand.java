@@ -245,6 +245,8 @@ public final class LinlangBukkitCommand implements LinCommand, CommandExecutor, 
     public LinlangBukkitCommand withDefaultResolvers(){
         core.addResolver(new BukkitResolvers.ItemResolver());
         core.addResolver(new BukkitResolvers.PlayerResolver());
+        core.addResolver(new BukkitResolvers.OfflinePlayerResolver());
+        core.addResolver(new BukkitResolvers.LocationResolver());
         return this;
     }
 

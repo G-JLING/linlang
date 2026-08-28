@@ -1,0 +1,42 @@
+lin-file:
+  file:
+    missing-keys: " + This key is missing from the existing file!"
+    file-missing-keys: "{file} has {count} missing keys. See {diff} for details."
+    file-generated-different: "Generated difference file: {diff}"
+    file-saved: "Saved configuration: {file}"
+    file-save-failed: "Failed to save configuration {file}. Reason: {reason}"
+    file-reloaded: "Configuration files reloaded successfully"
+    file-reload-failed: "Failed to reload configuration {file}. Reason: {reason}"
+
+  lang:
+    missing-keys: " + This key is missing from the existing file!"
+    lang-missing-keys: "{file} has {count} missing keys. See {diff} for details."
+    lang-generated-different: "Generated language difference file: {diff}"
+    lang-saved: "Saved language file: {file}"
+    lang-reloaded: "Language files reloaded successfully"
+    lang-save-failed: "Failed to save language file {file}. Reason: {reason}"
+    lang-reload-failed: "Failed to reload language file {file}. Reason: {reason}"
+    lang-change-locale: "Language changed to {locale}."
+
+  watcher:
+    reload-watching-start: "Watching directory: {path}"
+    reload-file-changed: "Detected change: {file}"
+    reload-failed: "Hot reload failed. Reason: {reason}"
+
+lin-data:
+  db-init: "Initialized database: {type} {url}"
+  ensure-table: "Ensured table: {table}"
+  flush-ok: "Persisted data: {data}"
+  flush-failed: "Failed to persist data {data}. Reason: {reason}"
+
+lin-command:
+  command-set-prefix: "Command prefix set to: {prefix}"
+  command-language-switched: "Command language switched to: {locale}"
+  command-router-rebuilt: "Command system rebuilt"
+
+lin-log:
+  audit-config-loaded: "Audit configuration loaded"
+  audit-config-reloaded: "Audit configuration reloaded"
+
+lin-text:
+  text-source-too-long: "Advanced text is too long: {lintext}"

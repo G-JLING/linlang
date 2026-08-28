@@ -4,12 +4,17 @@ package adapter.linlang.bukkit.command.resolvers;
 
 import api.linlang.command.LinCommand;
 import org.bukkit.Bukkit;
+import org.bukkit.Location;
 import org.bukkit.Material;
+import org.bukkit.OfflinePlayer;
+import org.bukkit.World;
 import org.bukkit.entity.Player;
 
 import java.util.*;
 
 public final class BukkitResolvers {
+
+    private static final int MAX_COMPLETIONS = 50;
 
     // minecraft:item{namespace:id|tag}
     public static final class ItemResolver implements LinCommand.TypeResolver {
@@ -47,4 +52,132 @@ public final class BukkitResolvers {
             return out;
         }
     }
+
+    public static final class OfflinePlayerResolver implements LinCommand.TypeResolver {
+        public boolean supports(String id){
+            return id.equalsIgnoreCase("minecraft:offline-player")
+                    || id.equalsIgnoreCase("offline-player");
+        }
+        public Object parse(LinCommand.ParseCtx c, String t){
+            UUID uniqueId = parseUuid(t);
+            if (uniqueId != null) return Bukkit.getOfflinePlayer(uniqueId);
+
+            Player online = Bukkit.getPlayerExact(t);
+            if (online != null) return online;
+            for (OfflinePlayer player : Bukkit.getOfflinePlayers()) {
+                String name = player.getName();
+                if (name != null && name.equalsIgnoreCase(t)) return player;
+            }
+            throw new IllegalArgumentException("unknown offline player: " + t);
+        }
+        public List<String> complete(LinCommand.ParseCtx c, String p){
+            String prefix = p == null ? "" : p.toLowerCase(Locale.ROOT);
+            LinkedHashSet<String> values = new LinkedHashSet<>();
+            for (Player player : Bukkit.getOnlinePlayers()) {
+                addName(values, player.getName(), prefix);
+                if (values.size() >= MAX_COMPLETIONS) return new ArrayList<>(values);
+            }
+            for (OfflinePlayer player : Bukkit.getOfflinePlayers()) {
+                addName(values, player.getName(), prefix);
+                if (values.size() >= MAX_COMPLETIONS) break;
+            }
+            return new ArrayList<>(values);
+        }
+    }
+
+    public static final class LocationResolver implements LinCommand.TypeResolver {
+        public boolean supports(String id){
+            return id.equalsIgnoreCase("minecraft:location")
+                    || id.equalsIgnoreCase("location");
+        }
+        public Object parse(LinCommand.ParseCtx c, String t){
+            ParsedLocation parsed = parseLocation(t);
+            World world = parsed.worldName == null
+                    ? senderWorld(c)
+                    : findWorld(parsed.worldName);
+            return new Location(
+                    world, parsed.x, parsed.y, parsed.z, parsed.yaw, parsed.pitch
+            );
+        }
+        public List<String> complete(LinCommand.ParseCtx c, String p){
+            String prefix = p == null ? "" : p;
+            if (prefix.contains(",")) return List.of();
+
+            List<String> values = new ArrayList<>();
+            for (World world : Bukkit.getWorlds()) {
+                String candidate = world.getName() + ",";
+                if (candidate.regionMatches(true, 0, prefix, 0, prefix.length())) {
+                    values.add(candidate);
+                }
+                if (values.size() >= MAX_COMPLETIONS) break;
+            }
+            return values;
+        }
+    }
+
+    static ParsedLocation parseLocation(String token) {
+        String[] parts = token == null ? new String[0] : token.split(",", -1);
+        boolean explicitWorld = parts.length == 4 || parts.length == 6;
+        if (!explicitWorld && parts.length != 3 && parts.length != 5) {
+            throw new IllegalArgumentException("invalid location: " + token);
+        }
+
+        int offset = explicitWorld ? 1 : 0;
+        String worldName = explicitWorld ? parts[0].trim() : null;
+        if (explicitWorld && worldName.isEmpty()) {
+            throw new IllegalArgumentException("location world is empty");
+        }
+
+        double x = finiteDouble(parts[offset], "x");
+        double y = finiteDouble(parts[offset + 1], "y");
+        double z = finiteDouble(parts[offset + 2], "z");
+        float yaw = 0.0F;
+        float pitch = 0.0F;
+        if (parts.length - offset == 5) {
+            yaw = finiteFloat(parts[offset + 3], "yaw");
+            pitch = finiteFloat(parts[offset + 4], "pitch");
+        }
+        return new ParsedLocation(worldName, x, y, z, yaw, pitch);
+    }
+
+    private static World senderWorld(LinCommand.ParseCtx context) {
+        if (context.sender() instanceof Player player) return player.getWorld();
+        throw new IllegalArgumentException("location requires a world for non-player senders");
+    }
+
+    private static World findWorld(String name) {
+        World exact = Bukkit.getWorld(name);
+        if (exact != null) return exact;
+        for (World world : Bukkit.getWorlds()) {
+            if (world.getName().equalsIgnoreCase(name)) return world;
+        }
+        throw new IllegalArgumentException("unknown world: " + name);
+    }
+
+    private static double finiteDouble(String text, String name) {
+        double value = Double.parseDouble(text.trim());
+        if (!Double.isFinite(value)) throw new IllegalArgumentException("invalid " + name);
+        return value;
+    }
+
+    private static float finiteFloat(String text, String name) {
+        float value = Float.parseFloat(text.trim());
+        if (!Float.isFinite(value)) throw new IllegalArgumentException("invalid " + name);
+        return value;
+    }
+
+    private static UUID parseUuid(String text) {
+        try {
+            UUID value = UUID.fromString(text);
+            return value.toString().equalsIgnoreCase(text) ? value : null;
+        } catch (IllegalArgumentException exception) {
+            return null;
+        }
+    }
+
+    private static void addName(Set<String> values, String name, String prefix) {
+        if (name != null && name.toLowerCase(Locale.ROOT).startsWith(prefix)) values.add(name);
+    }
+
+    record ParsedLocation(String worldName, double x, double y, double z, float yaw, float pitch) {}
 }

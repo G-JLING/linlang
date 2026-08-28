@@ -84,6 +84,33 @@ public final class ArgEngine {
                     }
                     public List<String> complete(LinCommand.ParseCtx c, String p){ return List.of(); }
                 },
+                new LinCommand.TypeResolver(){
+                    public boolean supports(String id){
+                        return id.equalsIgnoreCase("bool") || id.equalsIgnoreCase("boolean");
+                    }
+                    public Object parse(LinCommand.ParseCtx c, String t){
+                        if ("true".equalsIgnoreCase(t)) return Boolean.TRUE;
+                        if ("false".equalsIgnoreCase(t)) return Boolean.FALSE;
+                        throw new IllegalArgumentException("invalid bool: " + t);
+                    }
+                    public List<String> complete(LinCommand.ParseCtx c, String p){
+                        String prefix = p == null ? "" : p.toLowerCase(Locale.ROOT);
+                        return List.of("true", "false").stream()
+                                .filter(value -> value.startsWith(prefix))
+                                .toList();
+                    }
+                },
+                new LinCommand.TypeResolver(){
+                    public boolean supports(String id){ return id.equalsIgnoreCase("uuid"); }
+                    public Object parse(LinCommand.ParseCtx c, String t){
+                        UUID value = UUID.fromString(t);
+                        if (!value.toString().equalsIgnoreCase(t)) {
+                            throw new IllegalArgumentException("invalid uuid: " + t);
+                        }
+                        return value;
+                    }
+                    public List<String> complete(LinCommand.ParseCtx c, String p){ return List.of(); }
+                },
                 // 字符串约束：string(regex=...) / text(regex=...)
                 new LinCommand.TypeResolver(){
                     public boolean supports(String id){ return id.equals("string") || id.equals("text") || id.equals("regex"); }

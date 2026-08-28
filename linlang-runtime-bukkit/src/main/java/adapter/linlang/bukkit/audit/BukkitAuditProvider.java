@@ -24,7 +24,8 @@ public final class BukkitAuditProvider extends AbstractAuditProvider {
                                boolean usePluginLogger) {
         super(runtimePlugin,
                 createInitialLogger(runtimePlugin, usePluginLogger),
-                runtimeConfig);
+                runtimeConfig,
+                usePluginLogger);
         this.runtimePlugin = runtimePlugin;
     }
 

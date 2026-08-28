@@ -1,0 +1,41 @@
+prompt:
+  click-block: "§fClick a block to continue"
+  break-block: "§fBreak a block to continue"
+  place-block: "§fPlace a block to continue"
+  click-entity: "§fClick an entity to continue"
+  damage-entity: "§fAttack an entity to continue"
+  kill-entity: "§fKill an entity to continue"
+  click-item: "§fClick an item in your inventory to continue"
+  shoot-block: "§fHit a block with a projectile to continue"
+
+error:
+  bad-arg: "§cError! §fUnknown argument or invalid parameter"
+  no-perm: "§cError! §fYou do not have permission to execute this command"
+  unknown-command: "§cError! §fThe command you entered does not exist"
+  exec-target: "§cError! §fThis command cannot be executed from your current context"
+  exception: "§cError! An internal error has occurred. Please contact JLING(magicpowered@icloud.com)"
+  type-no-resolver: "§fUnknown parameter resolver"
+  enum-not-fount: "§fThe value entered is not a valid enum option"
+  int-range: "§fThe value entered is not an integer, or is out of range for int"
+  double-range: "§fThe value entered is not a floating-point number, or is out of range for double"
+  string-regex: "§fThe value entered does not match the required pattern"
+
+help:
+  header: "§fHelp"
+  legend: "§7<>=required, []=optional"
+  usage: "§fUsage: "
+  home-page: "[At first page]"
+  last-page: "[At last page]"
+  previous-page: "§c[<]"
+  next-page: "§c[>]"
+  page-info: " §f- Page §c{current} §fof §c{total_pages} §f- "
+  hover-left: "View previous page"
+  hover-right: "View next page"
+
+info:
+  header: "§fInformation:"
+  plugin: "§7   |- §fPlugin: {value}"
+  authors: "§7   |- §fAuthors: {value}"
+  build-version: "§7   |- §fBuild version: {value}"
+  linlang-version: "§7   |- §fLinlang version: {value}"
+  visit: "§7   |- §fVisit: {value}"

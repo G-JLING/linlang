@@ -43,12 +43,18 @@ public abstract class AbstractAuditProvider implements LinLog.Provider, AutoClos
         private volatile String name;
         private volatile Logger logger;
         private volatile AuditConfig config;
+        private volatile boolean pluginLogger;
 
-        private Tenant(Object ownerKey, String name, Logger logger, AuditConfig config) {
+        private Tenant(Object ownerKey,
+                       String name,
+                       Logger logger,
+                       AuditConfig config,
+                       boolean pluginLogger) {
             this.ownerKey = ownerKey;
             this.name = name;
             this.logger = logger;
             this.config = config;
+            this.pluginLogger = pluginLogger;
         }
     }
 
@@ -65,6 +71,13 @@ public abstract class AbstractAuditProvider implements LinLog.Provider, AutoClos
     protected AbstractAuditProvider(Object runtimeOwnerKey,
                                     Logger runtimeLogger,
                                     AuditConfig runtimeConfig) {
+        this(runtimeOwnerKey, runtimeLogger, runtimeConfig, false);
+    }
+
+    protected AbstractAuditProvider(Object runtimeOwnerKey,
+                                    Logger runtimeLogger,
+                                    AuditConfig runtimeConfig,
+                                    boolean usePluginLogger) {
         this.runtimeOwnerKey = Objects.requireNonNull(runtimeOwnerKey, "runtimeOwnerKey");
         Logger logger = Objects.requireNonNull(runtimeLogger, "runtimeLogger");
         configureLogger(logger);
@@ -72,7 +85,8 @@ public abstract class AbstractAuditProvider implements LinLog.Provider, AutoClos
                 runtimeOwnerKey,
                 "runtime",
                 logger,
-                runtimeConfig == null ? new AuditConfig() : runtimeConfig
+                runtimeConfig == null ? new AuditConfig() : runtimeConfig,
+                usePluginLogger
         );
         this.fileWriter = new AuditFileWriter(this.runtimeTenant.config.queueCapacity);
     }
@@ -100,9 +114,16 @@ public abstract class AbstractAuditProvider implements LinLog.Provider, AutoClos
         if (Objects.equals(ownerKey, runtimeOwnerKey)) {
             runtimeTenant.logger = logger;
             runtimeTenant.config = resolved;
+            runtimeTenant.pluginLogger = usePluginLogger;
             return;
         }
-        tenants.put(ownerKey, new Tenant(ownerKey, safeOwnerName(ownerKey), logger, resolved));
+        tenants.put(ownerKey, new Tenant(
+                ownerKey,
+                safeOwnerName(ownerKey),
+                logger,
+                resolved,
+                usePluginLogger
+        ));
     }
 
     public final void unregisterTenant(Object ownerKey) {
@@ -144,7 +165,14 @@ public abstract class AbstractAuditProvider implements LinLog.Provider, AutoClos
         if (!shouldLog(config, record.level())) return;
 
         FormattedMessage formatted = formatter.format(record.message(), record.arguments());
-        String consoleLine = formatter.logText(tenant.name, record, formatted, false);
+        boolean includeTenant = record.channel() == LogChannel.OP || !tenant.pluginLogger;
+        String consoleLine = formatter.logText(
+                tenant.name,
+                record,
+                formatted,
+                false,
+                includeTenant
+        );
         if (record.channel() == LogChannel.OP) {
             if (!platformDeliverOpLine(tenant.ownerKey, consoleLine)) {
                 enqueue(pendingOp, tenant.ownerKey, consoleLine);
@@ -184,12 +212,17 @@ public abstract class AbstractAuditProvider implements LinLog.Provider, AutoClos
         if (isEnabled(config.console, true)) {
             String line = useJsonFor(config, config.console)
                     ? formatter.jsonAudit(tenant.name, event)
-                    : formatter.colorizeAudit(formatter.auditText(tenant.name, event, false));
+                    : formatter.colorizeAudit(formatter.auditText(
+                            tenant.name,
+                            event,
+                            false,
+                            !tenant.pluginLogger
+                    ));
             tenant.logger.log(Level.INFO, line);
         }
         String fileLine = useJsonFor(config, output)
                 ? formatter.jsonAudit(tenant.name, event)
-                : formatter.auditText(tenant.name, event, true);
+                : formatter.auditText(tenant.name, event, true, true);
         submitFile(tenant, output, fileLine, true);
     }
 
@@ -201,7 +234,12 @@ public abstract class AbstractAuditProvider implements LinLog.Provider, AutoClos
         if (isEnabled(config == null ? null : config.console, true)) {
             String line = useJsonFor(config, config == null ? null : config.console)
                     ? formatter.jsonProblem(tenant.name, problem)
-                    : formatter.colorizeProblem(formatter.problemText(tenant.name, problem, false));
+                    : formatter.colorizeProblem(formatter.problemText(
+                            tenant.name,
+                            problem,
+                            false,
+                            !tenant.pluginLogger
+                    ));
             tenant.logger.log(Level.SEVERE, line, problem.cause());
         }
 
@@ -209,7 +247,7 @@ public abstract class AbstractAuditProvider implements LinLog.Provider, AutoClos
         if (isEnabled(output, false)) {
             String fileLine = useJsonFor(config, output)
                     ? formatter.jsonProblem(tenant.name, problem)
-                    : formatter.problemText(tenant.name, problem, true);
+                    : formatter.problemText(tenant.name, problem, true, true);
             submitFile(tenant, output, fileLine, true);
         }
     }
@@ -271,7 +309,7 @@ public abstract class AbstractAuditProvider implements LinLog.Provider, AutoClos
         if (!isEnabled(output, false)) return;
         String line = useJsonFor(config, output)
                 ? formatter.jsonLog(tenant.name, record, formatted)
-                : formatter.logText(tenant.name, record, formatted, true);
+                : formatter.logText(tenant.name, record, formatted, true, true);
         if (record.cause() != null && !useJsonFor(config, output)) {
             line += System.lineSeparator() + formatter.stackTrace(record.cause());
         }

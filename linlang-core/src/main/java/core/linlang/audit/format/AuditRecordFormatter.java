@@ -90,21 +90,30 @@ public final class AuditRecordFormatter {
     public String logText(String tenant,
                           LogRecord record,
                           FormattedMessage formatted,
-                          boolean timestamp) {
+                          boolean timestamp,
+                          boolean includeTenant) {
         StringBuilder line = new StringBuilder();
         if (timestamp) line.append(record.timestamp()).append(' ');
         if (record.channel() != LogChannel.BANNER) {
             line.append("[linlang-").append(shortTag(record)).append("] ");
-            line.append('[').append(tenant).append("] ");
+            if (includeTenant) {
+                line.append('[').append(tenant).append("] ");
+            }
         }
         line.append(formatted.text());
         return line.toString();
     }
 
-    public String auditText(String tenant, AuditEvent event, boolean timestamp) {
+    public String auditText(String tenant,
+                            AuditEvent event,
+                            boolean timestamp,
+                            boolean includeTenant) {
         StringBuilder line = new StringBuilder();
         if (timestamp) line.append(event.timestamp()).append(' ');
-        line.append("[linlang-audit] [").append(tenant).append("] ");
+        line.append("[linlang-audit] ");
+        if (includeTenant) {
+            line.append('[').append(tenant).append("] ");
+        }
         line.append(event.event());
         appendTextField(line, "actor", event.actor());
         appendTextField(line, "action", event.action());
@@ -116,10 +125,16 @@ public final class AuditRecordFormatter {
         return line.toString();
     }
 
-    public String problemText(String tenant, LinProblem problem, boolean timestamp) {
+    public String problemText(String tenant,
+                              LinProblem problem,
+                              boolean timestamp,
+                              boolean includeTenant) {
         StringBuilder line = new StringBuilder();
         if (timestamp) line.append(problem.timestamp()).append(' ');
-        line.append("[linlang-problem] [").append(tenant).append("] ");
+        line.append("[linlang-problem] ");
+        if (includeTenant) {
+            line.append('[').append(tenant).append("] ");
+        }
         line.append('[').append(problem.code()).append(']');
         problem.context().forEach((key, value) ->
                 appendTextField(line, key, values.redact(key, value)));
