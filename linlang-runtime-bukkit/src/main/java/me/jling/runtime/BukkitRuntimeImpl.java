@@ -156,6 +156,22 @@ public final class BukkitRuntimeImpl implements AutoCloseable {
     }
 
     /**
+     * 使用既有语言服务创建命令系统。
+     *
+     * @param owner 命令所属插件
+     * @param lang 与命令共享的语言服务
+     * @param locale 默认语言
+     * @param prefixFn 总前缀提供者
+     * @return 命令服务
+     */
+    public LinCommand createCommands(JavaPlugin owner, LangServiceImpl lang, String locale,
+                                     Function<JavaPlugin, String> prefixFn) {
+        String useLocale = (locale == null || locale.isBlank()) ? "zh_CN" : locale.trim();
+        Function<JavaPlugin, String> fn = (prefixFn != null) ? prefixFn : adapter::defaultTotalPrefix;
+        return core.createCommands(owner, lang, useLocale, () -> fn.apply(owner));
+    }
+
+    /**
      * 基于指定语言服务创建消息发送器。
      */
     public LinMessenger createMessenger(LangServiceImpl lang) {
@@ -224,7 +240,18 @@ public final class BukkitRuntimeImpl implements AutoCloseable {
      */
     public int reloadAndCountFailures() {
         core.attachRuntimeFileServices(bootstrap.getConfig(), bootstrap.getLanguage());
-        return core.reloadAndCountFailures();
+        int failures = core.reloadAndCountFailures();
+        try {
+            bootstrap.refreshRuntimeCommandLanguage();
+        } catch (RuntimeException exception) {
+            failures++;
+            audit().problem().report(
+                    BuiltinProblemCatalog.COMMAND_LOCALE_REFRESH_FAILED,
+                    exception,
+                    "resource", "runtime-command-language"
+            );
+        }
+        return failures;
     }
 
     /**

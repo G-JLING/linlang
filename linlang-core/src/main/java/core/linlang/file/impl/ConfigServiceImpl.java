@@ -79,12 +79,12 @@ public final class ConfigServiceImpl implements ConfigService {
         boolean annotatedNoEmit = type.isAnnotationPresent(NoEmit.class);
         boolean shouldEmit = emit && !annotatedNoEmit;
 
-        // 生成 diff（缺失键旁插入注释+默认值）
+        // 生成 diff
         if (shouldEmit && !missing.isEmpty()) {
             writeDiff(file, meta.fmt(), doc, missing);
         }
 
-        // 写回文件（是否落盘受 emit 和 @NoEmit 控制）
+        // 写回文件
         Map<String, List<String>> comments = TreeMapper.extractComments(type);
         if (shouldEmit) {
             persist(file, meta.fmt(), doc, comments);
@@ -211,7 +211,7 @@ public final class ConfigServiceImpl implements ConfigService {
     /**
      * 将磁盘中的配置重新载入并“就地”填充到已 bind 的对象实例中（不更换引用）。
      * <p>
-     * 该流程尽量复用 bind(...) 的逻辑：包含默认值合并、缺失键 diff 生成、迁移、以及按既有 emit 偏好写回文件。
+     * 该流程复用 bind(...) 的逻辑：包含默认值合并、缺失键 diff 生成、迁移、以及按既有 emit 偏好写回文件。
      * </p>
      */
     private void reloadIntoExisting(Class<?> type, Object target) {
@@ -246,21 +246,20 @@ public final class ConfigServiceImpl implements ConfigService {
             shouldEmit = (flag != null ? flag : true) && !annotatedNoEmit;
         }
 
-        // 缺失键 diff（缺失键旁插入注释+默认值）
+        // 缺失键 diff
         if (shouldEmit && !missing.isEmpty()) {
             writeDiff(file, meta.fmt(), doc, missing);
         }
 
-        // 按既有 emit 偏好写回（受 @NoEmit 控制）
+        // 按既有偏好写回
         Map<String, List<String>> comments = TreeMapper.extractComments(type);
         if (shouldEmit) {
             persist(file, meta.fmt(), doc, comments);
         }
 
-        // 就地填充到已绑定实例（不替换引用）
+        // 就地填充到实例
         populate(target, meta.keyMap(), doc);
 
-        // 维持 liveConfigs 引用不变，仅确保该 type 的 emit 偏好存在
         synchronized (emitFlags) {
             emitFlags.putIfAbsent(type, shouldEmit);
         }

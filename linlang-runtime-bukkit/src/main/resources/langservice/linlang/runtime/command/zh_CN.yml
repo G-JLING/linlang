@@ -1,0 +1,55 @@
+prefix: "&f[&d琳琅&f] "
+
+common:
+  unknown: "未知"
+  enabled: "已启用"
+  disabled: "已禁用"
+
+info:
+  description: "查看琳琅运行时版本与构建信息"
+  title: " &7运行时信息："
+  api-version: "&7  API 版本：&f{version}"
+  runtime-version: "&7  运行时版本：&f{version}"
+  plugin-version: "&7  插件版本：&f{version}"
+
+plugins:
+  description: "查看所有已注册到运行时的插件"
+  empty: " &7当前没有已注册的插件门面。"
+  title: " &7已注册插件列表（{count}）："
+  entry: "&7  - &f{name} &8v{version} &7（{status}）"
+
+restart:
+  description: "重启指定插件的琳琅实例"
+  plugin-label: "插件名称"
+  empty-name: " &c插件名称不能为空。"
+  ambiguous: " &c找到多个匹配的插件名称，请更精确地指定："
+  candidate: "&7  - &f{name}"
+  not-found: " &c未找到名称为 &f{name} &c的已注册插件。"
+  success: " &a已重启插件 &f{name} &a的琳琅实例。"
+  failed: " &c重启失败，问题代码：&f{code}"
+
+reload:
+  description: "对运行时与所有插件执行软重载"
+  success: " &a已对运行时与所有已注册插件执行一次软重载。"
+  partial: " &e重载已完成，但有 {count} 项失败，请检查问题代码。"
+  failed: " &c重载失败，问题代码：&f{code}"
+
+restart-all:
+  description: "对所有已注册插件执行硬重启"
+  result: " &7已尝试对所有插件门面执行硬重启：成功 &f{success} &7/ &f{total}&7。"
+
+problems:
+  description: "列出全部琳琅内建问题代码"
+  title: " &7内建问题代码（{count}）："
+  entry: "&f{code} &8[{component}] &7{description}"
+
+problem:
+  description: "查询指定琳琅问题代码"
+  code-label: "问题代码"
+  not-found: " &c未找到问题代码：&f{code}"
+  hint: "&7使用 &f/linlang problems &7查看全部内建代码。"
+  title: " &f{code}"
+  component: "&7组件：&f{value}"
+  meaning: "&7含义：&f{value}"
+  resolution: "&7处理：&f{value}"
+  documentation: "&7文档：&f{value}"

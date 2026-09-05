@@ -17,6 +17,8 @@ import core.linlang.total.prefix.PrefixAware;
 
 import lombok.Getter;
 import me.jling.facade.BukkitFacadeImpl;
+import me.jling.plugin.command.CommandListener;
+import me.jling.plugin.command.RuntimeCommandKeys;
 import me.jling.runtime.BukkitRuntimeImpl;
 import org.bukkit.plugin.java.JavaPlugin;
 
@@ -42,6 +44,7 @@ public final class LinlangBukkitBootstrap implements AutoCloseable, Linlang, Lin
     private LinCommand command;              // 命令接口
     private LinMessenger messenger;          // 消息接口
     private final LinAudit audit;
+    private final RuntimeCommandKeys commandText;
 
     @Getter
     private final BukkitRuntimeImpl runtime;  // 运行时引导程序
@@ -77,11 +80,13 @@ public final class LinlangBukkitBootstrap implements AutoCloseable, Linlang, Lin
         this.runtime.installAudit(false);
         this.runtime.installLinMsg();
 
-        // 运行时自身的有关命令
-        this.command = runtime.createCommands(runtimePlugin, locale, prefixFn);
+        LinLog.info("Linlang loading");
 
-        // 发送者
+        this.language.setLocale(this.locale);
+        this.commandText = this.language.bind(RuntimeCommandKeys.class);
+        this.prefixFn = plugin -> this.commandText.prefix.resolve();
         this.messenger = runtime.createMessenger(runtimePlugin, this.language);
+        rebuildCommands();
         wireMessengerPrefix();
 
         // 运行时自身配套
@@ -99,7 +104,6 @@ public final class LinlangBukkitBootstrap implements AutoCloseable, Linlang, Lin
             }
         };
 
-        LinLog.info("Runtime bootstrap initialized: bukkit=" + runtimePlugin.getName());
     }
 
     /* -------------------------------------------------------------
@@ -250,14 +254,34 @@ public final class LinlangBukkitBootstrap implements AutoCloseable, Linlang, Lin
                     "resource", "runtime-command"
             );
         }
-        this.command = runtime.createCommands(runtimePlugin, locale, prefixFn);
+        this.command = runtime.createCommands(runtimePlugin, language, locale, prefixFn);
+        new CommandListener(runtimePlugin, runtime, messenger, commandText).register(this.command);
+    }
+
+    /**
+     * 在语言服务完成普通重载后刷新运行时命令使用的前缀。
+     */
+    public void refreshRuntimeCommandLanguage() {
+        String prefix = resolveCommandPrefix();
+        if (command instanceof PrefixAware aware) {
+            aware.setTotalPrefix(prefix);
+        }
+        wireMessengerPrefix(prefix);
     }
 
     /**
      * 将运行时自身的前缀接入消息服务。
      */
     private void wireMessengerPrefix() {
+        wireMessengerPrefix(resolveCommandPrefix());
+    }
+
+    private void wireMessengerPrefix(String prefix) {
         if (!(messenger instanceof PrefixAware aware)) return;
+        aware.setTotalPrefix(prefix.trim());
+    }
+
+    private String resolveCommandPrefix() {
         String prefix;
         try {
             prefix = prefixFn.apply(runtimePlugin);
@@ -269,7 +293,7 @@ public final class LinlangBukkitBootstrap implements AutoCloseable, Linlang, Lin
             );
             prefix = "";
         }
-        aware.setTotalPrefix(prefix == null ? "" : prefix.trim());
+        return prefix == null ? "" : prefix;
     }
 
     @Override

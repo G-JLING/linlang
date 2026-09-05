@@ -326,7 +326,9 @@ public final class LinCommandImpl implements LinCommand, LocaleAware, PrefixAwar
     public boolean dispatch(Object sender, String label, String[] args, PlatformBridge bridge) {
 
         // 内置 help 调度
-        if (args.length >= 1 && ("help".equalsIgnoreCase(args[0]) || "?".equals(args[0]))) {
+        if (args.length >= 1
+                && ("help".equalsIgnoreCase(args[0]) || "?".equals(args[0]))
+                && !hasExplicitSecondLiteral(args[0])) {
             int page = 1;
             if (args.length >= 2) {
                 try {
@@ -339,7 +341,9 @@ public final class LinCommandImpl implements LinCommand, LocaleAware, PrefixAwar
         }
 
         // 内置 info 调度
-        if (args.length == 1 && "info".equalsIgnoreCase(args[0])) {
+        if (args.length == 1
+                && "info".equalsIgnoreCase(args[0])
+                && !hasExplicitSecondLiteral(args[0])) {
             try {
                 Object plugin = this.platform;
                 Object description = plugin.getClass().getMethod("getDescription").invoke(plugin);
@@ -481,6 +485,11 @@ public final class LinCommandImpl implements LinCommand, LocaleAware, PrefixAwar
         // 理论上不会走到这里，但如果真的到了，这个兜底
         bridge.msg(sender, prefix + messages.get("error.unknown-command"));
         return false;
+    }
+
+    private boolean hasExplicitSecondLiteral(String literal) {
+        return nodes.stream().anyMatch(node -> node.literals.size() >= 2
+                && node.literals.get(1).equalsIgnoreCase(literal));
     }
 
     /**

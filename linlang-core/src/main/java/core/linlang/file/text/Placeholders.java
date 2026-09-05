@@ -13,7 +13,7 @@ public final class Placeholders {
 
     public static String apply(String template, Map<String, ?> vars){
         if (template == null) return "";
-        // 先处理 {{ → 占位
+        // {{ → 占位
         String s = template.replace("{{", "__L_BRACE__");
         Matcher m = P.matcher(s);
         StringBuffer out = new StringBuffer();

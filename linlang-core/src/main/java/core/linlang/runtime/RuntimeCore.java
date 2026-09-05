@@ -292,7 +292,6 @@ public final class RuntimeCore<P> implements AutoCloseable {
             );
             LinMsg.installKeys(() -> keys);
             LinMsg.install(lang::tr);
-            LinLog.info("Installed global LinMsg templates.");
         } catch (Throwable t) {
             reportProblem(runtimeHost, BuiltinProblemCatalog.MESSAGE_TEMPLATE_INSTALL_FAILED, t);
         }
@@ -370,7 +369,7 @@ public final class RuntimeCore<P> implements AutoCloseable {
             }
             facades.clear();
         }
-        LinLog.info("[linlang] RuntimeCore closed.");
+        LinLog.info("Goodbye!");
         for (P owner : new ArrayList<>(interactCores.keySet())) {
             releaseOwner(owner);
         }

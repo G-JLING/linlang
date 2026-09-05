@@ -6,7 +6,6 @@ import api.linlang.runtime.Lin;
 import api.linlang.runtime.Linlang;
 import core.linlang.audit.problem.BuiltinProblemCatalog;
 import me.jling.bukkit.LinlangBukkitBootstrap;
-import me.jling.plugin.command.CommandListener;
 import me.jling.runtime.BukkitRuntimeImpl;
 import org.bukkit.plugin.PluginDescriptionFile;
 import org.bukkit.plugin.java.JavaPlugin;
@@ -27,8 +26,7 @@ public class BukkitLoader extends JavaPlugin {
             // 初始化运行时装配器
             this.bootstrap = LinlangBukkitBootstrap.install(this);
             this.runtime = bootstrap.getRuntime();
-            this.bootstrap.totalPrefix("§f[§dlinlang§f] ").reload();
-            new CommandListener(this, runtime).register(bootstrap.linCommand());
+            this.bootstrap.reload();
 
             // 重复实例处理
             var sm = getServer().getServicesManager();
@@ -91,14 +89,13 @@ public class BukkitLoader extends JavaPlugin {
             }
             bootstrap = null;
         }
-        getLogger().info("Linlang runtime disabled.");
     }
 
     private void printBanner() {
         PluginDescriptionFile description = getDescription();
         LinBanner.print(LinBanner.options()
                 .initials("LIN")
-                .plugin("琳琅", description.getName(), description.getVersion())
+                .plugin("琳琅", "Linlang", description.getVersion())
                 .developers(description.getAuthors())
                 .site(null)
                 .build());
