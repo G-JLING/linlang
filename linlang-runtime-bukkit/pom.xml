@@ -94,10 +94,6 @@
                                     <shadedPattern>me.jling.libs.snakeyaml</shadedPattern>
                                 </relocation>
                                 <relocation>
-                                    <pattern>org.h2</pattern>
-                                    <shadedPattern>me.jling.libs.h2</shadedPattern>
-                                </relocation>
-                                <relocation>
                                     <pattern>com.mysql</pattern>
                                     <shadedPattern>me.jling.libs.mysql</shadedPattern>
                                 </relocation>

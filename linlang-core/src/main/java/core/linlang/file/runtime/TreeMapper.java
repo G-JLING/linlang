@@ -21,12 +21,12 @@ public final class TreeMapper {
         return ns != null && ns.value() == NamingStyle.Style.LIST;
     }
 
-    // 将对象写入 Map 文档（支持嵌套 static class、Map、List）
+    // 将对象写入 Map 文档
     public static void export(Object bean, Map<String,Object> doc){
         if (bean == null) return;
         var style = styleOf(bean.getClass());
         if (style == NamingStyle.Style.LIST) {
-            // Root LIST：写入到特殊键 "_" 以避免破坏根 Map 结构（建议在持有者字段上使用 LIST 更常见）
+            // Root LIST：写入到特殊键 "_" 以避免破坏根 Map 结构
             List<Object> lst = collectListFromBean(bean);
             doc.put("_", lst);
             return;
@@ -85,7 +85,7 @@ public final class TreeMapper {
                 } else if (simpleType(f.getType())) {
                     put(doc, path, v);
                 } else if (Map.class.isAssignableFrom(f.getType())) {
-                    put(doc, path, v); // 直接放 map（子键保持原样）
+                    put(doc, path, v); // 直接放 map
                 } else if (Collection.class.isAssignableFrom(f.getType())) {
                     put(doc, path, v);
                 } else {

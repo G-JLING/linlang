@@ -12,6 +12,7 @@ import api.linlang.file.database.repo.Repository;
 import core.linlang.audit.problem.BuiltinProblemCatalog;
 
 import javax.sql.DataSource;
+import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
 import java.sql.*;
 import java.util.*;
@@ -26,16 +27,23 @@ public final class RepositoryImpl<T, ID> implements Repository<T, ID> {
     private final List<Field> fields;      // 可持久化字段
     private final Field idField;
     private final Map<Field, String> colName;
+    private final Constructor<T> constructor;
+    private final DatabaseDialect dialect;
     private final LinAudit audit;
 
     RepositoryImpl(DataSource ds, Class<T> type, String table) {
-        this(ds, type, table, LinLog.forOwner(null));
+        this(ds, type, table, DatabaseDialect.H2, LinLog.forOwner(null));
     }
 
     RepositoryImpl(DataSource ds, Class<T> type, String table, LinAudit audit) {
+        this(ds, type, table, DatabaseDialect.H2, audit);
+    }
+
+    RepositoryImpl(DataSource ds, Class<T> type, String table, DatabaseDialect dialect, LinAudit audit) {
         this.ds = ds;
         this.type = type;
         this.table = table;
+        this.dialect = Objects.requireNonNull(dialect, "dialect");
         this.audit = Objects.requireNonNull(audit, "audit");
         List<Field> tmp = new ArrayList<>();
         Map<Field, String> names = new LinkedHashMap<>();
@@ -56,14 +64,23 @@ public final class RepositoryImpl<T, ID> implements Repository<T, ID> {
             if (!include) continue;
 
             f.setAccessible(true);
-            if (id != null) idF = f;
+            if (id != null) {
+                if (idF != null) throw new IllegalArgumentException("Multiple @Id fields on " + type.getName());
+                idF = f;
+            }
             String name = (c != null && !c.name().isEmpty()) ? c.name() : f.getName();
             tmp.add(f);
             names.put(f, name);
         }
         this.fields = tmp;
         this.colName = names;
-        this.idField = idF;
+        this.idField = Objects.requireNonNull(idF, "@Id missing on " + type.getName());
+        try {
+            this.constructor = type.getDeclaredConstructor();
+            this.constructor.setAccessible(true);
+        } catch (ReflectiveOperationException exception) {
+            throw new IllegalArgumentException("No zero-argument constructor on " + type.getName(), exception);
+        }
     }
 
     @Override
@@ -77,41 +94,77 @@ public final class RepositoryImpl<T, ID> implements Repository<T, ID> {
     }
 
     private T save(Connection connection, T entity) throws Exception {
-        Object idVal = idField == null ? null : idField.get(entity);
-        if (idVal == null || (idVal instanceof Number && ((Number) idVal).longValue() == 0L)) {
-            String cols = fields.stream().filter(f -> f != idField)
-                    .map(f -> "`" + colName.get(f) + "`").collect(Collectors.joining(","));
-            String qs = fields.stream().filter(f -> f != idField).map(f -> "?").collect(Collectors.joining(","));
-            String sql = "INSERT INTO `" + table + "`(" + cols + ") VALUES(" + qs + ")";
-            try (PreparedStatement statement = connection.prepareStatement(sql, Statement.RETURN_GENERATED_KEYS)) {
-                int i = 1;
-                for (Field field : fields) {
-                    if (field == idField) continue;
-                    statement.setObject(i++, toDb(field.get(entity)));
-                }
-                statement.executeUpdate();
-                assignGeneratedId(entity, statement);
-            }
+        Id id = idField.getAnnotation(Id.class);
+        Object idValue = idField.get(entity);
+        boolean generated = id.auto() && isUnsetGeneratedId(idValue);
+        if (generated) {
+            insert(connection, entity, false, true);
             return entity;
         }
+        if (!id.auto() && idValue == null) {
+            throw new IllegalArgumentException("Manual @Id value must not be null on " + type.getName());
+        }
+        if (update(connection, entity) == 0) {
+            insert(connection, entity, true, false);
+        }
+        return entity;
+    }
 
+    private int update(Connection connection, T entity) throws Exception {
         String sets = fields.stream().filter(f -> f != idField)
-                .map(f -> "`" + colName.get(f) + "`=?").collect(Collectors.joining(","));
-        String sql = "UPDATE `" + table + "` SET " + sets + " WHERE `" + colName.get(idField) + "`=?";
+                .map(f -> DatabaseDialect.quote(colName.get(f)) + "=?").collect(Collectors.joining(","));
+        if (sets.isEmpty()) return exists(connection, idField.get(entity)) ? 1 : 0;
+        String sql = "UPDATE " + DatabaseDialect.quote(table) + " SET " + sets + " WHERE "
+                + DatabaseDialect.quote(colName.get(idField)) + "=?";
         try (PreparedStatement statement = connection.prepareStatement(sql)) {
             int i = 1;
             for (Field field : fields) {
                 if (field == idField) continue;
                 statement.setObject(i++, toDb(field.get(entity)));
             }
-            statement.setObject(i, idField.get(entity));
-            statement.executeUpdate();
+            statement.setObject(i, toDb(idField.get(entity)));
+            return statement.executeUpdate();
         }
-        return entity;
+    }
+
+    private void insert(Connection connection, T entity, boolean includeId, boolean returnGeneratedKey)
+            throws Exception {
+        List<Field> insertedFields = fields.stream()
+                .filter(field -> includeId || field != idField)
+                .toList();
+        String columns = insertedFields.stream()
+                .map(field -> DatabaseDialect.quote(colName.get(field)))
+                .collect(Collectors.joining(","));
+        String placeholders = insertedFields.stream().map(field -> "?").collect(Collectors.joining(","));
+        String sql = "INSERT INTO " + DatabaseDialect.quote(table) + "(" + columns + ") VALUES("
+                + placeholders + ")";
+        int generatedKeys = returnGeneratedKey ? Statement.RETURN_GENERATED_KEYS : Statement.NO_GENERATED_KEYS;
+        try (PreparedStatement statement = connection.prepareStatement(sql, generatedKeys)) {
+            int i = 1;
+            for (Field field : insertedFields) {
+                statement.setObject(i++, toDb(field.get(entity)));
+            }
+            statement.executeUpdate();
+            if (returnGeneratedKey) assignGeneratedId(entity, statement);
+        }
+    }
+
+    private boolean exists(Connection connection, Object id) throws SQLException {
+        String sql = "SELECT 1 FROM " + DatabaseDialect.quote(table) + " WHERE "
+                + DatabaseDialect.quote(colName.get(idField)) + "=? LIMIT 1";
+        try (PreparedStatement statement = connection.prepareStatement(sql)) {
+            statement.setObject(1, toDb(id));
+            try (ResultSet result = statement.executeQuery()) {
+                return result.next();
+            }
+        }
+    }
+
+    private static boolean isUnsetGeneratedId(Object value) {
+        return value == null || value instanceof Number && ((Number) value).longValue() == 0L;
     }
 
     private void assignGeneratedId(T entity, PreparedStatement statement) throws Exception {
-        if (idField == null) return;
         try (ResultSet result = statement.getGeneratedKeys()) {
             if (!result.next()) return;
             Object generated = result.getObject(1);
@@ -128,9 +181,10 @@ public final class RepositoryImpl<T, ID> implements Repository<T, ID> {
 
     @Override
     public void deleteById(ID id) {
-        String sql = "DELETE FROM `" + table + "` WHERE `" + colName.get(idField) + "`=?";
+        String sql = "DELETE FROM " + DatabaseDialect.quote(table) + " WHERE "
+                + DatabaseDialect.quote(colName.get(idField)) + "=?";
         try (Connection c = ds.getConnection(); PreparedStatement ps = c.prepareStatement(sql)) {
-            ps.setObject(1, id);
+            ps.setObject(1, toDb(id));
             ps.executeUpdate();
         } catch (SQLException e) {
             throw operationFailed("delete-by-id", e);
@@ -139,10 +193,11 @@ public final class RepositoryImpl<T, ID> implements Repository<T, ID> {
 
     @Override
     public Optional<T> findById(ID id) {
-        String cols = fields.stream().map(f -> "`" + colName.get(f) + "`").collect(Collectors.joining(","));
-        String sql = "SELECT " + cols + " FROM `" + table + "` WHERE `" + colName.get(idField) + "`=? LIMIT 1";
+        String cols = selectColumns();
+        String sql = "SELECT " + cols + " FROM " + DatabaseDialect.quote(table) + " WHERE "
+                + DatabaseDialect.quote(colName.get(idField)) + "=? LIMIT 1";
         try (Connection c = ds.getConnection(); PreparedStatement ps = c.prepareStatement(sql)) {
-            ps.setObject(1, id);
+            ps.setObject(1, toDb(id));
             try (ResultSet rs = ps.executeQuery()) {
                 if (rs.next()) return Optional.of(fromRow(rs));
                 return Optional.empty();
@@ -154,8 +209,7 @@ public final class RepositoryImpl<T, ID> implements Repository<T, ID> {
 
     @Override
     public java.util.List<T> findAll() {
-        String cols = fields.stream().map(f -> "`" + colName.get(f) + "`").collect(Collectors.joining(","));
-        String sql = "SELECT " + cols + " FROM `" + table + "`";
+        String sql = "SELECT " + selectColumns() + " FROM " + DatabaseDialect.quote(table);
         try (Connection c = ds.getConnection(); PreparedStatement ps = c.prepareStatement(sql);
              ResultSet rs = ps.executeQuery()) {
             List<T> out = new ArrayList<>();
@@ -168,50 +222,76 @@ public final class RepositoryImpl<T, ID> implements Repository<T, ID> {
 
     @Override
     public Page<T> query(QuerySpec spec) {
-        // 极简：where 原样拼接 + limit/offset
-        String cols = fields.stream().map(f -> "`" + colName.get(f) + "`").collect(Collectors.joining(","));
-        StringBuilder sql = new StringBuilder("SELECT ").append(cols).append(" FROM `").append(table).append("`");
-        if (spec.where() != null && !spec.where().isBlank()) sql.append(" WHERE ").append(spec.where());
+        Objects.requireNonNull(spec, "spec");
+        WhereClauseCompiler.CompiledWhere where = WhereClauseCompiler.compile(
+                spec.where(), spec.params().size(), this::requireColumn
+        );
+        StringBuilder sql = new StringBuilder("SELECT ").append(selectColumns()).append(" FROM ")
+                .append(DatabaseDialect.quote(table));
+        if (!where.sql().isBlank()) sql.append(" WHERE ").append(where.sql());
         if (spec.orderBy() != null && !spec.orderBy().isBlank()) {
             sql.append(" ORDER BY ").append(safeOrderBy(spec.orderBy()));
         }
-        if (spec.limit() > 0) sql.append(" LIMIT ").append(spec.limit());
-        if (spec.offset() > 0) sql.append(" OFFSET ").append(spec.offset());
-        try (Connection c = ds.getConnection(); PreparedStatement ps = c.prepareStatement(sql.toString())) {
-            int i = 1;
-            for (Object p : spec.params()) ps.setObject(i++, p);
-            List<T> out = new ArrayList<>();
-            try (ResultSet rs = ps.executeQuery()) {
-                while (rs.next()) out.add(fromRow(rs));
+        sql.append(dialect.pagination(spec.limit(), spec.offset()));
+        try (Connection connection = ds.getConnection()) {
+            long total = countWhere(connection, where, spec.params());
+            try (PreparedStatement statement = connection.prepareStatement(sql.toString())) {
+                bind(statement, spec.params());
+                List<T> out = new ArrayList<>();
+                try (ResultSet result = statement.executeQuery()) {
+                    while (result.next()) out.add(fromRow(result));
+                }
+                return new Page<>(out, Math.toIntExact(total), spec.offset());
             }
-            return new Page<>(out, out.size(), spec.offset());
         } catch (Exception e) {
             throw operationFailed("query", e);
         }
     }
 
     private T fromRow(ResultSet rs) throws Exception {
-        T obj = type.getDeclaredConstructor().newInstance();
+        T obj = constructor.newInstance();
         int idx = 1;
         for (Field f : fields) {
-            Object v = rs.getObject(idx++);
-            if (v != null && f.getType() == java.time.Instant.class && v instanceof Timestamp)
-                v = ((Timestamp) v).toInstant();
-            f.set(obj, v);
+            Object value = f.getType() == byte[].class ? rs.getBytes(idx++) : rs.getObject(idx++);
+            f.set(obj, fromDb(f.getType(), value));
         }
         return obj;
     }
 
     private Object toDb(Object v) {
         if (v instanceof java.time.Instant) return Timestamp.from((java.time.Instant) v);
+        if (v instanceof UUID) return v.toString();
+        if (v instanceof Enum<?> value) return value.name();
+        if (v instanceof Character) return v.toString();
         return v;
+    }
+
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    private Object fromDb(Class<?> target, Object value) {
+        if (value == null) return null;
+        if (target == java.time.Instant.class && value instanceof Timestamp timestamp) return timestamp.toInstant();
+        if (target == UUID.class) return value instanceof UUID ? value : UUID.fromString(value.toString());
+        if (target.isEnum()) return Enum.valueOf((Class<? extends Enum>) target, value.toString());
+        if (target == boolean.class || target == Boolean.class) {
+            if (value instanceof Boolean) return value;
+            if (value instanceof Number number) return number.intValue() != 0;
+            return Boolean.parseBoolean(value.toString());
+        }
+        if (target == long.class || target == Long.class) return ((Number) value).longValue();
+        if (target == int.class || target == Integer.class) return ((Number) value).intValue();
+        if (target == short.class || target == Short.class) return ((Number) value).shortValue();
+        if (target == byte.class || target == Byte.class) return ((Number) value).byteValue();
+        if (target == double.class || target == Double.class) return ((Number) value).doubleValue();
+        if (target == float.class || target == Float.class) return ((Number) value).floatValue();
+        if (target == char.class || target == Character.class) return value.toString().charAt(0);
+        return value;
     }
 
     /**
      * 返回表中记录数
      */
     public long count() {
-        String sql = "SELECT COUNT(*) FROM `" + table + "`";
+        String sql = "SELECT COUNT(*) FROM " + DatabaseDialect.quote(table);
         try (Connection c = ds.getConnection(); PreparedStatement ps = c.prepareStatement(sql);
              ResultSet rs = ps.executeQuery()) {
             if (rs.next()) return rs.getLong(1);
@@ -225,9 +305,10 @@ public final class RepositoryImpl<T, ID> implements Repository<T, ID> {
      * 检查指定 ID 是否存在
      */
     public boolean existsById(ID id) {
-        String sql = "SELECT 1 FROM `" + table + "` WHERE `" + colName.get(idField) + "`=? LIMIT 1";
+        String sql = "SELECT 1 FROM " + DatabaseDialect.quote(table) + " WHERE "
+                + DatabaseDialect.quote(colName.get(idField)) + "=? LIMIT 1";
         try (Connection c = ds.getConnection(); PreparedStatement ps = c.prepareStatement(sql)) {
-            ps.setObject(1, id);
+            ps.setObject(1, toDb(id));
             try (ResultSet rs = ps.executeQuery()) {
                 return rs.next();
             }
@@ -241,10 +322,10 @@ public final class RepositoryImpl<T, ID> implements Repository<T, ID> {
      */
     public Optional<T> findOneWhere(String column, Object value) {
         String mappedColumn = requireColumn(column);
-        String cols = fields.stream().map(f -> "`" + colName.get(f) + "`").collect(Collectors.joining(","));
-        String sql = "SELECT " + cols + " FROM `" + table + "` WHERE `" + mappedColumn + "`=? LIMIT 1";
+        String sql = "SELECT " + selectColumns() + " FROM " + DatabaseDialect.quote(table) + " WHERE "
+                + DatabaseDialect.quote(mappedColumn) + "=? LIMIT 1";
         try (Connection c = ds.getConnection(); PreparedStatement ps = c.prepareStatement(sql)) {
-            ps.setObject(1, value);
+            ps.setObject(1, toDb(value));
             try (ResultSet rs = ps.executeQuery()) {
                 if (rs.next()) return Optional.of(fromRow(rs));
                 return Optional.empty();
@@ -258,17 +339,14 @@ public final class RepositoryImpl<T, ID> implements Repository<T, ID> {
      * 按自定义 WHERE 条件查询多条记录
      */
     public List<T> findAllWhere(String where, Object... params) {
-        String cols = fields.stream().map(f -> "`" + colName.get(f) + "`").collect(Collectors.joining(","));
-        String sql = "SELECT " + cols + " FROM `" + table + "`";
-        if (where != null && !where.isBlank()) {
-            sql += " WHERE " + where;
-        }
+        List<Object> values = params == null ? List.of() : Arrays.asList(params);
+        WhereClauseCompiler.CompiledWhere compiled = WhereClauseCompiler.compile(
+                where, values.size(), this::requireColumn
+        );
+        String sql = "SELECT " + selectColumns() + " FROM " + DatabaseDialect.quote(table)
+                + (compiled.sql().isBlank() ? "" : " WHERE " + compiled.sql());
         try (Connection c = ds.getConnection(); PreparedStatement ps = c.prepareStatement(sql)) {
-            if (params != null) {
-                for (int i = 0; i < params.length; i++) {
-                    ps.setObject(i + 1, params[i]);
-                }
-            }
+            bind(ps, values);
             try (ResultSet rs = ps.executeQuery()) {
                 List<T> out = new ArrayList<>();
                 while (rs.next()) out.add(fromRow(rs));
@@ -283,7 +361,7 @@ public final class RepositoryImpl<T, ID> implements Repository<T, ID> {
      * 清空表
      */
     public void deleteAll() {
-        String sql = "DELETE FROM `" + table + "`";
+        String sql = "DELETE FROM " + DatabaseDialect.quote(table);
         try (Connection c = ds.getConnection(); PreparedStatement ps = c.prepareStatement(sql)) {
             ps.executeUpdate();
         } catch (SQLException e) {
@@ -320,12 +398,15 @@ public final class RepositoryImpl<T, ID> implements Repository<T, ID> {
      * 返回流式结果（注意使用 try-with-resources 时消费完成）
      */
     public Stream<T> streamAll() {
-        String cols = fields.stream().map(f -> "`" + colName.get(f) + "`").collect(Collectors.joining(","));
-        String sql = "SELECT " + cols + " FROM `" + table + "`";
+        String sql = "SELECT " + selectColumns() + " FROM " + DatabaseDialect.quote(table);
+        Connection connection = null;
+        PreparedStatement statement = null;
         try {
-            Connection c = ds.getConnection();
-            PreparedStatement ps = c.prepareStatement(sql);
-            ResultSet rs = ps.executeQuery();
+            connection = ds.getConnection();
+            statement = connection.prepareStatement(sql);
+            ResultSet result = statement.executeQuery();
+            Connection openedConnection = connection;
+            PreparedStatement openedStatement = statement;
             Iterator<T> iterator = new Iterator<T>() {
                 boolean hasNext = false;
                 boolean computed = false;
@@ -334,7 +415,7 @@ public final class RepositoryImpl<T, ID> implements Repository<T, ID> {
                 public boolean hasNext() {
                     if (!computed) {
                         try {
-                            hasNext = rs.next();
+                            hasNext = result.next();
                         } catch (SQLException e) {
                             throw operationFailed("stream-next", e);
                         }
@@ -348,7 +429,7 @@ public final class RepositoryImpl<T, ID> implements Repository<T, ID> {
                     if (!hasNext()) throw new NoSuchElementException();
                     computed = false;
                     try {
-                        return fromRow(rs);
+                        return fromRow(result);
                     } catch (Exception e) {
                         throw operationFailed("stream-map-row", e);
                     }
@@ -359,22 +440,23 @@ public final class RepositoryImpl<T, ID> implements Repository<T, ID> {
             return StreamSupport.stream(spliterator, false)
                     .onClose(() -> {
                         try {
-                            rs.close();
+                            result.close();
                         } catch (SQLException exception) {
                             reportCloseFailure("result-set", exception);
                         }
                         try {
-                            ps.close();
+                            openedStatement.close();
                         } catch (SQLException exception) {
                             reportCloseFailure("statement", exception);
                         }
                         try {
-                            c.close();
+                            openedConnection.close();
                         } catch (SQLException exception) {
                             reportCloseFailure("connection", exception);
                         }
                     });
         } catch (SQLException e) {
+            closeAfterOpenFailure(statement, connection);
             throw operationFailed("stream-open", e);
         }
     }
@@ -397,10 +479,12 @@ public final class RepositoryImpl<T, ID> implements Repository<T, ID> {
     private String requireColumn(String column) {
         if (column == null || column.isBlank()) throw new IllegalArgumentException("column");
         String value = column.trim();
-        if (!colName.containsValue(value)) {
-            throw new IllegalArgumentException("Unknown mapped column: " + value);
+        for (Map.Entry<Field, String> entry : colName.entrySet()) {
+            if (entry.getKey().getName().equals(value) || entry.getValue().equals(value)) {
+                return entry.getValue();
+            }
         }
-        return value;
+        throw new IllegalArgumentException("Unknown mapped column: " + value);
     }
 
     private String safeOrderBy(String orderBy) {
@@ -421,5 +505,46 @@ public final class RepositoryImpl<T, ID> implements Repository<T, ID> {
             terms.add("`" + column + "`" + direction);
         }
         return String.join(",", terms);
+    }
+
+    private String selectColumns() {
+        return fields.stream()
+                .map(field -> DatabaseDialect.quote(colName.get(field)))
+                .collect(Collectors.joining(","));
+    }
+
+    private long countWhere(Connection connection, WhereClauseCompiler.CompiledWhere where, List<?> params)
+            throws SQLException {
+        String sql = "SELECT COUNT(*) FROM " + DatabaseDialect.quote(table)
+                + (where.sql().isBlank() ? "" : " WHERE " + where.sql());
+        try (PreparedStatement statement = connection.prepareStatement(sql)) {
+            bind(statement, params);
+            try (ResultSet result = statement.executeQuery()) {
+                return result.next() ? result.getLong(1) : 0L;
+            }
+        }
+    }
+
+    private void bind(PreparedStatement statement, List<?> params) throws SQLException {
+        for (int i = 0; i < params.size(); i++) {
+            statement.setObject(i + 1, toDb(params.get(i)));
+        }
+    }
+
+    private void closeAfterOpenFailure(PreparedStatement statement, Connection connection) {
+        if (statement != null) {
+            try {
+                statement.close();
+            } catch (SQLException exception) {
+                reportCloseFailure("statement", exception);
+            }
+        }
+        if (connection != null) {
+            try {
+                connection.close();
+            } catch (SQLException exception) {
+                reportCloseFailure("connection", exception);
+            }
+        }
     }
 }
