@@ -31,13 +31,13 @@
 
 
     <dependencies>
-        <!-- 外部 API：版本由根 dependencyManagement 管控 -->
+        <!-- 外部 API -->
         <dependency>
             <groupId>me.jling</groupId>
             <artifactId>linlang-api</artifactId>
         </dependency>
 
-        <!-- core 真实用到的三方依赖：不写版本 -->
+        <!-- core 真实用到的三方依赖 -->
         <dependency>
             <groupId>com.fasterxml.jackson.core</groupId>
             <artifactId>jackson-databind</artifactId>
@@ -52,7 +52,7 @@
             <artifactId>HikariCP</artifactId>
         </dependency>
 
-        <!-- 如用到注解，可设为 provided -->
+        <!-- 如用注解，设为 provided -->
         <dependency>
             <groupId>org.jetbrains</groupId>
             <artifactId>annotations</artifactId>

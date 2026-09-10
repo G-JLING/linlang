@@ -24,6 +24,8 @@ lin-file:
     reload-failed: "Hot reload failed. Reason: {reason}"
 
 lin-data:
+  repository-flush-completed: "Repository flush call completed: entity {entity}, table {table}"
+  connection-pool-closed: "Database connection pool closed: {type}"
   db-init: "Initialized database: {type} {url}"
   ensure-table: "Ensured table: {table}"
   flush-ok: "Persisted data: {data}"

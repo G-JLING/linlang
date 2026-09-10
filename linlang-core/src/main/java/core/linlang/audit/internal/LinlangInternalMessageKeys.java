@@ -84,6 +84,8 @@ public class LinlangInternalMessageKeys {
     }
 
     public static class LinData {
+        public String repositoryFlushCompleted = "仓库刷新调用完成：实体 {entity}，数据表 {table}";
+        public String connectionPoolClosed = "数据库连接池已关闭：{type}";
         public String dbInit = "已初始化数据库：{type} {url}";
         public String ensureTable = "已确保表：{table}";
         public String flushOk = "已落盘：{data}";

@@ -79,7 +79,7 @@ public final class DataServiceImpl implements DataService {
             created = new HikariDataSource(hc);
             this.mode = type;
             this.ds = created;
-            audit.logger().info(LinMsg.k("linData.dbInit"),
+            audit.logger().file(LinMsg.k("linData.dbInit"),
                     "type", type,
                     "url", sanitizedJdbcUrl(cfg.url()));
         } catch (RuntimeException exception) {
@@ -345,34 +345,34 @@ public final class DataServiceImpl implements DataService {
 
     @Override
     public void flushAll() {
-        for (Repository<?, ?> r : openRepos.values()) {
-            try {
-                r.flush();
-                audit.logger().info(LinMsg.k("linData.flushOk"), "data", r);
-            } catch (Throwable e) {
-                audit.problem().report(
-                        BuiltinProblemCatalog.DATA_FLUSH_FAILED, e,
-                        "data", r
-                );
-            }
-        }
+        openRepos.forEach(this::flushRepository);
     }
 
     @Override
     public <T> void flushOf(Class<T> entityType) {
         Repository<?, ?> r = openRepos.get(entityType);
         if (r != null) {
-            try {
-                r.flush();
-                audit.logger().info(LinMsg.k("linData.flushOk"), "data", r);
-            } catch (Throwable e) {
-                audit.problem().report(
-                        BuiltinProblemCatalog.DATA_FLUSH_FAILED, e,
-                        "data", r,
-                        "entity", entityType.getName()
-                );
-            }
+            flushRepository(entityType, r);
         }
+    }
+
+    private void flushRepository(Class<?> entityType, Repository<?, ?> repository) {
+        String table = tableName(entityType);
+        try {
+            repository.flush();
+            audit.logger().file(LinMsg.k("linData.repositoryFlushCompleted"),
+                    "entity", entityType.getName(),
+                    "table", table);
+        } catch (Throwable exception) {
+            audit.problem().report(BuiltinProblemCatalog.DATA_FLUSH_FAILED, exception,
+                    "operation", "flush",
+                    "entity", entityType.getName(),
+                    "table", table);
+        }
+    }
+
+    private static String tableName(Class<?> entityType) {
+        return Binder.tableOf(entityType).map(Binder.BoundTable::name).orElse(entityType.getSimpleName());
     }
 
     @Override
@@ -382,13 +382,15 @@ public final class DataServiceImpl implements DataService {
 
     private void closeResources(boolean flush) {
         if (flush) flushAll();
-        for (Repository<?, ?> r : openRepos.values()) {
+        for (Map.Entry<Class<?>, Repository<?, ?>> entry : openRepos.entrySet()) {
             try {
-                r.close();
+                entry.getValue().close();
             } catch (Throwable exception) {
                 audit.problem().report(
                         BuiltinProblemCatalog.DATA_RESOURCE_CLOSE_FAILED, exception,
-                        "resource", r
+                        "resource", "repository",
+                        "entity", entry.getKey().getName(),
+                        "table", tableName(entry.getKey())
                 );
             }
         }
@@ -398,13 +400,11 @@ public final class DataServiceImpl implements DataService {
         if (dataSource != null) {
             try {
                 dataSource.close();
+                audit.logger().file(LinMsg.k("linData.connectionPoolClosed"), "type", mode);
             } catch (RuntimeException exception) {
                 audit.problem().report(BuiltinProblemCatalog.DATA_RESOURCE_CLOSE_FAILED, exception,
                         "resource", "connection-pool");
             }
-        }
-        if (flush) {
-            audit.logger().info(LinMsg.k("linData.flushOk"), "data", "close()");
         }
     }
 

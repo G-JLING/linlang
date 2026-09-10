@@ -61,14 +61,14 @@ public final class YamlCodec {
         }
     }
 
-    // 解析 YAML 字符串为 Map，空或非 Map 时，返回空 Map
+    // 解析 YAML 字符串为可变 Map，空或非 Map 时也允许调用方补齐配置。
     @SuppressWarnings("unchecked")
     public static Map<String, Object> load(String s) {
         try {
             Object y = yaml();
             Method m = y.getClass().getMethod("load", String.class);
             Object o = m.invoke(y, s == null ? "" : s);
-            return (o instanceof Map) ? (Map<String, Object>) o : java.util.Map.of();
+            return (o instanceof Map) ? (Map<String, Object>) o : new LinkedHashMap<>();
         } catch (RuntimeException re) {
             throw re;
         } catch (Throwable e) {

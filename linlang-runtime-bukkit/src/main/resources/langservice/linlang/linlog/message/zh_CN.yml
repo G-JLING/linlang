@@ -23,6 +23,8 @@ lin-file:
     reload-failed: "热重载失败，请联系 {me}。原因：{reason}"
 
 lin-data:
+  repository-flush-completed: "仓库刷新调用完成：实体 {entity}，数据表 {table}"
+  connection-pool-closed: "数据库连接池已关闭：{type}"
   db-init: "已初始化数据库：{type} {url}"
   ensure-table: "已确保表：{table}"
   flush-ok: "数据库 {data} 已落盘"
