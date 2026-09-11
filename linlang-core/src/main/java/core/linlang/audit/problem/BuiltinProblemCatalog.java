@@ -1,6 +1,7 @@
 package core.linlang.audit.problem;
 
 import api.linlang.audit.problem.ProblemDefinition;
+import api.linlang.runtime.version.VersionCheck;
 
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -118,6 +119,15 @@ public final class BuiltinProblemCatalog {
         add(values, RUNTIME_ENABLE_FAILED, "Runtime",
                 "Linlang Bukkit Runtime 启动失败。",
                 "检查同一异常的 cause，并确认 API 版本、服务注册和运行环境兼容。");
+        add(values, VersionCheck.INCOMPATIBLE_CODE, "Runtime",
+                "依赖版本与运行时的 A 或 B 不同，已拒绝初始化。",
+                "使用 A.B 相同的 API 与运行时；版本过低时获取新的匹配构建：" + VersionCheck.PROJECT_URL);
+        add(values, VersionCheck.WARNING_CODE, "Runtime",
+                "依赖版本与运行时的 C 不同，允许运行，但需要确认功能兼容。",
+                "建议使用相同的 A.B.C；版本过低时获取新的匹配构建：" + VersionCheck.PROJECT_URL);
+        add(values, VersionCheck.INVALID_CODE, "Runtime",
+                "无法识别依赖或运行时的四段版本号，已拒绝初始化。",
+                "检查版本元数据是否为 A.B.C.D 格式，并重新获取完整构建：" + VersionCheck.PROJECT_URL);
         add(values, MESSAGE_TEMPLATE_INSTALL_FAILED, "Runtime",
                 "运行时内建消息模板无法安装。",
                 "检查运行时语言资源与语言服务是否已经完成初始化。");

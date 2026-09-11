@@ -8,6 +8,8 @@ import api.linlang.file.file.ConfigService;
 import api.linlang.file.file.LangService;
 import api.linlang.messenger.LinMessenger;
 import api.linlang.runtime.Linlang;
+import api.linlang.runtime.Lin;
+import api.linlang.runtime.version.VersionCheck;
 import api.linlang.view.LinView;
 
 import core.linlang.file.impl.ConfigServiceImpl;
@@ -62,6 +64,8 @@ public final class LinlangBukkitBootstrap implements AutoCloseable, Linlang, Lin
      * @return 新创建的LinlangBukkitBootstrap实例
      */
     public static LinlangBukkitBootstrap install(JavaPlugin runtimePlugin) {
+        VersionCheck.requireCompatible(Lin.API_VERSION, runtimePlugin.getDescription().getVersion(),
+                runtimePlugin.getLogger()::warning);
         return new LinlangBukkitBootstrap(runtimePlugin);
     }
 
