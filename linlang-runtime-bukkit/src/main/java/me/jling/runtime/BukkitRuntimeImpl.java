@@ -224,6 +224,7 @@ public final class BukkitRuntimeImpl implements AutoCloseable {
      */
     public Set<BukkitFacadeImpl> listFacades() {
         synchronized (facades) {
+            facades.removeIf(BukkitFacadeImpl::isClosed);
             return Collections.unmodifiableSet(new LinkedHashSet<>(facades));
         }
     }
@@ -232,7 +233,9 @@ public final class BukkitRuntimeImpl implements AutoCloseable {
      * 软重载运行时插件自身及所有已注册门面的服务实例。
      */
     public void reload() {
-        reloadAndCountFailures();
+        core.attachRuntimeFileServices(bootstrap.getConfig(), bootstrap.getLanguage());
+        core.reload();
+        bootstrap.refreshRuntimeCommandLanguage();
     }
 
     /**

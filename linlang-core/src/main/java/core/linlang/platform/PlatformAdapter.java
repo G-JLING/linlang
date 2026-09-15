@@ -51,6 +51,11 @@ public interface PlatformAdapter<P> {
     /** 校验 facade 传入的 platformContext（默认不校验） */
     default void validatePlatformContext(P owner, Object platformContext) {}
 
+    /**
+     * 在操作服务生命周期前检查调用线程。
+     */
+    default void checkLifecycleThread(P owner) {}
+
     /** 默认的 totalPrefix（当插件没设置 totalPrefix/totalPrefixProvider 时） */
     String defaultTotalPrefix(P owner);
 

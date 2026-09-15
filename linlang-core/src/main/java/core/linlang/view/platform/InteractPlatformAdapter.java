@@ -43,6 +43,11 @@ public interface InteractPlatformAdapter {
      */
     Object resolveItem(Object viewer, core.linlang.view.spec.IconSpec icon, Map<String, Object> vars);
 
+    /**
+     * 重载必须在能同步完成平台更新的线程执行。
+     */
+    default void checkReloadThread() {}
+
     void runMain(Runnable task);
 
     void runAsync(Runnable task);

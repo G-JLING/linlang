@@ -442,7 +442,11 @@ public final class LinCommandImpl implements LinCommand, LocaleAware, PrefixAwar
                     );
                     return true;
                 }
-                if (bestUsage == null) {
+                // 同一路径可以注册多个参数签名，优先报告实际匹配程度最高的签名。
+                if (argumentFailedNode == null
+                        || n.literals.size() > argumentFailedNode.literals.size()
+                        || (n.literals.size() == argumentFailedNode.literals.size()
+                            && vars.size() > argumentFailedVars.size())) {
                     bestUsage = buildUsage(n);
                     argumentFailedNode = n;
                     argumentFailedVars = new LinkedHashMap<>(vars);
@@ -454,7 +458,7 @@ public final class LinCommandImpl implements LinCommand, LocaleAware, PrefixAwar
 
         // 匹配失败原因
         if (!anyLiteralMatched) {
-            bridge.msg(sender, prefix + messages.get("error.unknown-command"));
+            sendUnknownCommand(sender, label, args, bridge);
             return false;
         }
         if (anyPermDenied) {
@@ -480,11 +484,100 @@ public final class LinCommandImpl implements LinCommand, LocaleAware, PrefixAwar
             );
             bridge.msg(sender, prefix + messages.get("error.bad-arg"));
             bridge.msg(sender, messages.get("help.usage") + "§f" + bestUsage);
+            sendArgumentSuggestion(sender, label, args, bridge);
             return true;
         }
         // 理论上不会走到这里，但如果真的到了，这个兜底
-        bridge.msg(sender, prefix + messages.get("error.unknown-command"));
+        sendUnknownCommand(sender, label, args, bridge);
         return false;
+    }
+
+    private void sendUnknownCommand(Object sender, String label, String[] args, PlatformBridge bridge) {
+        bridge.msg(sender, prefix + messages.get("error.unknown-command"));
+        List<Model.Node> suggestionNodes = new ArrayList<>(nodes);
+        if (!hasExplicitSecondLiteral("help")) {
+            suggestionNodes.add(builtinSuggestionNode(label, "help", true));
+        }
+        if (!hasExplicitSecondLiteral("info")) {
+            suggestionNodes.add(builtinSuggestionNode(label, "info", false));
+        }
+        String suggestion = CommandSuggester.suggest(
+                label,
+                args,
+                suggestionNodes,
+                node -> hasPermissions(sender, bridge, node.exec.permissions)
+                        && (node.exec.target == ExecTarget.ALL
+                        || bridge.checkTarget(sender, node.exec.target)),
+                (node, supplied) -> acceptedArgumentPrefix(node, sender, supplied)
+        );
+        if (suggestion != null) {
+            bridge.msg(sender, messages.get("error.suggestion", "command", suggestion));
+        }
+    }
+
+    private void sendArgumentSuggestion(Object sender, String label, String[] args, PlatformBridge bridge) {
+        String suggestion = CommandSuggester.suggest(
+                label,
+                args,
+                nodes,
+                node -> hasPermissions(sender, bridge, node.exec.permissions)
+                        && (node.exec.target == ExecTarget.ALL
+                        || bridge.checkTarget(sender, node.exec.target)),
+                (node, supplied) -> acceptedArgumentPrefix(node, sender, supplied)
+        );
+        if (suggestion != null) {
+            bridge.msg(sender, messages.get("error.suggestion", "command", suggestion));
+        }
+    }
+
+    private int acceptedArgumentPrefix(Model.Node node, Object sender, String[] supplied) {
+        int required = 0;
+        for (Model.Param parameter : node.params) {
+            if (!parameter.optional) required++;
+        }
+        int upper = supplied.length;
+        boolean greedy = node.params.stream()
+                .flatMap(parameter -> parameter.types.stream())
+                .anyMatch(type -> "text".equalsIgnoreCase(type.id));
+        if (!greedy) upper = Math.min(upper, node.params.size());
+
+        for (int count = upper; count >= required; count--) {
+            try {
+                parseArguments(
+                        node,
+                        sender,
+                        new LinkedHashMap<>(),
+                        Arrays.copyOf(supplied, count),
+                        0,
+                        0
+                );
+                return count;
+            } catch (Interact.Suspend suspend) {
+                return count;
+            } catch (IllegalArgumentException ignored) {
+            } catch (Exception exception) {
+                return -1;
+            }
+        }
+        return -1;
+    }
+
+    private static Model.Node builtinSuggestionNode(String label, String literal, boolean page) {
+        Model.Node node = new Model.Node();
+        node.literals.add(label);
+        node.literals.add(literal);
+        node.exec = new Model.Exec();
+        node.exec.target = ExecTarget.ALL;
+        if (page) {
+            Model.Param parameter = new Model.Param();
+            parameter.name = "page";
+            parameter.optional = true;
+            Model.TypeSpec type = new Model.TypeSpec();
+            type.id = "int";
+            parameter.types.add(type);
+            node.params.add(parameter);
+        }
+        return node;
     }
 
     private boolean hasExplicitSecondLiteral(String literal) {
@@ -609,7 +702,8 @@ public final class LinCommandImpl implements LinCommand, LocaleAware, PrefixAwar
             notifySuccess(node, context);
         } catch (Exception exception) {
             notifyFailure(node, context, CommandFailure.Reason.EXECUTION, exception);
-            audit.problem().report(
+            if (!(exception instanceof api.linlang.file.file.config.ConfigLoadException)
+                    && !(exception instanceof api.linlang.runtime.ReloadException)) audit.problem().report(
                     BuiltinProblemCatalog.COMMAND_EXECUTION_FAILED, exception,
                     "command", node.usage,
                     "sender", sender == null ? "null" : sender.getClass().getName()
@@ -736,8 +830,12 @@ public final class LinCommandImpl implements LinCommand, LocaleAware, PrefixAwar
                     completed = true;
                 }
             }
-            if (!completed && prefixToken.isEmpty()) {
-                arguments.add(parameterDisplayName(node, parameter));
+            if (!completed) {
+                String displayName = parameterDisplayName(node, parameter);
+                if (displayName.regionMatches(true, 0, prefixToken, 0, prefixToken.length())
+                        || parameter.name.regionMatches(true, 0, prefixToken, 0, prefixToken.length())) {
+                    arguments.add(displayName);
+                }
             }
         }
 
@@ -849,11 +947,11 @@ public final class LinCommandImpl implements LinCommand, LocaleAware, PrefixAwar
             String rightText = atLast ? messages.get("help.last-page") : messages.get("help.next-page");
             String middle = messages.get("help.page-info").replace("{current}", String.valueOf(cur)).replace("{total_pages}", String.valueOf(totalPages));
 
-            String leftCmd = "/" + root + " help " + (atFirst ? 1 : (cur - 1));
-            String rightCmd = "/" + root + " help " + (atLast ? totalPages : (cur + 1));
+            String leftCmd = atFirst ? "" : "/" + root + " help " + (cur - 1);
+            String rightCmd = atLast ? "" : "/" + root + " help " + (cur + 1);
 
-            String leftHover = messages.get("help.hover-left");
-            String rightHover = messages.get("help.hover-right");
+            String leftHover = atFirst ? "" : messages.get("help.hover-left");
+            String rightHover = atLast ? "" : messages.get("help.hover-right");
 
             bridge.clickableRow(
                     sender,

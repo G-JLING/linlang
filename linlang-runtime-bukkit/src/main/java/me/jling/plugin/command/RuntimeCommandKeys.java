@@ -17,7 +17,9 @@ public final class RuntimeCommandKeys {
     public Info info = new Info();
     public Plugins plugins = new Plugins();
     public Restart restart = new Restart();
+    @api.linlang.file.file.annotations.Key("reload-plugin")
     public Reload reload = new Reload();
+    public ReloadAll reloadAll = new ReloadAll();
     public RestartAll restartAll = new RestartAll();
     public Problems problems = new Problems();
     public Problem problem = new Problem();
@@ -44,17 +46,23 @@ public final class RuntimeCommandKeys {
     }
 
     public static final class Restart {
-        public LangText description = LangText.of("Restart the Linlang instance of a plugin");
+        public LangText description = LangText.of("Rebuild a plugin facade");
         public LangText pluginLabel = LangText.of("plugin name");
         public LangText emptyName = LangText.of(" &cPlugin name cannot be empty.");
         public LangText ambiguous = LangText.of(" &cMultiple plugins matched. Enter a more specific name:");
         public LangText candidate = LangText.of("&7  - &f{name}");
         public LangText notFound = LangText.of(" &cNo registered plugin named &f{name} &cwas found.");
-        public LangText success = LangText.of(" &aRestarted the Linlang instance of &f{name}&a.");
-        public LangText failed = LangText.of(" &cRestart failed. Problem code: &f{code}");
+        public LangText success = LangText.of(" &aRebuilt the Linlang services of &f{name}&a.");
+        public LangText failed = LangText.of(" &cRebuild failed. Problem code: &f{code}");
     }
 
     public static final class Reload {
+        public LangText description = LangText.of("Soft-reload a plugin facade");
+        public LangText success = LangText.of(" &aSoft-reloaded the Linlang facade of &f{name}&a.");
+        public LangText failed = LangText.of(" &cReload failed. Problem code: &f{code}");
+    }
+
+    public static final class ReloadAll {
         public LangText description = LangText.of("Soft-reload the runtime and all registered plugins");
         public LangText success = LangText.of(" &aSoft-reloaded the runtime and all registered plugins.");
         public LangText partial = LangText.of(" &eReload completed with {count} failure(s). Check the problem codes.");
@@ -62,8 +70,8 @@ public final class RuntimeCommandKeys {
     }
 
     public static final class RestartAll {
-        public LangText description = LangText.of("Hard-restart all registered plugin facades");
-        public LangText result = LangText.of(" &7Restarted plugin facades: &f{success} &7/ &f{total}&7.");
+        public LangText description = LangText.of("Rebuild all registered plugin facades");
+        public LangText result = LangText.of(" &7Rebuilt plugin facades: &f{success} &7/ &f{total}&7.");
     }
 
     public static final class Problems {

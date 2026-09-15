@@ -1,6 +1,9 @@
 package core.linlang.file.impl;
 
 import api.linlang.audit.LinAudit;
+import api.linlang.runtime.ReloadException;
+import core.linlang.file.config.ConfigMapper;
+import core.linlang.file.config.ConfigDiagnostics;
 import api.linlang.audit.LinLog;
 import api.linlang.file.file.FileType;
 import api.linlang.file.file.LangList;
@@ -89,6 +92,79 @@ public final class LangServiceImpl implements LangService, LocaleAware {
 
     /** keysClass -> meta */
     private final Map<Class<?>, BoundMeta> bound = new ConcurrentHashMap<>();
+    private final Map<String, Class<?>> aliases = new ConcurrentHashMap<>();
+    private final Set<Class<?>> failedPacks = new HashSet<>();
+    private boolean updating;
+    private Runnable threadCheck = () -> {};
+
+    /**
+     * 设置语言更新的线程检查，独立使用时不施加平台限制。
+     */
+    public void threadCheck(Runnable check) { threadCheck = Objects.requireNonNull(check); }
+    private final Set<Runnable> changeListeners = ConcurrentHashMap.newKeySet();
+
+    /**
+     * 注册语言变更监听器，由消费方在关闭时移除。
+     */
+    public void addChangeListener(Runnable listener) {
+        changeListeners.add(Objects.requireNonNull(listener));
+    }
+
+    /**
+     * 移除语言变更监听器。
+     */
+    public void removeChangeListener(Runnable listener) {
+        changeListeners.remove(listener);
+    }
+
+    private void notifyChanged() {
+        Map<String, Throwable> failures = new LinkedHashMap<>();
+        int index = 0;
+        for (Runnable listener : new ArrayList<>(changeListeners)) {
+            try {
+                listener.run();
+            } catch (RuntimeException exception) {
+                failures.put("listener:" + index, exception);
+                if (!(exception instanceof ReloadException)) {
+                    audit.problem().report(BuiltinProblemCatalog.LANGUAGE_LISTENER_FAILED, exception);
+                }
+            }
+            index++;
+        }
+        if (!failures.isEmpty()) throw new ReloadException(failures);
+    }
+
+    @Override
+    public <T> T bind(String alias, Class<T> keysClass) {
+        return bind(alias, keysClass, true);
+    }
+
+    @Override
+    public synchronized <T> T bind(String alias, Class<T> keysClass, boolean emit) {
+        if (alias == null || !alias.matches("[A-Za-z0-9_-]+")) {
+            throw new IllegalArgumentException("Invalid language alias: " + alias);
+        }
+        Objects.requireNonNull(keysClass, "keysClass");
+        Class<?> existing = aliases.get(alias);
+        if (existing != null && existing != keysClass) {
+            throw new IllegalArgumentException("Language alias already bound: " + alias);
+        }
+        T holder = bind(keysClass, emit);
+        aliases.put(alias, keysClass);
+        notifyChanged();
+        return holder;
+    }
+
+    @Override
+    public Object lookup(String alias, String key) {
+        if (alias == null || key == null || key.isBlank()) return null;
+        Class<?> type = aliases.get(alias);
+        BoundMeta meta = type == null ? null : bound.get(type);
+        if (meta == null) return null;
+        Object value = resolveValue(meta, key, locale());
+        if (value == null) value = resolveValue(meta, key, meta.defaultLocale);
+        return value;
+    }
 
     public LangServiceImpl(PathResolver paths) {
         this(paths, null);
@@ -109,24 +185,44 @@ public final class LangServiceImpl implements LangService, LocaleAware {
     }
 
     @Override
-    public void setLocale(String locale) {
-        if (locale == null || locale.isBlank()) return;
+    public synchronized void setLocale(String locale) {
+        threadCheck.run();
+        if (locale == null || locale.isBlank()) throw new IllegalArgumentException("locale");
         String next = locale.trim();
         if (appliedLocale.equalsIgnoreCase(next)) return;
-
-        this.appliedLocale = next;
-
-        // Switch all bound holders to the new locale, in-place.
+        if (updating) throw new IllegalStateException("Recursive language update is not allowed");
+        updating = true;
+        List<LanguageUpdate> updates = new ArrayList<>();
+        Map<String, Throwable> failures = new LinkedHashMap<>();
         try {
-            switchAllHoldersTo(next);
-        } catch (Throwable t) {
-            audit.problem().report(
-                    BuiltinProblemCatalog.LANGUAGE_LOCALE_SWITCH_FAILED, t,
-                    "locale", next
-            );
+            for (BoundMeta meta : bound.values()) {
+                try {
+                    updates.add(prepareLanguage(meta, next));
+                } catch (RuntimeException exception) {
+                    languageFailure(failures, meta, next, exception);
+                }
+            }
+            if (!failures.isEmpty()) throw new ReloadException(failures);
+            List<LanguageUpdate> committed = new ArrayList<>();
+            for (LanguageUpdate update : updates) {
+                try {
+                    update.fields.commit(update.persist);
+                    committed.add(update);
+                } catch (RuntimeException exception) {
+                    for (LanguageUpdate previous : committed) {
+                        try { previous.fields.rollback(); }
+                        catch (RuntimeException rollback) { exception.addSuppressed(rollback); }
+                    }
+                    languageFailure(failures, update.meta, next, exception);
+                    throw new ReloadException(failures);
+                }
+            }
+            for (LanguageUpdate update : updates) publish(update);
+            appliedLocale = next;
+            notifyChanged();
+        } finally {
+            updating = false;
         }
-
-        audit.logger().debug(LinMsg.k("linFile.lang.langChangeLocale"), "locale", next);
     }
 
     // ------------------------------------------------------------
@@ -139,14 +235,20 @@ public final class LangServiceImpl implements LangService, LocaleAware {
     }
 
     @Override
-    public <T> T bind(Class<T> keysClass, boolean emit) {
+    public synchronized <T> T bind(Class<T> keysClass, boolean emit) {
+        threadCheck.run();
+        if (updating) throw new IllegalStateException("Cannot bind during language update");
         try {
             return bindInternal(keysClass, emit);
         } catch (RuntimeException exception) {
-            audit.problem().report(BuiltinProblemCatalog.LANGUAGE_BIND_FAILED, exception,
-                    "lang", keysClass == null ? "null" : keysClass.getName(),
-                    "locale", locale());
-            throw new IllegalStateException(BuiltinProblemCatalog.LANGUAGE_BIND_FAILED, exception);
+            reportLanguageProblem(
+                    BuiltinProblemCatalog.LANGUAGE_BIND_FAILED,
+                    keysClass,
+                    locale(),
+                    exception,
+                    emit
+            );
+            throw exception;
         }
     }
 
@@ -158,15 +260,8 @@ public final class LangServiceImpl implements LangService, LocaleAware {
         if (existing != null && keysClass.isInstance(existing.holder)) {
             @SuppressWarnings("unchecked")
             T h = (T) existing.holder;
-            try {
-                loadAndPopulate(existing, h, locale());
-            } catch (Throwable exception) {
-                audit.problem().report(
-                        BuiltinProblemCatalog.LANGUAGE_RELOAD_FAILED, exception,
-                        "lang", keysClass.getName(),
-                        "locale", locale()
-                );
-            }
+            loadAndPopulate(existing, h, locale());
+            failedPacks.remove(keysClass);
             return h;
         }
 
@@ -208,9 +303,12 @@ public final class LangServiceImpl implements LangService, LocaleAware {
     }
 
     @Override
-    public <T> void save(Class<T> keysClass, String locale) {
+    public synchronized <T> void save(Class<T> keysClass, String locale) {
         Objects.requireNonNull(keysClass, "keysClass");
 
+        if (failedPacks.contains(keysClass)) {
+            throw new IllegalStateException("Language pack must reload successfully before saving");
+        }
         BoundMeta bm = bound.get(keysClass);
         if (bm == null || bm.holder == null) return;
         String loc = localeFor(bm.normalizeLocale, locale);
@@ -234,6 +332,7 @@ public final class LangServiceImpl implements LangService, LocaleAware {
             persist(f, bm.fmt, curr);
 
             cacheDocument(bm, loc, curr);
+            notifyChanged();
         } catch (Exception e) {
             audit.problem().report(
                     BuiltinProblemCatalog.LANGUAGE_SAVE_FAILED, e,
@@ -247,44 +346,131 @@ public final class LangServiceImpl implements LangService, LocaleAware {
     public void saveAll() {
         for (BoundMeta bm : new ArrayList<>(bound.values())) {
             if (bm == null) continue;
-            save((Class<Object>) bm.keysClass, locale());
+            if (!failedPacks.contains(bm.keysClass)) save((Class<Object>) bm.keysClass, locale());
         }
     }
 
     @Override
-    public void reload() {
-        String cur = locale();
+    public synchronized void reload() {
+        threadCheck.run();
+        if (updating) throw new IllegalStateException("Recursive language update is not allowed");
+        updating = true;
+        Map<String, Throwable> failures = new LinkedHashMap<>();
+        boolean changed = false;
+        try {
+            for (BoundMeta meta : new ArrayList<>(bound.values())) {
+                try {
+                    LanguageUpdate update = prepareLanguage(meta, locale());
+                    update.fields.commit(update.persist);
+                    publish(update);
+                    changed = true;
+                } catch (RuntimeException exception) {
+                    languageFailure(failures, meta, locale(), exception);
+                }
+            }
+            if (changed) {
+                try { notifyChanged(); }
+                catch (ReloadException exception) { failures.putAll(exception.failures()); }
+            }
+            if (!failures.isEmpty()) throw new ReloadException(failures);
+            audit.logger().file(LinMsg.k("linFile.lang.langReloaded"));
+        } finally {
+            updating = false;
+        }
+    }
 
-        // Rebuild cache from scratch for the current locale for all bound holders.
-        Map<String, Map<String, String>> newCache = new LinkedHashMap<>();
+    private void languageFailure(Map<String, Throwable> failures, BoundMeta meta,
+                                 String locale, RuntimeException exception) {
+        failedPacks.add(meta.keysClass);
+        String path = diskFile(meta.filePath, locale, meta.fmt, meta.normalizeLocale).toString();
+        failures.put(path, exception);
+        reportLanguageProblem(
+                BuiltinProblemCatalog.LANGUAGE_RELOAD_FAILED,
+                meta.keysClass,
+                locale,
+                exception,
+                meta.emit
+        );
+    }
 
-        for (BoundMeta bm : new ArrayList<>(bound.values())) {
-            if (bm == null || bm.holder == null) continue;
+    private void reportLanguageProblem(String code, Class<?> keysClass, String locale,
+                                       RuntimeException exception, boolean emit) {
+        PackSpec spec = null;
+        java.nio.file.Path file = paths.root().resolve("language");
+        try {
+            if (keysClass != null) {
+                spec = packSpec(keysClass);
+                file = diskFile(spec.filePath, locale, spec.fmt, spec.normalizeLocale);
+            }
+        } catch (RuntimeException resolutionFailure) {
+            exception.addSuppressed(resolutionFailure);
+        }
+        List<api.linlang.file.file.config.ConfigIssue> issues =
+                exception instanceof core.linlang.file.config.ConfigMappingException mapping
+                        ? mapping.issues()
+                        : List.of(new api.linlang.file.file.config.ConfigIssue(
+                                "$", "语言文件加载失败，请检查文件权限与语言类声明"
+                        ));
+        String detail = issues.isEmpty() ? "" : "；" + issues.get(0).message();
+        String summary = "语言文件错误：" + ConfigDiagnostics.safe(file.getFileName().toString()) + detail;
+        boolean diagnosticWrites = spec != null
+                && emit
+                && spec.emit
+                && keysClass != null
+                && !keysClass.isAnnotationPresent(NoEmit.class);
+        if (exception instanceof core.linlang.file.config.ConfigMappingException && diagnosticWrites) {
             try {
-                bm.texts.clear();
-                bm.documents.clear();
-                Map<String, Object> doc = loadDocFor(bm, cur);
-                TreeMapper.populate(bm.holder, doc);
-
-                String cacheLocale = localeFor(bm.normalizeLocale, cur);
-                Map<String, Object> document = immutableDeepCopy(doc);
-                Map<String, String> values = immutableTextSnapshot(document);
-                bm.documents.put(cacheLocale, document);
-                bm.texts.put(cacheLocale, values);
-                newCache.computeIfAbsent(cacheLocale, k -> new LinkedHashMap<>()).putAll(values);
-            } catch (Exception ex) {
-                audit.problem().report(
-                        BuiltinProblemCatalog.LANGUAGE_RELOAD_FAILED, ex,
-                        "lang", bm.keysClass.getName(),
-                        "locale", cur
+                String raw = IOs.exists(file) ? IOs.readString(file) : null;
+                ConfigDiagnostics.report(
+                        file,
+                        spec.fmt,
+                        raw,
+                        issues,
+                        true
                 );
+            } catch (RuntimeException diagnosticFailure) {
+                exception.addSuppressed(diagnosticFailure);
             }
         }
+        audit.problem().report(api.linlang.audit.problem.LinProblem.builder(code)
+                .consoleSummary(summary)
+                .cause(exception instanceof core.linlang.file.config.ConfigMappingException ? null : exception)
+                .context("file", file.toString())
+                .context("locale", locale)
+                .context("lang", keysClass == null ? "null" : keysClass.getName())
+                .context("issues", issues.stream().map(issue -> Map.of(
+                        "key", issue.key(),
+                        "message", issue.message()
+                )).toList())
+                .build());
+    }
 
+    private record LanguageUpdate(BoundMeta meta, String locale, Map<String, Object> document,
+                                  ConfigMapper.Prepared fields, Runnable persist) {}
+
+    private LanguageUpdate prepareLanguage(BoundMeta meta, String locale) {
+        List<Runnable> writes = new ArrayList<>();
+        Map<String, Object> doc = loadDocFor(meta, locale, writes);
+        ConfigMapper.Prepared fields = new ConfigMapper((value, lines) -> {
+            throw new IllegalArgumentException("ConfigText is not a language field");
+        }).prepare(meta.holder, doc);
+        return new LanguageUpdate(meta, localeFor(meta.normalizeLocale, locale),
+                immutableDeepCopy(doc), fields, () -> writes.forEach(Runnable::run));
+    }
+
+    private void publish(LanguageUpdate update) {
+        update.meta.documents.clear();
+        update.meta.texts.clear();
+        cacheDocument(update.meta, update.locale, update.document);
         cache.clear();
-        cache.putAll(newCache);
-
-        audit.logger().file(LinMsg.k("linFile.lang.langReloaded"));
+        for (BoundMeta meta : bound.values()) {
+            for (var entry : meta.texts.entrySet()) {
+                cache.computeIfAbsent(entry.getKey(), ignored -> new LinkedHashMap<>()).putAll(entry.getValue());
+            }
+        }
+        cache.computeIfAbsent(update.locale, ignored -> new LinkedHashMap<>())
+                .putAll(update.meta.texts.get(update.locale));
+        failedPacks.remove(update.meta.keysClass);
     }
 
     @Override
@@ -320,19 +506,21 @@ public final class LangServiceImpl implements LangService, LocaleAware {
         for (String loc : scanLocalesOnDisk(spec)) {
             try {
                 java.nio.file.Path f = diskFile(spec.filePath, loc, spec.fmt, false);
-                Map<String, Object> doc = IOs.exists(f) ? readDoc(f, spec.fmt) : new LinkedHashMap<>();
+                boolean fileExists = IOs.exists(f);
+                Map<String, Object> doc = fileExists ? readDoc(f, spec.fmt)
+                        : readBuiltinResource(keysClass.getClassLoader(), spec.filePath, loc, spec.fmt);
+                if (doc == null) doc = new LinkedHashMap<>();
 
                 Set<String> missing = new LinkedHashSet<>();
                 mergeDefaultsCollect(defaults, doc, "", missing);
 
-                if (!missing.isEmpty()) {
+                if (fileExists && !missing.isEmpty()) {
                     writeDiff(f, spec.fmt, doc, missing);
                 }
 
-                boolean fileExists = IOs.exists(f);
                 if (!fileExists) {
                     boolean wrote = writeBuiltinResourceToDisk(
-                            keysClass.getClassLoader(), spec.filePath, loc, spec.fmt, f
+                            keysClass.getClassLoader(), spec.filePath, loc, spec.fmt, f, doc
                     );
                     if (!wrote) {
                         persist(f, spec.fmt, doc);
@@ -359,7 +547,7 @@ public final class LangServiceImpl implements LangService, LocaleAware {
     }
 
     @Override
-    public String tr(String key, Object... args) {
+    public synchronized String tr(String key, Object... args) {
         String v = null;
         for (BoundMeta bm : bound.values()) {
             v = val(localeFor(bm.normalizeLocale, locale()), key);
@@ -396,37 +584,13 @@ public final class LangServiceImpl implements LangService, LocaleAware {
     // Core loading / switching
     // ------------------------------------------------------------
 
-    private void switchAllHoldersTo(String locale) {
-        Map<String, Map<String, String>> buckets = new LinkedHashMap<>();
-
-        for (BoundMeta bm : new ArrayList<>(bound.values())) {
-            if (bm == null || bm.holder == null) continue;
-
-            String loc = localeFor(bm.normalizeLocale, locale);
-            Map<String, Object> doc = loadDocFor(bm, locale);
-            TreeMapper.populate(bm.holder, doc);
-            Map<String, Object> document = immutableDeepCopy(doc);
-            Map<String, String> values = immutableTextSnapshot(document);
-            bm.documents.put(loc, document);
-            bm.texts.put(loc, values);
-            buckets.computeIfAbsent(loc, key -> new LinkedHashMap<>()).putAll(values);
-        }
-
-        for (var entry : buckets.entrySet()) {
-            if (!entry.getValue().isEmpty()) {
-                cache.put(entry.getKey(), entry.getValue());
-            }
-        }
-    }
-
     private <T> void loadAndPopulate(BoundMeta meta, T holder, String locale) {
-        String loc = localeFor(meta.normalizeLocale, locale);
-        Map<String, Object> doc = loadDocFor(meta, locale);
-        TreeMapper.populate(holder, doc);
-        cacheDocument(meta, loc, doc);
+        LanguageUpdate update = prepareLanguage(meta, locale);
+        update.fields.commit(update.persist);
+        publish(update);
     }
 
-    private String resolveText(BoundMeta meta, String key, String requestedLocale, String fallback) {
+    private synchronized String resolveText(BoundMeta meta, String key, String requestedLocale, String fallback) {
         String requested = requestedLocale == null || requestedLocale.isBlank()
                 ? locale()
                 : requestedLocale.trim();
@@ -483,7 +647,7 @@ public final class LangServiceImpl implements LangService, LocaleAware {
         return Collections.unmodifiableMap(values);
     }
 
-    private Object resolveValue(BoundMeta meta, String key, String requestedLocale) {
+    private synchronized Object resolveValue(BoundMeta meta, String key, String requestedLocale) {
         String requested = requestedLocale == null || requestedLocale.isBlank()
                 ? locale()
                 : requestedLocale.trim();
@@ -532,6 +696,10 @@ public final class LangServiceImpl implements LangService, LocaleAware {
     }
 
     private Map<String, Object> loadDocFor(BoundMeta meta, String locale) {
+        return loadDocFor(meta, locale, null);
+    }
+
+    private Map<String, Object> loadDocFor(BoundMeta meta, String locale, List<Runnable> writes) {
         PackSpec spec = meta.spec();
         String loc = localeFor(spec.normalizeLocale, locale);
 
@@ -565,24 +733,30 @@ public final class LangServiceImpl implements LangService, LocaleAware {
         }
         mergeDefaultsCollect(meta.defaults, doc, "", missing);
 
-        if (meta.emit && !meta.keysClass.isAnnotationPresent(NoEmit.class)) {
-            ensureDefaultLocaleFile(resourceLoader, spec, meta.defaults);
-            if (!exists) {
-                if (activeResource) {
-                    writeBuiltinResourceToDisk(resourceLoader, spec.filePath, loc, spec.fmt, f);
-                } else if (loc.equalsIgnoreCase(localeFor(spec.normalizeLocale, spec.defaultLocale))) {
-                    persist(f, spec.fmt, doc);
+        final boolean useActiveResource = activeResource;
+        Runnable persist = () -> {
+            if (meta.emit && !meta.keysClass.isAnnotationPresent(NoEmit.class)) {
+                if (!exists) {
+                    if (useActiveResource) {
+                        if (!writeBuiltinResourceToDisk(resourceLoader, spec.filePath, loc, spec.fmt, f, doc)) {
+                            persist(f, spec.fmt, doc);
+                        }
+                    } else if (loc.equalsIgnoreCase(localeFor(spec.normalizeLocale, spec.defaultLocale))) {
+                        persist(f, spec.fmt, doc);
+                    }
+                } else {
+                    if (!missing.isEmpty()) {
+                        writeDiff(f, spec.fmt, doc, missing);
+                    }
+                    if (spec.fmt == FileType.JSON) {
+                        persist(f, spec.fmt, doc);
+                    }
                 }
-            } else {
-                if (!missing.isEmpty()) {
-                    writeDiff(f, spec.fmt, doc, missing);
-                }
-                if (spec.fmt == FileType.JSON) {
-                    persist(f, spec.fmt, doc);
-                }
+                ensureDefaultLocaleFile(resourceLoader, spec, meta.defaults);
             }
-        }
-
+        };
+        if (writes == null) persist.run();
+        else writes.add(persist);
         return doc;
     }
 
@@ -600,8 +774,11 @@ public final class LangServiceImpl implements LangService, LocaleAware {
         String locale = localeFor(spec.normalizeLocale, spec.defaultLocale);
         java.nio.file.Path file = diskFile(spec.filePath, locale, spec.fmt, false);
         if (IOs.exists(file)) return;
-        if (!writeBuiltinResourceToDisk(resourceLoader, spec.filePath, locale, spec.fmt, file)) {
-            persist(file, spec.fmt, mutableDeepCopy(defaults));
+        Map<String, Object> doc = readBuiltinResource(resourceLoader, spec.filePath, locale, spec.fmt);
+        if (doc == null) doc = new LinkedHashMap<>();
+        mergeDefaultsCollect(defaults, doc, "", new LinkedHashSet<>());
+        if (!writeBuiltinResourceToDisk(resourceLoader, spec.filePath, locale, spec.fmt, file, doc)) {
+            persist(file, spec.fmt, doc);
         }
     }
 
@@ -803,7 +980,7 @@ public final class LangServiceImpl implements LangService, LocaleAware {
 
     private static Map<String, Object> readDoc(java.nio.file.Path file, FileType fmt) {
         String s = IOs.readString(file);
-        Map<String, Object> m = (fmt == FileType.YAML) ? YamlCodec.load(s) : JsonCodec.load(s);
+        Map<String, Object> m = ConfigDiagnostics.load(s, fmt);
         return m == null ? new LinkedHashMap<>() : m;
     }
 
@@ -829,13 +1006,21 @@ public final class LangServiceImpl implements LangService, LocaleAware {
                                                String filePath,
                                                String locale,
                                                FileType fmt,
-                                               java.nio.file.Path target) {
+                                               java.nio.file.Path target,
+                                               Map<String, Object> completeDoc) {
         String ext = extOf(fmt);
         String p = RESOURCE_ROOT + "/" + stripLeadingSlash(filePath) + "/" + locale + ext;
         try (InputStream in = openResource(resourceLoader, p)) {
             if (in == null) return false;
             String s = new String(in.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
             if (s.isBlank()) return false;
+            Map<String, Object> resourceDoc = fmt == FileType.YAML ? YamlCodec.load(s) : JsonCodec.load(s);
+            // 首次输出包含补齐后的默认值；资源已完整时保留原始格式。
+            if (!Objects.equals(resourceDoc, completeDoc)) {
+                s = fmt == FileType.YAML
+                        ? YamlCodec.dumpWithComments(completeDoc, YamlCodec.extractComments(s))
+                        : JsonCodec.dump(completeDoc);
+            }
             IOs.ensureDir(target.getParent());
             IOs.writeString(target, s);
             return true;

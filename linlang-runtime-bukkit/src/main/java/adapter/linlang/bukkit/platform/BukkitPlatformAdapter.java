@@ -101,9 +101,15 @@ public final class BukkitPlatformAdapter implements PlatformAdapter<JavaPlugin> 
     @Override
     public void validatePlatformContext(JavaPlugin owner, Object platformContext) {
         // Bukkit 下平台上下文应该就是 JavaPlugin；且必须与 facade 的 owner 一致
-        if (platformContext == null) return;
-        if (platformContext instanceof JavaPlugin p && p != owner) {
+        if (platformContext != owner) {
             throw new IllegalArgumentException("PlatformContext 必须为 facade 创建时的插件实例");
+        }
+    }
+
+    @Override
+    public void checkLifecycleThread(JavaPlugin owner) {
+        if (!Bukkit.isPrimaryThread()) {
+            throw new IllegalStateException("Linlang lifecycle operations require the Bukkit main thread");
         }
     }
 

@@ -47,6 +47,8 @@ public final class LinlangBukkitBootstrap implements AutoCloseable, Linlang, Lin
     private LinMessenger messenger;          // 消息接口
     private final LinAudit audit;
     private final RuntimeCommandKeys commandText;
+    private boolean closed;
+    private boolean reloading;
 
     @Getter
     private final BukkitRuntimeImpl runtime;  // 运行时引导程序
@@ -79,6 +81,7 @@ public final class LinlangBukkitBootstrap implements AutoCloseable, Linlang, Lin
         this.runtime = new BukkitRuntimeImpl(runtimePlugin, this);
         this.config = runtime.createConfigService(runtimePlugin);
         this.language = runtime.createLangService(runtimePlugin);
+        this.config.language(this.language);
 
         this.audit = LinLog.forOwner(runtimePlugin);
         this.runtime.installAudit(false);
@@ -92,6 +95,7 @@ public final class LinlangBukkitBootstrap implements AutoCloseable, Linlang, Lin
         this.messenger = runtime.createMessenger(runtimePlugin, this.language);
         rebuildCommands();
         wireMessengerPrefix();
+        this.language.addChangeListener(this::refreshRuntimeCommandLanguage);
 
         // 运行时自身配套
         this.linFileView = new LinFile() {
@@ -207,45 +211,64 @@ public final class LinlangBukkitBootstrap implements AutoCloseable, Linlang, Lin
         return this;
     }
 
+    private void checkLifecycle() {
+        if (closed) throw new IllegalStateException("Runtime bootstrap is closed");
+        runtime.getCore().adapter().checkLifecycleThread(runtimePlugin);
+    }
+
+    @Override
+    public void applySettings() {
+        checkLifecycle();
+        refreshRuntimeCommandLanguage();
+    }
+
+    @Override
+    public void applyParameters() {
+        checkLifecycle();
+        try {
+            language.setLocale(locale);
+        } finally {
+            locale = language.locale();
+        }
+    }
+
     @Override
     public void reload() {
+        checkLifecycle();
+        if (reloading) throw new IllegalStateException("Recursive bootstrap reload is not allowed");
+        reloading = true;
+        java.util.Map<String, Throwable> failures = new java.util.LinkedHashMap<>();
         try {
-            this.config.reload();
-        } catch (RuntimeException exception) {
-            audit.problem().report(
-                    BuiltinProblemCatalog.RUNTIME_CONFIG_RELOAD_FAILED,
-                    exception
-            );
+            reloadStep(failures, "config", config::reload);
+            reloadStep(failures, "language", () -> {
+                if (language.locale().equalsIgnoreCase(locale)) language.reload();
+                else applyParameters();
+            });
+            reloadStep(failures, "prefix", this::refreshRuntimeCommandLanguage);
+        } finally {
+            reloading = false;
         }
+        if (!failures.isEmpty()) throw new api.linlang.runtime.ReloadException(failures);
+    }
+
+    private void reloadStep(java.util.Map<String, Throwable> failures, String stage, Runnable action) {
         try {
-            this.language.reload();
+            action.run();
         } catch (RuntimeException exception) {
-            audit.problem().report(
-                    BuiltinProblemCatalog.RUNTIME_LANGUAGE_RELOAD_FAILED,
-                    exception
-            );
+            failures.put(stage, exception);
+            if (!(exception instanceof api.linlang.runtime.ReloadException)
+                    && !(exception instanceof api.linlang.file.file.config.ConfigLoadException)) {
+                audit.problem().report(BuiltinProblemCatalog.FACADE_RELOAD_FAILED, exception, "stage", stage);
+            }
         }
-        try {
-            this.language.setLocale(this.locale);
-        } catch (RuntimeException exception) {
-            audit.problem().report(
-                    BuiltinProblemCatalog.LANGUAGE_LOCALE_SWITCH_FAILED,
-                    exception,
-                    "locale", this.locale
-            );
-        }
-        rebuildCommands();
-        wireMessengerPrefix();
     }
 
     /**
-     * 重启运行时引导类的 Linlang 服务。
-     *
-     * <p>当前实现将重启语义视为一次软重载，以避免在运行时插件内部销毁全局服务实例。</p>
+     * 共享入口不支持直接重建，应通过运行时命令选择插件门面。
      */
     @Override
     public void restart() {
-        reload();
+        throw new UnsupportedOperationException("Use /linlang restart <plugin> to rebuild a plugin facade");
     }
 
     private void rebuildCommands() {
@@ -266,6 +289,7 @@ public final class LinlangBukkitBootstrap implements AutoCloseable, Linlang, Lin
      * 在语言服务完成普通重载后刷新运行时命令使用的前缀。
      */
     public void refreshRuntimeCommandLanguage() {
+        if (command instanceof core.linlang.total.i18n.LocaleAware aware) aware.setLocale(language.locale());
         String prefix = resolveCommandPrefix();
         if (command instanceof PrefixAware aware) {
             aware.setTotalPrefix(prefix);
@@ -302,6 +326,10 @@ public final class LinlangBukkitBootstrap implements AutoCloseable, Linlang, Lin
 
     @Override
     public void close() {
+        if (closed) return;
+        checkLifecycle();
+        if (reloading) throw new IllegalStateException("Cannot close during reload");
+        closed = true;
         try {
             if (command instanceof AutoCloseable) ((AutoCloseable) command).close();
         } catch (Exception exception) {

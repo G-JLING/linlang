@@ -15,13 +15,16 @@ import core.linlang.event.api.ThreadMode;
 import core.linlang.file.impl.ConfigServiceImpl;
 import core.linlang.file.impl.LangServiceImpl;
 import core.linlang.total.i18n.LocaleController;
-import core.linlang.total.i18n.event.LocaleChanged;
 import core.linlang.total.prefix.PrefixAware;
 import core.linlang.total.prefix.TotalPrefixController;
 import core.linlang.total.prefix.event.TotalPrefixChanged;
 import lombok.Getter;
 
 import java.util.Objects;
+import java.util.Map;
+import java.util.LinkedHashMap;
+import api.linlang.runtime.ReloadException;
+import core.linlang.total.i18n.LocaleAware;
 import java.util.function.Function;
 
 /**
@@ -57,7 +60,11 @@ public final class FacadeCore<P> implements Linlang, Linlang.Configurable, Linla
     private final LinFile linFileView;
 
     private final Object lifecycleLock = new Object();
+    @Getter
     private volatile boolean closed = false;
+    private boolean reloading;
+    private Runnable rebuildHook;
+    private final Map<String, Runnable> reloadHooks = new LinkedHashMap<>();
 
     /** 创建并注册一个新的 facade */
     public static <P> FacadeCore<P> create(RuntimeCore<P> runtime, P owner) {
@@ -85,26 +92,10 @@ public final class FacadeCore<P> implements Linlang, Linlang.Configurable, Linla
         // 初始前缀
         this.prefixController.setPrefix(resolveTotalPrefix(), "boot");
 
-        // 监听语言变更：让文件语言服务与命令服务跟随 facade 的语言代码
-        this.events.on(this, LocaleChanged.class, ThreadMode.CURRENT, 0, e -> {
-            try {
-                if (this.language != null) this.language.setLocale(e.newLocale());
-            } catch (RuntimeException exception) {
-                report(BuiltinProblemCatalog.LANGUAGE_LOCALE_SWITCH_FAILED, exception,
-                        "locale", e.newLocale());
-            }
-
-            try {
-                rebuildCommands(e.newLocale());
-            } catch (RuntimeException exception) {
-                report(BuiltinProblemCatalog.FACADE_RELOAD_FAILED, exception,
-                        "resource", "command", "locale", e.newLocale());
-            }
-        });
-
         // 初始化文件服务
         this.config = runtime.createConfigService(owner);
         this.language = runtime.createLangService(owner);
+        this.config.language(this.language);
 
         // 初始语言：如果外部没设置，则默认 zh_CN
         String locale = effectiveLocale();
@@ -116,7 +107,9 @@ public final class FacadeCore<P> implements Linlang, Linlang.Configurable, Linla
         this.messenger = runtime.createMessenger(owner, this.language);
 
         // 初始化交互服务（每个 facade 独享）
-        this.view = runtime.createView(owner);
+        this.view = runtime.createView(owner, this.language);
+
+        this.language.addChangeListener(this::refreshLanguageState);
 
         // 前缀接线
         wirePrefix(this.command);
@@ -185,7 +178,11 @@ public final class FacadeCore<P> implements Linlang, Linlang.Configurable, Linla
     public void close() {
         synchronized (lifecycleLock) {
             if (closed) return;
+            checkLifecycle();
+            if (reloading) throw new IllegalStateException("Cannot close during reload");
             closed = true;
+            reloadHooks.clear();
+            rebuildHook = null;
 
             try {
                 runtime.unregisterFacade(this);
@@ -214,6 +211,7 @@ public final class FacadeCore<P> implements Linlang, Linlang.Configurable, Linla
 
     @Override
     public FacadeCore<P> withPlatformContext(Object platformContext) {
+        checkLifecycle();
         runtime.adapter().validatePlatformContext(owner, platformContext);
         return this;
     }
@@ -228,82 +226,195 @@ public final class FacadeCore<P> implements Linlang, Linlang.Configurable, Linla
     public FacadeCore<P> totalPrefixProvider(Function<Object, String> provider) {
         if (provider == null) throw new IllegalArgumentException("provider");
         // 适配：Object -> P
+        checkLifecycle();
+        String value = provider.apply(owner);
+        String prefix = value == null || value.isBlank() ? runtime.adapter().defaultTotalPrefix(owner) : value;
+        this.prefixController.setPrefix(prefix, "api");
         this.prefixFn = p -> provider.apply(p);
-        this.prefixController.setPrefix(resolveTotalPrefix(), "api");
         return this;
     }
 
     @Override
     public FacadeCore<P> totalLocale(String locale) {
-        if (locale == null || locale.isBlank()) return this;
+        checkLifecycle();
+        if (locale == null || locale.isBlank()) throw new IllegalArgumentException("locale");
         this.preferredLocale = locale.trim();
         return this;
     }
 
     @Override
     public FacadeCore<P> usingPluginLogger(boolean usePluginLogger) {
+        checkLifecycle();
         runtime.installAuditFor(owner, usePluginLogger);
         return this;
     }
 
-    /** 软重载：重载文件服务并刷新前缀与语言。 */
+
+    /**
+     * 原地应用设置，不重新读取文件。
+     */
     @Override
-    public void reload() {
+    public void applySettings() {
+        checkLifecycle();
+    }
+
+    /**
+     * 原地切换语言；失败时保留已应用的语言并清除失败的待应用参数。
+     */
+    @Override
+    public void applyParameters() {
         synchronized (lifecycleLock) {
-            if (closed) return;
-            this.config.reload();
-            this.language.reload();
-            this.prefixController.setPrefix(resolveTotalPrefix(), "facade.reload");
-            String locale = effectiveLocale();
-            this.localeController.setLocale(locale, "facade.reload");
+            checkLifecycle();
+            try {
+                language.setLocale(effectiveLocale());
+            } finally {
+                preferredLocale = language.locale();
+            }
         }
     }
 
-    /** 硬重启：重建 config/lang + 重建命令/消息 */
     @Override
-    public void restart() {
+    public Linlang onReload(String name, Runnable callback) {
         synchronized (lifecycleLock) {
-            if (closed) return;
-            this.config = runtime.createConfigService(owner);
-            this.language = runtime.createLangService(owner);
-
-            String locale = effectiveLocale();
-            this.language.setLocale(locale);
-            this.localeController.setLocale(locale, "facade.restart");
-
-            rebuildCommands(locale);
-            rebuildMessenger();
-            this.view = runtime.createView(owner);
-        }
-    }
-
-    // ---- internal helpers ----
-
-    private void rebuildCommands(String locale) {
-        synchronized (lifecycleLock) {
-            if (closed) return;
-
-            closeResource(command, "command");
-            String use = (locale != null && !locale.isBlank()) ? locale.trim() : effectiveLocale();
-            this.command = runtime.createCommands(owner, this.language, use, () -> this.prefixController.prefix());
-
-            wirePrefix(this.command);
+            checkLifecycle();
+            if (name == null || name.isBlank()) throw new IllegalArgumentException("name");
+            if (callback == null) reloadHooks.remove(name);
+            else reloadHooks.put(name, callback);
+            return this;
         }
     }
 
     /**
-     * 重建消息服务。
+     * 按文件、语言、业务回调、界面的顺序软重载，失败步骤汇总返回。
      */
-    private void rebuildMessenger() {
-        try {
-            events.unregisterAll(messenger);
-        } catch (RuntimeException exception) {
-            report(BuiltinProblemCatalog.RESOURCE_CLOSE_FAILED, exception,
-                    "resource", "messenger-event-registration");
+    @Override
+    public void reload() {
+        synchronized (lifecycleLock) {
+            checkLifecycle();
+            if (reloading) throw new IllegalStateException("Recursive reload is not allowed");
+            reloading = true;
+            Map<String, Throwable> failures = new LinkedHashMap<>();
+            try {
+                step(failures, "audit", () -> runtime.refreshAudit(owner));
+                step(failures, "config", config::reload);
+                step(failures, "language", () -> {
+                    if (language.locale().equalsIgnoreCase(effectiveLocale())) language.reload();
+                    else applyParameters();
+                });
+                step(failures, "prefix", () -> prefixController.setPrefix(resolveTotalPrefix(), "facade.reload"));
+                if (failures.isEmpty()) {
+                    for (var hook : new LinkedHashMap<>(reloadHooks).entrySet()) {
+                        step(failures, "callback:" + hook.getKey(), hook.getValue());
+                    }
+                    if (failures.isEmpty()) step(failures, "view", view::reload);
+                }
+            } finally {
+                reloading = false;
+            }
+            if (!failures.isEmpty()) throw new ReloadException(failures);
         }
-        closeResource(messenger, "messenger");
-        this.messenger = runtime.createMessenger(owner, this.language);
-        wirePrefix(this.messenger);
+    }
+
+    @Override
+    public Linlang onRebuild(Runnable callback) {
+        synchronized (lifecycleLock) {
+            checkLifecycle();
+            if (reloading) throw new IllegalStateException("Cannot change rebuild callback during lifecycle operation");
+            rebuildHook = callback;
+            return this;
+        }
+    }
+
+    /**
+     * 显式重建门面服务；未提供恢复回调时拒绝破坏现有状态。
+     */
+    @Override
+    public void restart() {
+        synchronized (lifecycleLock) {
+            checkLifecycle();
+            if (reloading) throw new IllegalStateException("Recursive facade lifecycle operation is not allowed");
+            if (rebuildHook == null)
+                throw new IllegalStateException("Register onRebuild before restarting the facade");
+            runtime.checkExclusiveOwner(owner);
+            Runnable initialize = rebuildHook;
+            reloading = true;
+            boolean replacing = false;
+            try {
+                ConfigServiceImpl nextConfig = runtime.createConfigService(owner);
+                LangServiceImpl nextLanguage = runtime.createLangService(owner);
+                nextConfig.language(nextLanguage);
+                nextLanguage.setLocale(effectiveLocale());
+
+                replacing = true;
+                events.unregisterAll(command);
+                events.unregisterAll(messenger);
+                closeForRebuild(command);
+                closeForRebuild(messenger);
+                runtime.discardView(owner);
+                command = null;
+                messenger = null;
+                view = null;
+                config = nextConfig;
+                language = nextLanguage;
+                command = runtime.createCommands(owner, language, language.locale(),
+                        () -> prefixController.prefix());
+                messenger = runtime.createMessenger(owner, language);
+                view = runtime.createView(owner, language);
+                language.addChangeListener(this::refreshLanguageState);
+                wirePrefix(command);
+                wirePrefix(messenger);
+                reloadHooks.clear();
+                initialize.run();
+                refreshLanguageState();
+            } catch (RuntimeException exception) {
+                report(BuiltinProblemCatalog.FACADE_RESTART_FAILED, exception, "stage", "rebuild");
+                if (replacing) {
+                    reloading = false;
+                    try { close(); }
+                    catch (RuntimeException cleanup) { exception.addSuppressed(cleanup); }
+                }
+                throw new ReloadException(Map.of("rebuild", exception));
+            } finally {
+                reloading = false;
+            }
+        }
+    }
+
+    /**
+     * 重建时关闭失败必须中止，避免新旧平台资源同时工作。
+     */
+    private void closeForRebuild(Object resource) {
+        if (!(resource instanceof AutoCloseable closeable)) return;
+        try {
+            closeable.close();
+        } catch (Exception exception) {
+            throw new IllegalStateException("Cannot close old facade service", exception);
+        }
+    }
+
+    private void refreshLanguageState() {
+        if (closed) return;
+        if (command instanceof LocaleAware aware) aware.setLocale(language.locale());
+        preferredLocale = language.locale();
+        localeController.setLocale(language.locale(), "language");
+        prefixController.setPrefix(resolveTotalPrefix(), "language");
+    }
+
+    private void checkLifecycle() {
+        if (closed) throw new IllegalStateException("Linlang facade is closed");
+        runtime.adapter().checkLifecycleThread(owner);
+    }
+
+    private void step(Map<String, Throwable> failures, String name, Runnable action) {
+        try {
+            action.run();
+        } catch (RuntimeException exception) {
+            failures.put(name, exception);
+            if (!(exception instanceof ReloadException)
+                    && !(exception instanceof api.linlang.file.file.config.ConfigLoadException)) {
+                report(BuiltinProblemCatalog.FACADE_RELOAD_FAILED, exception, "stage", name);
+            }
+        }
     }
 
     /** 将 facade 的 TotalPrefixChanged 接线到模块（模块实现 PrefixAware 即可）。 */
@@ -334,8 +445,7 @@ public final class FacadeCore<P> implements Linlang, Linlang.Configurable, Linla
             Function<P, String> fn = this.prefixFn;
             if (fn != null) out = fn.apply(this.owner);
         } catch (RuntimeException exception) {
-            report(BuiltinProblemCatalog.MESSAGE_PREFIX_RESOLVE_FAILED, exception,
-                    "resource", "total-prefix-provider");
+            throw new IllegalStateException(BuiltinProblemCatalog.MESSAGE_PREFIX_RESOLVE_FAILED, exception);
         }
 
         if (out != null && !out.isBlank()) return out;

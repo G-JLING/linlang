@@ -22,12 +22,26 @@ public final class ViewRegistry {
     }
 
     public void reload() {
-        cache.clear();
+        for (String id : java.util.List.copyOf(cache.keySet())) reload(id);
     }
 
     public void reload(String viewId) {
-        cache.remove(viewId);
+        CompiledView next = prepare(viewId);
+        commit(viewId, next);
     }
+
+    /**
+     * 读取并编译新定义，不影响已有缓存。
+     */
+    public CompiledView prepare(String id) {
+        CompiledView next = loadAndCompile(id);
+        if (next == null) throw new IllegalStateException("View not found: " + id);
+        return next;
+    }
+
+    public java.util.Set<String> ids() { return java.util.Set.copyOf(cache.keySet()); }
+
+    public void commit(String id, CompiledView next) { cache.put(id, next); }
 
     private CompiledView loadAndCompile(String viewId) {
         ViewSpec spec = loader.load(viewId);

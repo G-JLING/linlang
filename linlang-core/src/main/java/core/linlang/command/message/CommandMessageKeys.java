@@ -27,6 +27,7 @@ public class CommandMessageKeys {
         public String badArg;
         public String noPerm;
         public String unknownCommand;
+        public String suggestion;
         public String execTarget;
         public String typeNoResolver;
         public String enumNotFount;

@@ -27,7 +27,7 @@ depend:
 <dependency>
     <groupId>me.jling</groupId>
     <artifactId>linlang-api</artifactId>
-    <version>2.2.1.0-SNAPSHOT</version>
+    <version>2.6.1.0</version>
     <scope>provided</scope>
 </dependency>
 ```
@@ -58,4 +58,3 @@ public final class ExamplePlugin extends JavaPlugin {
 ```
 
 要了解如何使用 Linlang，请访问 [jling.me/linlang](https://jling.me/linlang-wiki)。
-

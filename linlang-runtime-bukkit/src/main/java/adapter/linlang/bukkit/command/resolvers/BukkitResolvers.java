@@ -21,17 +21,22 @@ public final class BukkitResolvers {
         public boolean supports(String id){ return id.equalsIgnoreCase("minecraft:item"); }
         public Object parse(LinCommand.ParseCtx c, String t){
             Material m = Material.matchMaterial(t);
-            if (m == null) throw new IllegalArgumentException("unknown item: "+t);
+            if (!isItem(m)) throw new IllegalArgumentException("unknown item: "+t);
             return m;
         }
         public List<String> complete(LinCommand.ParseCtx c, String p){
+            String prefix = p == null ? "" : p.toLowerCase(Locale.ROOT);
             var out = new ArrayList<String>();
             for (Material m : Material.values()){
+                if (!isItem(m)) continue;
                 String k = m.getKey().toString();
-                if (k.toLowerCase().startsWith(p.toLowerCase())) out.add(k);
-                if (out.size() > 50) break;
+                if (k.startsWith(prefix) || (!prefix.contains(":") && m.getKey().getKey().startsWith(prefix))) out.add(k);
+                if (out.size() >= MAX_COMPLETIONS) break;
             }
             return out;
+        }
+        private static boolean isItem(Material material) {
+            return material != null && !material.isLegacy() && !material.isAir() && material.isItem();
         }
     }
 

@@ -19,24 +19,29 @@ plugins:
   entry: "&7  - &f{name} &8v{version} &7({status})"
 
 restart:
-  description: "Restart the Linlang instance of a plugin"
+  description: "Rebuild a plugin facade"
   plugin-label: "plugin name"
   empty-name: " &cPlugin name cannot be empty."
   ambiguous: " &cMultiple plugins matched. Enter a more specific name:"
   candidate: "&7  - &f{name}"
   not-found: " &cNo registered plugin named &f{name} &cwas found."
-  success: " &aRestarted the Linlang instance of &f{name}&a."
-  failed: " &cRestart failed. Problem code: &f{code}"
+  success: " &aRebuilt the Linlang services of &f{name}&a."
+  failed: " &cRebuild failed. Problem code: &f{code}"
 
-reload:
+reload-plugin:
+  description: "Soft-reload a plugin facade"
+  success: " &aSoft-reloaded the Linlang facade of &f{name}&a."
+  failed: " &cReload failed. Problem code: &f{code}"
+
+reload-all:
   description: "Soft-reload the runtime and all registered plugins"
   success: " &aSoft-reloaded the runtime and all registered plugins."
   partial: " &eReload completed with {count} failure(s). Check the problem codes."
   failed: " &cReload failed. Problem code: &f{code}"
 
 restart-all:
-  description: "Hard-restart all registered plugin facades"
-  result: " &7Restarted plugin facades: &f{success} &7/ &f{total}&7."
+  description: "Rebuild all registered plugin facades"
+  result: " &7Rebuilt plugin facades: &f{success} &7/ &f{total}&7."
 
 problems:
   description: "List all built-in Linlang problem codes"

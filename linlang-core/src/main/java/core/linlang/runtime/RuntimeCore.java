@@ -53,6 +53,9 @@ public final class RuntimeCore<P> implements AutoCloseable {
     // 可选：运行时自身的文件服务（如果你有 bootstrap，建议 attach 进来）
     private volatile ConfigServiceImpl runtimeConfig;
     private volatile LangServiceImpl runtimeLanguage;
+    private final Map<P, Boolean> auditModes = new ConcurrentHashMap<>();
+    private boolean reloading;
+    private boolean closed;
 
     public RuntimeCore(P runtimeHost, PlatformAdapter<P> adapter) {
         this.runtimeHost = Objects.requireNonNull(runtimeHost, "runtimeHost");
@@ -89,6 +92,9 @@ public final class RuntimeCore<P> implements AutoCloseable {
     public void attachRuntimeFileServices(ConfigServiceImpl cfg, LangServiceImpl lang) {
         this.runtimeConfig = cfg;
         this.runtimeLanguage = lang;
+        if (cfg != null) cfg.language(lang);
+        ViewCoreImpl view = interactCores.get(runtimeHost);
+        if (view != null) view.language(lang);
     }
 
     /** 为指定 owner 创建 PathResolver */
@@ -103,7 +109,9 @@ public final class RuntimeCore<P> implements AutoCloseable {
 
     /** 为指定 owner 创建独立语言服务实例 */
     public LangServiceImpl createLangService(P owner) {
-        return new LangServiceImpl(resolver(owner), owner);
+        LangServiceImpl language = new LangServiceImpl(resolver(owner), owner);
+        language.threadCheck(() -> adapter.checkLifecycleThread(owner));
+        return language;
     }
 
     /** 为指定 owner 创建独立数据服务实例 */
@@ -154,8 +162,18 @@ public final class RuntimeCore<P> implements AutoCloseable {
             }
         });
 
+        if (Objects.equals(owner, runtimeHost)) core.language(runtimeLanguage);
         // ViewCoreImpl 已实现 LinView
         return core;
+    }
+
+    /**
+     * 将当前门面语言服务接入该插件的视图核心。
+     */
+    public LinView createView(P owner, LangServiceImpl language) {
+        ViewCoreImpl view = (ViewCoreImpl) createView(owner);
+        view.language(language);
+        return view;
     }
 
     /** 创建消息服务 */
@@ -179,6 +197,7 @@ public final class RuntimeCore<P> implements AutoCloseable {
 
     /** 创建并注册一个 facade（一般由 bootstrap 调用） */
     public FacadeCore<P> createFacade(P owner) {
+        checkLifecycle();
         FacadeCore<P> f = FacadeCore.create(this, owner);
         return f;
     }
@@ -195,12 +214,33 @@ public final class RuntimeCore<P> implements AutoCloseable {
         }
     }
 
+    /**
+     * 重建共享所有者资源前，拒绝同一插件存在多个门面的情况。
+     */
+    void checkExclusiveOwner(P owner) {
+        synchronized (facades) {
+            if (facades.stream().filter(f -> Objects.equals(f.getOwner(), owner)).count() != 1)
+                throw new IllegalStateException("Facade rebuild requires one facade per plugin");
+        }
+    }
+
+    /**
+     * 释放旧界面及平台监听器，数据库与审计不受影响。
+     */
+    void discardView(P owner) {
+        ViewCoreImpl previous = interactCores.get(owner);
+        if (previous != null) previous.close();
+        adapter.closeView(owner);
+        interactCores.remove(owner);
+    }
+
     void releaseOwner(P owner) {
         synchronized (facades) {
             boolean stillUsed = facades.stream().anyMatch(facade -> Objects.equals(facade.getOwner(), owner));
             if (stillUsed) return;
         }
 
+        auditModes.remove(owner);
         ViewCoreImpl view = interactCores.remove(owner);
         if (view != null) {
             try {
@@ -239,6 +279,7 @@ public final class RuntimeCore<P> implements AutoCloseable {
 
     /** 安装运行时自身审计（会读取 runtimeHost 自身目录下的 audit.yml） */
     public RuntimeCore<P> installAudit(boolean usePluginLogger) {
+        boolean hadProvider = LinLog.isInstalled();
         try {
             ConfigServiceImpl cfgSvc = (runtimeConfig != null) ? runtimeConfig : createConfigService(runtimeHost);
             AuditConfig cfg = cfgSvc.bind(AuditConfig.class);
@@ -248,7 +289,12 @@ public final class RuntimeCore<P> implements AutoCloseable {
             AuditConfig fallback = new AuditConfig();
             this.globalAudit = adapter.createGlobalAudit(runtimeHost, fallback, usePluginLogger);
             LinLog.install(this.globalAudit);
-            LinLog.problem(LinProblem.of(
+            if (t instanceof api.linlang.file.file.config.ConfigLoadException failure) {
+                if (!hadProvider) failure.failures().forEach((file, issues) -> LinLog.problem(
+                        LinProblem.builder(BuiltinProblemCatalog.CONFIG_LOAD_FAILED)
+                                .consoleSummary("配置错误：" + file.getFileName())
+                                .context("file", file.toString()).context("issues", issues).build()));
+            } else LinLog.problem(LinProblem.of(
                     BuiltinProblemCatalog.RUNTIME_CONFIG_LOAD_FAILED,
                     t
             ));
@@ -263,12 +309,21 @@ public final class RuntimeCore<P> implements AutoCloseable {
             ConfigServiceImpl cfgSvc = createConfigService(owner);
             AuditConfig cfg = cfgSvc.bind(AuditConfig.class);
             adapter.registerAuditTenant(globalAudit, owner, cfg, usePluginLogger);
+            auditModes.put(owner, usePluginLogger);
         } catch (RuntimeException t) {
-            auditFor(owner).problem().report(
+            if (!(t instanceof api.linlang.file.file.config.ConfigLoadException)) auditFor(owner).problem().report(
                     BuiltinProblemCatalog.TENANT_CONFIG_LOAD_FAILED, t,
                     "owner", owner
             );
+            throw t;
         }
+    }
+
+    /**
+     * 重新加载插件审计配置，保留原日志通道选择。
+     */
+    public void refreshAudit(P owner) {
+        installAuditFor(owner, auditModes.getOrDefault(owner, false));
     }
 
     /** 安装 LinMsg（运行时内部消息模板）。建议在 runtimeLanguage attach 后调用。 */
@@ -293,64 +348,87 @@ public final class RuntimeCore<P> implements AutoCloseable {
             LinMsg.installKeys(() -> keys);
             LinMsg.install(lang::tr);
         } catch (Throwable t) {
-            reportProblem(runtimeHost, BuiltinProblemCatalog.MESSAGE_TEMPLATE_INSTALL_FAILED, t);
+            if (!(t instanceof core.linlang.file.config.ConfigMappingException)) {
+                reportProblem(runtimeHost, BuiltinProblemCatalog.MESSAGE_TEMPLATE_INSTALL_FAILED, t);
+            }
         }
-    }
-
-    /** 软重载：运行时自身文件服务 + bootstrap（若 attach 了） + 所有 facade.reload() */
-    public void reload() {
-        reloadAndCountFailures();
     }
 
     /**
-     * 执行软重载并返回失败的服务或门面数量。
+     * 重载运行时和全部门面；存在失败时向调用方返回汇总异常。
      */
-    public int reloadAndCountFailures() {
-        int failures = 0;
-        try {
-            if (runtimeConfig != null) runtimeConfig.reload();
-        } catch (RuntimeException exception) {
-            failures++;
-            reportProblem(runtimeHost, BuiltinProblemCatalog.RUNTIME_CONFIG_RELOAD_FAILED, exception);
-        }
-        try {
-            if (runtimeLanguage != null) runtimeLanguage.reload();
-        } catch (RuntimeException exception) {
-            failures++;
-            reportProblem(runtimeHost, BuiltinProblemCatalog.RUNTIME_LANGUAGE_RELOAD_FAILED, exception);
-        }
+    public void reload() {
+        Map<String, Throwable> failures = reloadFailures();
+        if (!failures.isEmpty()) throw new api.linlang.runtime.ReloadException(failures);
+    }
 
-        Set<FacadeCore<P>> snapshot;
-        synchronized (facades) {
-            snapshot = new LinkedHashSet<>(facades);
-        }
-        for (FacadeCore<P> f : snapshot) {
-            try {
-                f.reload();
-            } catch (RuntimeException exception) {
-                failures++;
-                reportProblem(f.getOwner(), BuiltinProblemCatalog.FACADE_RELOAD_FAILED, exception);
+    public int reloadAndCountFailures() {
+        return reloadFailures().size();
+    }
+
+    private synchronized Map<String, Throwable> reloadFailures() {
+        checkLifecycle();
+        if (reloading) throw new IllegalStateException("Recursive runtime reload is not allowed");
+        reloading = true;
+        Map<String, Throwable> failures = new LinkedHashMap<>();
+        try {
+            reloadStep(failures, "runtime:config", runtimeHost,
+                    () -> { if (runtimeConfig != null) runtimeConfig.reload(); });
+            reloadStep(failures, "runtime:language", runtimeHost,
+                    () -> { if (runtimeLanguage != null) runtimeLanguage.reload(); });
+            reloadStep(failures, "runtime:audit", runtimeHost, () -> refreshAudit(runtimeHost));
+            ViewCoreImpl view = interactCores.get(runtimeHost);
+            if (view != null && failures.isEmpty()) reloadStep(failures, "runtime:view", runtimeHost, view::reload);
+            int index = 0;
+            for (FacadeCore<P> facade : listFacades()) {
+                reloadStep(failures, "facade:" + index++, facade.getOwner(), facade::reload);
             }
+        } finally {
+            reloading = false;
         }
         return failures;
     }
 
-    /** 硬重启：对所有 facade 执行 restart()，返回成功数量 */
-    public int restart() {
-        Set<FacadeCore<P>> snapshot;
-        synchronized (facades) {
-            snapshot = new LinkedHashSet<>(facades);
-        }
-        int ok = 0;
-        for (FacadeCore<P> f : snapshot) {
-            try {
-                f.restart();
-                ok++;
-            } catch (RuntimeException exception) {
-                reportProblem(f.getOwner(), BuiltinProblemCatalog.FACADE_RESTART_FAILED, exception);
+    private void reloadStep(Map<String, Throwable> failures, String name, P owner, Runnable action) {
+        try {
+            action.run();
+        } catch (RuntimeException exception) {
+            failures.put(name, exception);
+            if (!(exception instanceof api.linlang.runtime.ReloadException)
+                    && !(exception instanceof api.linlang.file.file.config.ConfigLoadException)) {
+                reportProblem(owner, BuiltinProblemCatalog.FACADE_RELOAD_FAILED, exception, "stage", name);
             }
         }
-        return ok;
+    }
+
+    /**
+     * 重建所有门面并返回成功数量，不支持重建的门面保持不变。
+     */
+    public synchronized int restart() {
+        checkLifecycle();
+        if (reloading) throw new IllegalStateException("Recursive runtime reload is not allowed");
+        reloading = true;
+        int success = 0;
+        try {
+            for (FacadeCore<P> facade : listFacades()) {
+                try {
+                    facade.restart();
+                    success++;
+                } catch (RuntimeException exception) {
+                    if (!(exception instanceof api.linlang.runtime.ReloadException)) {
+                        reportProblem(facade.getOwner(), BuiltinProblemCatalog.FACADE_RESTART_FAILED, exception);
+                    }
+                }
+            }
+        } finally {
+            reloading = false;
+        }
+        return success;
+    }
+
+    private void checkLifecycle() {
+        if (closed) throw new IllegalStateException("Linlang runtime is closed");
+        adapter.checkLifecycleThread(runtimeHost);
     }
 
     public String runtimeVersion() {
@@ -358,7 +436,11 @@ public final class RuntimeCore<P> implements AutoCloseable {
     }
 
     @Override
-    public void close() {
+    public synchronized void close() {
+        if (closed) return;
+        checkLifecycle();
+        if (reloading) throw new IllegalStateException("Cannot close during reload");
+        closed = true;
         synchronized (facades) {
             for (FacadeCore<P> f : facades.toArray(new FacadeCore[0])) {
                 try {

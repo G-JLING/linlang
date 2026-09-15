@@ -19,24 +19,29 @@ plugins:
   entry: "&7  - &f{name} &8v{version} &7（{status}）"
 
 restart:
-  description: "重启指定插件的琳琅实例"
+  description: "重建指定插件的琳琅服务"
   plugin-label: "插件名称"
   empty-name: " &c插件名称不能为空。"
   ambiguous: " &c找到多个匹配的插件名称，请更精确地指定："
   candidate: "&7  - &f{name}"
   not-found: " &c未找到名称为 &f{name} &c的已注册插件。"
-  success: " &a已重启插件 &f{name} &a的琳琅实例。"
-  failed: " &c重启失败，问题代码：&f{code}"
+  success: " &a已重建插件 &f{name} &a的琳琅实例。"
+  failed: " &c重建失败，问题代码：&f{code}"
 
-reload:
+reload-plugin:
+  description: "软重载指定插件的琳琅门面"
+  success: " &a已软重载插件 &f{name} &a的琳琅门面。"
+  failed: " &c重载失败，问题代码：&f{code}"
+
+reload-all:
   description: "对运行时与所有插件执行软重载"
   success: " &a已对运行时与所有已注册插件执行一次软重载。"
   partial: " &e重载已完成，但有 {count} 项失败，请检查问题代码。"
   failed: " &c重载失败，问题代码：&f{code}"
 
 restart-all:
-  description: "对所有已注册插件执行硬重启"
-  result: " &7已尝试对所有插件门面执行硬重启：成功 &f{success} &7/ &f{total}&7。"
+  description: "重建所有已注册插件的琳琅服务"
+  result: " &7已尝试对所有插件执行重建：成功 &f{success} &7/ &f{total}&7。"
 
 problems:
   description: "列出全部琳琅内建问题代码"

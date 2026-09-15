@@ -1,6 +1,7 @@
 package core.linlang.view.load;
 
 import core.linlang.view.spec.*;
+import core.linlang.file.text.ConfigText;
 import core.linlang.yaml.YamlCodec;
 import core.linlang.json.JsonCodec;
 
@@ -28,7 +29,8 @@ public final class ViewSpecParser {
         String type = str(root.get("type"), "inventory");
         boolean allowManualClose = bool(root.get("allowManualClose"), true);
         int rows = integer(root.get("rows"), 6);
-        String title = str(root.get("title"), "");
+        ConfigText titleSource = ConfigText.parse(root.get("title"), false);
+        String title = (String) titleSource.fallback();
 
         List<String> layout = new ArrayList<>();
         Object layObj = root.get("layout");
@@ -59,7 +61,7 @@ public final class ViewSpecParser {
             }
         }
 
-        return new ViewSpec(id, type, allowManualClose, rows, title, layout, legend, areas);
+        return new ViewSpec(id, type, allowManualClose, rows, title, layout, legend, areas, titleSource);
     }
 
     private static LegendEntrySpec parseLegendEntry(Map<String, Object> ent) {
@@ -154,10 +156,12 @@ public final class ViewSpecParser {
         String kind = str(im.get("kind"), "vanilla");
         String key = str(im.get("key"), "");
         Integer amount = im.get("amount") == null ? null : integer(im.get("amount"), 1);
-        String name = str(im.get("name"), "");
-        List<String> lore = listStr(im.get("lore"));
+        ConfigText nameSource = ConfigText.parse(im.get("name"), false);
+        ConfigText loreSource = ConfigText.parse(im.get("lore"), true);
+        String name = (String) nameSource.fallback();
+        List<String> lore = (List<String>) loreSource.fallback();
         Map<String, Object> meta = map(im.get("meta"));
-        return new IconSpec(kind, key, amount, name, lore, meta);
+        return new IconSpec(kind, key, amount, name, lore, meta, nameSource, loreSource);
     }
 
     private static Map<String, Object> map(Object o) {

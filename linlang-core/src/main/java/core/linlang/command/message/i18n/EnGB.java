@@ -27,6 +27,7 @@ public final class EnGB implements LocaleProvider<CommandMessageKeys> {
         k.error.badArg          = "§cError! §fUnknown argument or invalid parameter";
         k.error.noPerm          = "§cError! §fYou do not have permission to execute this command";
         k.error.unknownCommand  = "§cError! §fThe command you entered does not exist";
+        k.error.suggestion      = "§7Did you mean: §f{command}";
         k.error.execTarget      = "§cError! §fThis command cannot be executed from your current context";
         k.error.exception       = "§cError! An internal error has occurred. Please contact JLING(magicpowered@icloud.com)";
         k.error.typeNoResolver  = "§fUnknown parameter resolver";

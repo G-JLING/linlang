@@ -52,6 +52,7 @@ public final class BukkitInteractAdapter implements InteractPlatformAdapter {
 
         Inventory inv = Bukkit.createInventory(new LinGuiHolder(p.getUniqueId()), size, t);
         openInventories.put(p.getUniqueId(), inv);
+        lastModels.remove(p.getUniqueId());
 
         p.openInventory(inv);
     }
@@ -62,6 +63,13 @@ public final class BukkitInteractAdapter implements InteractPlatformAdapter {
         UUID id = p.getUniqueId();
         Inventory inv = openInventories.get(id);
         if (inv == null) return;
+
+        RenderModel previous = lastModels.get(id);
+        if (model != null && previous != null && !Objects.equals(previous.title(), model.title())) {
+            // 先替换登记的容器，再打开新标题，旧容器关闭事件不会销毁会话。
+            open(viewer, model.title(), inv.getSize() / 9);
+            inv = openInventories.get(id);
+        }
 
         // 记住 routes，用于 event 路由
         if (model != null) lastModels.put(id, model);
@@ -169,6 +177,11 @@ public final class BukkitInteractAdapter implements InteractPlatformAdapter {
     }
 
     @Override
+    public void checkReloadThread() {
+        if (!org.bukkit.Bukkit.isPrimaryThread()) throw new IllegalStateException("GUI reload requires the Bukkit main thread");
+    }
+
+    @Override
     public void runMain(Runnable task) {
         if (task == null) return;
         if (Bukkit.isPrimaryThread()) {
@@ -180,7 +193,7 @@ public final class BukkitInteractAdapter implements InteractPlatformAdapter {
         } catch (RuntimeException exception) {
             audit.problem().report(BuiltinProblemCatalog.MAIN_DISPATCH_FAILED, exception,
                     "resource", "view");
-            task.run();
+            throw exception;
         }
     }
 

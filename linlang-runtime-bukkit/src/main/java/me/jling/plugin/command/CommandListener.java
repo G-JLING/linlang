@@ -22,12 +22,17 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.stream.Collectors;
 
+import static api.linlang.command.CommandOptions.options;
+
 /**
  * 运行时插件使用的 Linlang 命令注册器。
  *
  * <p>负责在运行时插件的 {@link LinCommand} 上注册以 <code>/linlang</code> 为前缀的管理命令。</p>
  */
 public final class CommandListener {
+
+    static final String RELOAD_SPEC = "linlang reload <bukkit:string{.+}>";
+    static final String RELOAD_ALL_SPEC = "linlang reload-all";
 
     private static final LinCommand.Permission ADMIN =
             LinCommand.Permission.perms("linlangruntimebukkit.admin");
@@ -56,6 +61,7 @@ public final class CommandListener {
         registerPlugins(registry);
         registerRestart(registry);
         registerReload(registry);
+        registerReloadAll(registry);
         registerRestartAll(registry);
         registerProblems(registry);
         registerProblem(registry);
@@ -83,9 +89,9 @@ public final class CommandListener {
                     sendLine(sender, messenger, text.info.runtimeVersion, "version", runtimeVersion);
                     sendLine(sender, messenger, text.info.pluginVersion, "version", pluginVersion);
                 },
-                ADMIN,
-                LinCommand.ExecTarget.ALL,
-                LinCommand.I18n.create().desc(text.info.description)
+                options()
+                        .permission(ADMIN)
+                        .desc(text.info.description)
         );
     }
 
@@ -118,9 +124,9 @@ public final class CommandListener {
                                 "status", status);
                     }
                 },
-                ADMIN,
-                LinCommand.ExecTarget.ALL,
-                LinCommand.I18n.create().desc(text.plugins.description)
+                options()
+                        .permission(ADMIN)
+                        .desc(text.plugins.description)
         );
     }
 
@@ -129,39 +135,8 @@ public final class CommandListener {
                 "linlang restart <bukkit:string{.+}>",
                 ctx -> {
                     CommandSender sender = (CommandSender) ctx.sender();
-                    String pluginName = ctx.get("bukkit");
-                    if (pluginName == null || pluginName.isBlank()) {
-                        send(sender, messenger, text.restart.emptyName);
-                        return;
-                    }
-
-                    Set<BukkitFacadeImpl> facades = runtime.listFacades();
-                    BukkitFacadeImpl target = facades.stream()
-                            .filter(facade -> facade.owner().getName().equalsIgnoreCase(pluginName))
-                            .findFirst()
-                            .orElse(null);
-
-                    if (target == null) {
-                        String lower = pluginName.toLowerCase(Locale.ROOT);
-                        Set<BukkitFacadeImpl> candidates = facades.stream()
-                                .filter(facade -> facade.owner().getName().toLowerCase(Locale.ROOT).contains(lower))
-                                .collect(Collectors.toSet());
-                        if (candidates.size() == 1) {
-                            target = candidates.iterator().next();
-                        } else if (candidates.size() > 1) {
-                            send(sender, messenger, text.restart.ambiguous);
-                            for (BukkitFacadeImpl candidate : candidates) {
-                                sendLine(sender, messenger, text.restart.candidate,
-                                        "name", candidate.owner().getName());
-                            }
-                            return;
-                        }
-                    }
-
-                    if (target == null) {
-                        send(sender, messenger, text.restart.notFound, "name", pluginName);
-                        return;
-                    }
+                    BukkitFacadeImpl target = findFacade(sender, ctx.get("bukkit"));
+                    if (target == null) return;
 
                     try {
                         target.restart();
@@ -172,7 +147,7 @@ public final class CommandListener {
                                 .outcome(AuditOutcome.SUCCESS)
                                 .build());
                     } catch (Throwable throwable) {
-                        runtime.audit().problem().report(
+                        if (!(throwable instanceof api.linlang.runtime.ReloadException)) runtime.audit().problem().report(
                                 BuiltinProblemCatalog.FACADE_RESTART_FAILED,
                                 throwable,
                                 "owner", target.owner().getName(),
@@ -187,25 +162,98 @@ public final class CommandListener {
                                 "code", BuiltinProblemCatalog.FACADE_RESTART_FAILED);
                     }
                 },
-                ADMIN,
-                LinCommand.ExecTarget.ALL,
-                LinCommand.I18n.create()
+                options()
+                        .permission(ADMIN)
                         .desc(text.restart.description)
                         .label("bukkit", text.restart.pluginLabel)
         );
     }
 
+    private BukkitFacadeImpl findFacade(CommandSender sender, String pluginName) {
+        if (pluginName == null || pluginName.isBlank()) {
+            send(sender, messenger, text.restart.emptyName);
+            return null;
+        }
+
+        Set<BukkitFacadeImpl> facades = runtime.listFacades();
+        BukkitFacadeImpl target = facades.stream()
+                .filter(facade -> facade.owner().getName().equalsIgnoreCase(pluginName))
+                .findFirst()
+                .orElse(null);
+
+        if (target == null) {
+            String lower = pluginName.toLowerCase(Locale.ROOT);
+            Set<BukkitFacadeImpl> candidates = facades.stream()
+                    .filter(facade -> facade.owner().getName().toLowerCase(Locale.ROOT).contains(lower))
+                    .collect(Collectors.toSet());
+            if (candidates.size() == 1) {
+                target = candidates.iterator().next();
+            } else if (candidates.size() > 1) {
+                send(sender, messenger, text.restart.ambiguous);
+                for (BukkitFacadeImpl candidate : candidates) {
+                    sendLine(sender, messenger, text.restart.candidate,
+                            "name", candidate.owner().getName());
+                }
+                return null;
+            }
+        }
+
+        if (target == null) {
+            send(sender, messenger, text.restart.notFound, "name", pluginName);
+            return null;
+        }
+
+        return target;
+    }
+
     private void registerReload(LinCommand registry) {
         registry.register(
-                "linlang reload",
+                RELOAD_SPEC,
+                ctx -> {
+                    CommandSender sender = (CommandSender) ctx.sender();
+                    BukkitFacadeImpl target = findFacade(sender, ctx.get("bukkit"));
+                    if (target == null) return;
+                    try {
+                        target.reload();
+                        runtime.audit().record(AuditEvent.builder("runtime.facade.reload")
+                                .actor(actor(sender))
+                                .resource(target.owner().getName())
+                                .outcome(AuditOutcome.SUCCESS)
+                                .build());
+                        send(sender, messenger, text.reload.success, "name", target.owner().getName());
+                    } catch (RuntimeException exception) {
+                        if (!(exception instanceof api.linlang.runtime.ReloadException)
+                                && !(exception instanceof api.linlang.file.file.config.ConfigLoadException)) {
+                            runtime.audit().problem().report(BuiltinProblemCatalog.FACADE_RELOAD_FAILED,
+                                    exception, "owner", target.owner().getName(), "actor", actor(sender));
+                        }
+                        runtime.audit().record(AuditEvent.builder("runtime.facade.reload")
+                                .actor(actor(sender))
+                                .resource(target.owner().getName())
+                                .outcome(AuditOutcome.FAILURE)
+                                .build());
+                        send(sender, messenger, text.reload.failed,
+                                "code", BuiltinProblemCatalog.FACADE_RELOAD_FAILED);
+                    }
+                },
+                options()
+                        .permission(ADMIN)
+                        .desc(text.reload.description)
+                        .label("bukkit", text.restart.pluginLabel)
+        );
+    }
+
+    private void registerReloadAll(LinCommand registry) {
+        registry.register(
+                RELOAD_ALL_SPEC,
                 ctx -> {
                     CommandSender sender = (CommandSender) ctx.sender();
                     try {
                         int failures = runtime.reloadAndCountFailures();
                         if (failures == 0) {
-                            send(sender, messenger, text.reload.success);
+                            send(sender, messenger, text.reloadAll.success);
                         } else {
-                            send(sender, messenger, text.reload.partial, "count", failures);
+                            send(sender, messenger, text.reloadAll.partial, "count", failures);
                         }
                         runtime.audit().record(AuditEvent.builder("runtime.reload")
                                 .actor(actor(sender))
@@ -223,13 +271,13 @@ public final class CommandListener {
                                 .actor(actor(sender))
                                 .outcome(AuditOutcome.FAILURE)
                                 .build());
-                        send(sender, messenger, text.reload.failed,
+                        send(sender, messenger, text.reloadAll.failed,
                                 "code", BuiltinProblemCatalog.FACADE_RELOAD_FAILED);
                     }
                 },
-                ADMIN,
-                LinCommand.ExecTarget.ALL,
-                LinCommand.I18n.create().desc(text.reload.description)
+                options()
+                        .permission(ADMIN)
+                        .desc(text.reloadAll.description)
         );
     }
 
@@ -251,9 +299,9 @@ public final class CommandListener {
                             .field("total", total)
                             .build());
                 },
-                ADMIN,
-                LinCommand.ExecTarget.ALL,
-                LinCommand.I18n.create().desc(text.restartAll.description)
+                options()
+                        .permission(ADMIN)
+                        .desc(text.restartAll.description)
         );
     }
 
@@ -261,9 +309,9 @@ public final class CommandListener {
         registry.register(
                 "linlang problems",
                 ctx -> sendProblemList((CommandSender) ctx.sender(), runtime.audit(), messenger, text),
-                ADMIN,
-                LinCommand.ExecTarget.ALL,
-                LinCommand.I18n.create().desc(text.problems.description)
+                options()
+                        .permission(ADMIN)
+                        .desc(text.problems.description)
         );
     }
 
@@ -277,9 +325,8 @@ public final class CommandListener {
                         text,
                         ctx.get("code")
                 ),
-                ADMIN,
-                LinCommand.ExecTarget.ALL,
-                LinCommand.I18n.create()
+                options()
+                        .permission(ADMIN)
                         .desc(text.problem.description)
                         .label("code", text.problem.codeLabel)
         );

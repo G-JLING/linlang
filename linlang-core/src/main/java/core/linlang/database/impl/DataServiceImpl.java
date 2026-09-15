@@ -360,9 +360,6 @@ public final class DataServiceImpl implements DataService {
         String table = tableName(entityType);
         try {
             repository.flush();
-            audit.logger().file(LinMsg.k("linData.repositoryFlushCompleted"),
-                    "entity", entityType.getName(),
-                    "table", table);
         } catch (Throwable exception) {
             audit.problem().report(BuiltinProblemCatalog.DATA_FLUSH_FAILED, exception,
                     "operation", "flush",

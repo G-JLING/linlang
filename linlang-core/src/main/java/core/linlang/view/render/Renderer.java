@@ -5,6 +5,7 @@ import api.linlang.view.model.GuiWidget;
 import core.linlang.view.compile.CompiledView;
 import core.linlang.view.session.DefaultGuiSession;
 import core.linlang.view.spec.*;
+import core.linlang.file.text.ConfigTextResolver;
 
 import java.util.*;
 
@@ -12,6 +13,15 @@ import static core.linlang.view.render.Placeholders.apply;
 import static core.linlang.view.render.Placeholders.applyValue;
 
 public final class Renderer {
+    private final ConfigTextResolver texts;
+
+    public Renderer() {
+        this(new ConfigTextResolver(() -> null, issue -> {}));
+    }
+
+    public Renderer(ConfigTextResolver texts) {
+        this.texts = texts;
+    }
 
     public RenderModel render(DefaultGuiSession session) {
         return render(session, Map.of());
@@ -27,7 +37,8 @@ public final class Renderer {
         Map<String, Object> vars = baseVars(session, platformVars);
 
         // title
-        String title = apply(cv.spec().title(), vars);
+        String title = apply(cv.spec().titleSource() == null ? cv.spec().title()
+                : texts.text(cv.spec().titleSource()), vars);
 
         // 1) render static defaults
         for (var e : cv.staticDefaults().entrySet()) {
@@ -143,13 +154,14 @@ public final class Renderer {
         }
     }
 
-    private static IconSpec renderIcon(IconSpec icon, Map<String, Object> vars) {
+    private IconSpec renderIcon(IconSpec icon, Map<String, Object> vars) {
         if (icon == null) return null;
         String key = apply(icon.key(), vars);
-        String name = apply(icon.name(), vars);
+        String name = apply(icon.nameSource() == null ? icon.name() : texts.text(icon.nameSource()), vars);
 
         List<String> lore = new ArrayList<>();
-        for (String s : icon.lore()) lore.add(apply(s, vars));
+        List<String> sourceLines = icon.loreSource() == null ? icon.lore() : texts.lines(icon.loreSource());
+        for (String s : sourceLines) lore.add(apply(s, vars));
 
         @SuppressWarnings("unchecked")
         Map<String, Object> meta = (Map<String, Object>) applyValue(icon.meta(), vars);

@@ -12,6 +12,7 @@ error:
   bad-arg: "§cError! §fUnknown argument or invalid parameter"
   no-perm: "§cError! §fYou do not have permission to execute this command"
   unknown-command: "§cError! §fThe command you entered does not exist"
+  suggestion: "§7Did you mean: §f{command}"
   exec-target: "§cError! §fThis command cannot be executed from your current context"
   exception: "§cError! An internal error has occurred. Please contact JLING(magicpowered@icloud.com)"
   type-no-resolver: "§fUnknown parameter resolver"

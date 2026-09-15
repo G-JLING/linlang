@@ -240,7 +240,11 @@ public abstract class AbstractAuditProvider implements LinLog.Provider, AutoClos
                             false,
                             !tenant.pluginLogger
                     ));
-            tenant.logger.log(Level.SEVERE, line, problem.cause());
+            if (problem.consoleSummary() != null) {
+                tenant.logger.log(Level.SEVERE, problem.consoleSummary());
+            } else {
+                tenant.logger.log(Level.SEVERE, line, problem.cause());
+            }
         }
 
         AuditConfig.Output output = config == null ? null : config.problem;

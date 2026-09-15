@@ -16,6 +16,7 @@ lin-file:
     lang-save-failed: "保存语言失败：{file} 原因：{reason}"
     lang-reloaded: "语言文件重新加载成功"
     lang-reload-failed: "重新加载语言文件失败：{file}。原因：{reason}"
+    lang-change-locale: "语言已变更为：{locale}。"
 
   watcher:
     reload-watching-start: "正在监听目录：{path}"

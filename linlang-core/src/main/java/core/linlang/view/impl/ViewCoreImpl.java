@@ -22,6 +22,8 @@ import core.linlang.view.render.Renderer;
 import core.linlang.view.session.DefaultGuiSession;
 import core.linlang.view.spec.ActionSpec;
 import core.linlang.view.spec.DynamicAreaSpec;
+import core.linlang.file.impl.LangServiceImpl;
+import core.linlang.file.text.ConfigTextResolver;
 
 import java.util.ArrayList;
 import java.util.ArrayDeque;
@@ -29,6 +31,8 @@ import java.util.Deque;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.LinkedHashSet;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Consumer;
 
@@ -40,7 +44,12 @@ public final class ViewCoreImpl implements LinView, ViewEventBridge, AutoCloseab
     private final HookRegistry hooks = new HookRegistry();
     private final SourceRegistry sources = new SourceRegistry();
     private final ViewRegistry views;
-    private final Renderer renderer = new Renderer();
+    private final Renderer renderer;
+    private final ConfigTextResolver texts;
+    private volatile LangServiceImpl language;
+    private boolean reloading;
+    private boolean closed;
+    private final Runnable languageListener = this::refreshLanguage;
 
     // viewer -> session
     private final Map<Object, DefaultGuiSession> sessions = new ConcurrentHashMap<>();
@@ -61,7 +70,41 @@ public final class ViewCoreImpl implements LinView, ViewEventBridge, AutoCloseab
         this.adapter = adapter;
         this.bus = bus;
         this.audit = LinLog.forOwner(owner);
+        this.texts = new ConfigTextResolver(() -> language, reference ->
+                audit.problem().report(BuiltinProblemCatalog.LANGUAGE_REFERENCE_FAILED,
+                        null, "reference", reference));
+        this.renderer = new Renderer(texts);
         this.views = new ViewRegistry(new ViewLoader(paths, uiRoot));
+    }
+
+    /**
+     * 使用所属门面的语言服务；重建门面后解除旧服务的监听。
+     */
+    public void language(LangServiceImpl next) {
+        if (language == next) return;
+        if (language != null) language.removeChangeListener(languageListener);
+        language = next;
+        if (next != null) next.addChangeListener(languageListener);
+        refreshLanguage();
+    }
+
+    private void refreshLanguage() {
+        texts.reset();
+        adapter.runMain(() -> {
+            Map<String, Throwable> failures = new LinkedHashMap<>();
+            int index = 0;
+            for (DefaultGuiSession session : new ArrayList<>(sessions.values())) {
+                if (sessions.get(session.viewer()) != session) continue;
+                try {
+                    adapter.apply(session.viewer(), render(session));
+                } catch (RuntimeException exception) {
+                    failures.put("view:" + session.viewId() + ":" + index++, exception);
+                    audit.problem().report(BuiltinProblemCatalog.VIEW_LANGUAGE_REFRESH_FAILED, exception,
+                            "view", session.viewId());
+                }
+            }
+            if (!failures.isEmpty()) throw new api.linlang.runtime.ReloadException(failures);
+        });
     }
 
     @Override
@@ -76,13 +119,19 @@ public final class ViewCoreImpl implements LinView, ViewEventBridge, AutoCloseab
 
     private GuiSession openInternal(Object viewer, String viewId, Consumer<GuiState> patch,
                                     boolean preserveCurrent) {
+        return openInternal(viewer, viewId, patch, preserveCurrent, null);
+    }
+
+    private GuiSession openInternal(Object viewer, String viewId, Consumer<GuiState> patch,
+                                    boolean preserveCurrent, CompiledView prepared) {
+        if (closed) throw new IllegalStateException("View service is closed");
         if (!adapter.supportsViewer(viewer)) {
             throw new IllegalArgumentException("Unsupported viewer: " + viewer);
         }
 
         CompiledView cv;
         try {
-            cv = views.get(viewId);
+            cv = prepared == null ? views.get(viewId) : prepared;
         } catch (RuntimeException exception) {
             audit.problem().report(BuiltinProblemCatalog.VIEW_DEFINITION_LOAD_FAILED, exception,
                     "view", viewId);
@@ -99,26 +148,30 @@ public final class ViewCoreImpl implements LinView, ViewEventBridge, AutoCloseab
                 () -> navigateBack(viewer)
         );
         if (patch != null) patch.accept(s.state());
-        if (!preserveCurrent) navigation.remove(viewer);
-        sessions.put(viewer, s);
-
-        /*
-         * allowManualClose 应来自资源文件（ViewSpec.allowManualClose）。
-         * 若调用方未显式覆盖，则把默认值写入 state，便于调试与旧逻辑兼容。
-         */
-        if (!s.state().containsKey("_allowManualClose")
-                && !s.state().containsKey("allowManualClose")
-                && !s.state().containsKey("view.allowManualClose")) {
-            s.state().put("view.allowManualClose", cv.spec().allowManualClose());
-        }
+        DefaultGuiSession previous = sessions.get(viewer);
 
         loadAllAreas(s);
 
         RenderModel model = render(s);
 
         adapter.runMain(() -> {
-            adapter.open(viewer, model.title(), cv.rows());
-            adapter.apply(viewer, model);
+            sessions.put(viewer, s);
+            try {
+                adapter.open(viewer, model.title(), cv.rows());
+                adapter.apply(viewer, model);
+                if (!preserveCurrent) navigation.remove(viewer);
+            } catch (RuntimeException exception) {
+                if (previous == null) sessions.remove(viewer, s);
+                else {
+                    sessions.put(viewer, previous);
+                    try {
+                        RenderModel old = render(previous);
+                        adapter.open(viewer, old.title(), previous.compiled().rows());
+                        adapter.apply(viewer, old);
+                    } catch (RuntimeException rollback) { exception.addSuppressed(rollback); }
+                }
+                throw exception;
+            }
         });
 
         return s;
@@ -151,6 +204,11 @@ public final class ViewCoreImpl implements LinView, ViewEventBridge, AutoCloseab
 
     @Override
     public void close() {
+        if (closed) return;
+        if (reloading) throw new IllegalStateException("Cannot close during view reload");
+        closed = true;
+        if (language != null) language.removeChangeListener(languageListener);
+        language = null;
         for (Object viewer : new ArrayList<>(sessions.keySet())) {
             close(viewer);
         }
@@ -160,17 +218,53 @@ public final class ViewCoreImpl implements LinView, ViewEventBridge, AutoCloseab
 
     @Override
     public void reload() {
-        views.reload();
-        for (DefaultGuiSession session : new ArrayList<>(sessions.values())) {
-            reopen(session);
-        }
+        adapter.checkReloadThread();
+        Set<String> ids = new LinkedHashSet<>(views.ids());
+        for (DefaultGuiSession session : sessions.values()) ids.add(session.viewId());
+        reloadViews(ids);
     }
 
     @Override
     public void reload(String viewId) {
-        views.reload(viewId);
-        for (DefaultGuiSession session : new ArrayList<>(sessions.values())) {
-            if (session.viewId().equals(viewId)) reopen(session);
+        adapter.checkReloadThread();
+        reloadViews(Set.of(viewId));
+    }
+
+    private void reloadViews(Set<String> ids) {
+        if (closed) throw new IllegalStateException("View service is closed");
+        if (reloading) throw new IllegalStateException("Recursive view reload is not allowed");
+        reloading = true;
+        try {
+            texts.reset();
+            Map<String, Throwable> failures = new LinkedHashMap<>();
+            for (String id : ids) {
+                CompiledView next;
+                try {
+                    next = views.prepare(id);
+                } catch (RuntimeException exception) {
+                    failures.put("view:" + id, exception);
+                    audit.problem().report(BuiltinProblemCatalog.VIEW_DEFINITION_LOAD_FAILED, exception, "view", id);
+                    continue;
+                }
+                boolean failed = false;
+                int index = 0;
+                for (DefaultGuiSession session : new ArrayList<>(sessions.values())) {
+                    if (!session.viewId().equals(id)) continue;
+                    try {
+                        Map<String, Object> state = new LinkedHashMap<>(session.state());
+                        openInternal(session.viewer(), id, value -> value.putAll(state), true, next);
+                    } catch (RuntimeException exception) {
+                        failed = true;
+                        failures.put("view:" + id + ":session:" + index, exception);
+                        audit.problem().report(BuiltinProblemCatalog.VIEW_REOPEN_FAILED, exception, "view", id);
+                    }
+                    index++;
+                }
+                if (!failed) views.commit(id, next);
+            }
+            if (!failures.isEmpty()) throw new api.linlang.runtime.ReloadException(failures);
+        } finally {
+            reloading = false;
         }
     }
 

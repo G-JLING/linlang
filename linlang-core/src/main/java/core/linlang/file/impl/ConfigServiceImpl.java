@@ -4,6 +4,15 @@ package core.linlang.file.impl;
 
 import api.linlang.audit.LinAudit;
 import api.linlang.audit.LinLog;
+import api.linlang.audit.problem.LinProblem;
+import api.linlang.file.file.LangService;
+import api.linlang.file.file.config.ConfigIssue;
+import api.linlang.file.file.config.ConfigLoadException;
+import core.linlang.file.config.ConfigDiagnostics;
+import core.linlang.file.config.ConfigMapper;
+import core.linlang.file.config.ConfigMappingException;
+import core.linlang.file.text.ConfigText;
+import core.linlang.file.text.ConfigTextResolver;
 import api.linlang.file.file.ConfigService;
 import api.linlang.file.file.FileType;
 import api.linlang.file.file.annotations.ConfigVersion;
@@ -28,6 +37,12 @@ public final class ConfigServiceImpl implements ConfigService {
     private final PathResolver paths;
     private final List<Migrator> migrators;
     private final LinAudit audit;
+    private volatile LangService language;
+    private final ConfigTextResolver textResolver;
+    private final Map<Class<?>, ConfigLoadException> failedConfigs = new LinkedHashMap<>();
+    private Attempt attempt;
+
+    private record Attempt(Path file, FileType format, String raw) {}
     private final java.util.Map<Class<?>, Object> liveConfigs = new java.util.LinkedHashMap<>();
     private final java.util.Map<Class<?>, Boolean> emitFlags = new java.util.LinkedHashMap<>();
     private final java.util.Map<Class<?>, Map<String, Object>> defaultSnapshots = new java.util.LinkedHashMap<>();
@@ -41,6 +56,44 @@ public final class ConfigServiceImpl implements ConfigService {
         this.migrators = new CopyOnWriteArrayList<>();
         if (migrators != null) this.migrators.addAll(migrators);
         this.audit = LinLog.forOwner(owner);
+        this.textResolver = new ConfigTextResolver(() -> language,
+                reference -> audit.problem().report("LIN-FILE-LANGUAGE-REFERENCE-FAIL", null, "reference", reference));
+    }
+
+    /**
+     * 接入当前插件语言服务，不提前解析配置中的翻译。
+     */
+    public void language(LangService service) {
+        this.language = service;
+        textResolver.reset();
+    }
+
+    @Override
+    public api.linlang.file.file.config.ConfigText text(Object source) {
+        ConfigText definition = ConfigText.parse(source, false);
+        Object saved = immutableDeepCopyValue(source == null ? "" : source);
+        return new api.linlang.file.file.config.ConfigText() {
+            @Override
+            public String get() { return textResolver.text(definition); }
+            @Override
+            public Object source() { return saved; }
+        };
+    }
+
+    @Override
+    public api.linlang.file.file.config.ConfigList textList(Object source) {
+        ConfigText definition = ConfigText.parse(source, true);
+        Object saved = immutableDeepCopyValue(source == null ? List.of() : source);
+        return new api.linlang.file.file.config.ConfigList() {
+            @Override
+            public List<String> get() { return textResolver.lines(definition); }
+            @Override
+            public Object source() { return saved; }
+        };
+    }
+
+    private ConfigMapper.Prepared prepare(Object target, Map<String, Object> document) {
+        return new ConfigMapper((value, lines) -> lines ? textList(value) : text(value)).prepare(target, document);
     }
 
     @Override
@@ -49,13 +102,18 @@ public final class ConfigServiceImpl implements ConfigService {
     }
 
     @Override
-    public <T> T bind(Class<T> type, boolean emit) {
+    public synchronized <T> T bind(Class<T> type, boolean emit) {
+        attempt = null;
         try {
-            return bindInternal(type, emit);
+            T result = bindInternal(type, emit);
+            failedConfigs.remove(type);
+            return result;
         } catch (RuntimeException exception) {
-            audit.problem().report(BuiltinProblemCatalog.CONFIG_BIND_FAILED, exception,
-                    "config", type == null ? "null" : type.getName());
-            throw new IllegalStateException(BuiltinProblemCatalog.CONFIG_BIND_FAILED, exception);
+            ConfigLoadException failure = reportFailure(type, exception, emit);
+            failedConfigs.put(type, failure);
+            throw failure;
+        } finally {
+            attempt = null;
         }
     }
 
@@ -63,6 +121,12 @@ public final class ConfigServiceImpl implements ConfigService {
         Binder.BoundConfig meta = Binder.configOf(type)
                 .orElseThrow(() -> new IllegalArgumentException("[linlang] missing @ConfigFile on " + type));
         Path file = toFile(meta.path(), meta.name(), meta.fmt());
+        attempt = new Attempt(file, meta.fmt(), null);
+        Object existing = liveConfigs.get(type);
+        if (existing != null) {
+            reloadIntoExisting(type, existing);
+            return type.cast(existing);
+        }
         boolean exists = IOs.exists(file);
 
         T inst = newInstance(type);
@@ -74,21 +138,17 @@ public final class ConfigServiceImpl implements ConfigService {
         java.util.Set<String> missing = new java.util.LinkedHashSet<>();
         if (exists) mergeDefaultsCollect(defaults, doc, "", missing);
 
-        populate(inst, meta.keyMap(), doc);
+        ConfigMapper.Prepared prepared = prepare(inst, doc);
 
         boolean annotatedNoEmit = type.isAnnotationPresent(NoEmit.class);
         boolean shouldEmit = emit && !annotatedNoEmit;
 
-        // 生成 diff
-        if (shouldEmit && !missing.isEmpty()) {
-            writeDiff(file, meta.fmt(), doc, missing);
-        }
-
-        // 写回文件
         Map<String, List<String>> comments = TreeMapper.extractComments(type);
-        if (shouldEmit) {
-            persist(file, meta.fmt(), doc, comments);
-        }
+        prepared.commit(() -> {
+            if (shouldEmit) persist(file, meta.fmt(), doc, comments);
+        });
+        if (shouldEmit && !missing.isEmpty()) writeDiff(file, meta.fmt(), doc, missing);
+        if (shouldEmit) ConfigDiagnostics.clearSidecar(file);
 
         // 记录实例与落盘偏好
         synchronized (liveConfigs) { liveConfigs.put(type, inst); }
@@ -117,7 +177,9 @@ public final class ConfigServiceImpl implements ConfigService {
         save(type, config, Boolean.valueOf(emit));
     }
 
-    private <T> void save(Class<T> type, T config, Boolean emitOverride) {
+    private synchronized <T> void save(Class<T> type, T config, Boolean emitOverride) {
+        attempt = null;
+        if (failedConfigs.containsKey(type)) throw failedConfigs.get(type);
         try {
             saveInternal(type, config, emitOverride);
         } catch (RuntimeException exception) {
@@ -151,7 +213,8 @@ public final class ConfigServiceImpl implements ConfigService {
         if (shouldEmit) persist(file, meta.fmt(), doc, comments);
     }
 
-    public void saveAll() {
+    public synchronized void saveAll() {
+        attempt = null;
         java.util.List<java.util.Map.Entry<Class<?>, Object>> snapshot;
         synchronized (liveConfigs) {
             snapshot = new java.util.ArrayList<>(liveConfigs.entrySet());
@@ -159,6 +222,7 @@ public final class ConfigServiceImpl implements ConfigService {
         for (var e : snapshot) {
             Class<?> type = e.getKey();
             Object config = e.getValue();
+            if (failedConfigs.containsKey(type)) continue;
 
             boolean annotatedNoEmit = type.isAnnotationPresent(NoEmit.class);
             boolean shouldEmit;
@@ -187,7 +251,9 @@ public final class ConfigServiceImpl implements ConfigService {
         }
     }
 
-    public void reload() {
+    public synchronized void reload() {
+        Map<Path, List<ConfigIssue>> failures = new LinkedHashMap<>();
+        textResolver.reset();
         java.util.List<java.util.Map.Entry<Class<?>, Object>> snapshot;
         synchronized (liveConfigs) {
             snapshot = new java.util.ArrayList<>(liveConfigs.entrySet());
@@ -196,15 +262,19 @@ public final class ConfigServiceImpl implements ConfigService {
             Class<?> type = e.getKey();
             Object target = e.getValue();
             if (type == null || target == null) continue;
+            attempt = null;
             try {
                 reloadIntoExisting(type, target);
+                failedConfigs.remove(type);
             } catch (Exception ex) {
-                audit.problem().report(
-                        BuiltinProblemCatalog.CONFIG_RELOAD_FAILED, ex,
-                        "file", type.getName()
-                );
+                ConfigLoadException failure = reportFailure(type, ex, emitFlags.getOrDefault(type, true));
+                failedConfigs.put(type, failure);
+                failures.putAll(failure.failures());
+            } finally {
+                attempt = null;
             }
         }
+        if (!failures.isEmpty()) throw new ConfigLoadException(failures);
         audit.logger().file(LinMsg.k("linFile.file.fileReloaded"));
     }
 
@@ -218,6 +288,7 @@ public final class ConfigServiceImpl implements ConfigService {
         Binder.BoundConfig meta = Binder.configOf(type)
                 .orElseThrow(() -> new IllegalArgumentException("[linlang] missing @ConfigFile on " + type));
         Path file = toFile(meta.path(), meta.name(), meta.fmt());
+        attempt = new Attempt(file, meta.fmt(), null);
 
         Map<String, Object> defaults;
         synchronized (defaultSnapshots) {
@@ -246,19 +317,13 @@ public final class ConfigServiceImpl implements ConfigService {
             shouldEmit = (flag != null ? flag : true) && !annotatedNoEmit;
         }
 
-        // 缺失键 diff
-        if (shouldEmit && !missing.isEmpty()) {
-            writeDiff(file, meta.fmt(), doc, missing);
-        }
-
-        // 按既有偏好写回
+        ConfigMapper.Prepared prepared = prepare(target, doc);
         Map<String, List<String>> comments = TreeMapper.extractComments(type);
-        if (shouldEmit) {
-            persist(file, meta.fmt(), doc, comments);
-        }
-
-        // 就地填充到实例
-        populate(target, meta.keyMap(), doc);
+        prepared.commit(() -> {
+            if (shouldEmit) persist(file, meta.fmt(), doc, comments);
+        });
+        if (shouldEmit && !missing.isEmpty()) writeDiff(file, meta.fmt(), doc, missing);
+        if (shouldEmit) ConfigDiagnostics.clearSidecar(file);
 
         synchronized (emitFlags) {
             emitFlags.putIfAbsent(type, shouldEmit);
@@ -280,14 +345,26 @@ public final class ConfigServiceImpl implements ConfigService {
             return mutableDeepCopy(defaults);
         }
         String raw = IOs.readString(file);
-        return meta.fmt() == FileType.YAML ? YamlCodec.load(raw) : JsonCodec.load(raw);
+        attempt = new Attempt(file, meta.fmt(), raw);
+        return ConfigDiagnostics.load(raw, meta.fmt());
     }
     private void persist(Path file, FileType fmt, Map<String,Object> doc, Map<String,java.util.List<String>> comments) {
-        String out = (fmt == FileType.YAML)
-                ? YamlCodec.dumpWithComments(doc, comments)
-                : JsonCodec.dump(doc);
         try {
-            IOs.writeString(file, out);
+            String raw = IOs.exists(file) ? IOs.readString(file) : null;
+            if (attempt != null && attempt.file().equals(file) && !Objects.equals(attempt.raw(), raw)) {
+                throw new IllegalStateException("Configuration changed while loading");
+            }
+            String out;
+            if (fmt == FileType.YAML && raw != null) {
+                String clean = ConfigDiagnostics.clear(raw);
+                if (Objects.equals(ConfigDiagnostics.load(clean, fmt), doc)) out = clean;
+                else {
+                    Map<String, List<String>> merged = new LinkedHashMap<>(comments);
+                    merged.putAll(YamlCodec.extractComments(clean));
+                    out = YamlCodec.dumpWithComments(doc, merged);
+                }
+            } else out = fmt == FileType.YAML ? YamlCodec.dumpWithComments(doc, comments) : JsonCodec.dump(doc);
+            ConfigDiagnostics.writeAtomic(file, out);
             audit.logger().debug(LinMsg.k("linFile.file.fileSaved"), "file", file);
         } catch (Exception e) {
             throw new IllegalStateException(BuiltinProblemCatalog.CONFIG_SAVE_FAILED, e);
@@ -368,13 +445,35 @@ public final class ConfigServiceImpl implements ConfigService {
     }
 
     static void export(Object inst, Map<Field, String> ignored, Map<String, Object> doc) {
-        TreeMapper.export(inst, doc);
+        doc.putAll(ConfigMapper.export(inst));
     }
 
     private static Map<String, Object> exportSnapshot(Object instance, Map<Field, String> keyMap) {
         Map<String, Object> defaults = new LinkedHashMap<>();
         export(instance, keyMap, defaults);
         return immutableDeepCopy(defaults);
+    }
+
+    private ConfigLoadException reportFailure(Class<?> type, Exception exception, boolean emit) {
+        Attempt current = attempt;
+        Path file = current == null ? paths.sub(type == null ? "config" : type.getSimpleName()) : current.file();
+        List<ConfigIssue> issues = exception instanceof ConfigMappingException mapping ? mapping.issues()
+                : List.of(new ConfigIssue("$", "配置加载失败，请检查文件读写权限、版本迁移规则与配置类声明"));
+        String summary = "配置错误：" + ConfigDiagnostics.safe(file.getFileName().toString());
+        try {
+            ConfigDiagnostics.report(file, current == null ? FileType.JSON : current.format(),
+                    current == null ? null : current.raw(), issues,
+                    emit && type != null && !type.isAnnotationPresent(NoEmit.class));
+        } catch (RuntimeException diagnosticFailure) {
+            summary += "；" + issues.stream().limit(3)
+                    .map(issue -> ConfigDiagnostics.safe(issue.key() + "：" + issue.message())).toList();
+        }
+        audit.problem().report(LinProblem.builder("LIN-FILE-CONFIG-LOAD-FAIL")
+                .consoleSummary(summary).context("file", file.toString())
+                .cause(exception instanceof ConfigMappingException ? null : exception)
+                .context("issues", issues.stream().map(issue -> Map.of("key", issue.key(), "message", issue.message())).toList())
+                .build());
+        return new ConfigLoadException(Map.of(file, issues));
     }
 
     // 简易路径读写
@@ -428,6 +527,7 @@ public final class ConfigServiceImpl implements ConfigService {
                 continue;
             }
             Object cv = doc.get(k);
+            if (dv instanceof Map<?, ?> defaultsMap && defaultsMap.containsKey("lang")) continue;
             if (dv instanceof Map && cv instanceof Map) {
                 mergeDefaultsCollect((Map<String, Object>) dv, (Map<String, Object>) cv, path, missing);
             }

@@ -25,6 +25,7 @@ public final class ZhCN implements LocaleProvider<CommandMessageKeys> {
         k.error.badArg          = "§c错误! §f未知的参数或参数错误";
         k.error.noPerm          = "§c错误! §f您没有执行此命令的权限";
         k.error.unknownCommand  = "§c错误! §f您输入了一个不存在的命令";
+        k.error.suggestion      = "§7您是否想执行：§f{command}";
         k.error.execTarget      = "§c错误! §f此命令不可以在当前位置执行";
         k.error.exception       = "§c错误! 发生了一个内部错误，请联系 JLING(magicpowered@icloud.com)";
         k.error.typeNoResolver  = "§f未知的参数解析器";

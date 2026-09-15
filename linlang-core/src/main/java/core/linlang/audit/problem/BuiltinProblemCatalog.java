@@ -42,12 +42,16 @@ public final class BuiltinProblemCatalog {
     public static final String CONFIG_SAVE_FAILED = "LIN-FILE-CONFIG-SAVE-FAIL";
     public static final String CONFIG_RELOAD_FAILED = "LIN-FILE-CONFIG-RELOAD-FAIL";
     public static final String CONFIG_BIND_FAILED = "LIN-FILE-CONFIG-BIND-FAIL";
+    public static final String CONFIG_LOAD_FAILED = "LIN-FILE-CONFIG-LOAD-FAIL";
     public static final String LANGUAGE_LOCALE_SWITCH_FAILED = "LIN-FILE-LANGUAGE-LOCALE-SWITCH-FAIL";
     public static final String LANGUAGE_BIND_FAILED = "LIN-FILE-LANGUAGE-BIND-FAIL";
     public static final String LANGUAGE_SAVE_FAILED = "LIN-FILE-LANGUAGE-SAVE-FAIL";
     public static final String LANGUAGE_RELOAD_FAILED = "LIN-FILE-LANGUAGE-RELOAD-FAIL";
     public static final String LANGUAGE_ENSURE_FAILED = "LIN-FILE-LANGUAGE-ENSURE-FAIL";
     public static final String LANGUAGE_LAZY_LOAD_FAILED = "LIN-FILE-LANGUAGE-LAZY-LOAD-FAIL";
+    public static final String LANGUAGE_LISTENER_FAILED = "LIN-FILE-LANGUAGE-LISTENER-FAIL";
+    public static final String LANGUAGE_REFERENCE_FAILED = "LIN-FILE-LANGUAGE-REFERENCE-FAIL";
+    public static final String VIEW_LANGUAGE_REFRESH_FAILED = "LIN-VIEW-LANGUAGE-REFRESH-FAIL";
     public static final String LANGUAGE_RESOURCE_LOAD_FAILED = "LIN-FILE-LANGUAGE-RESOURCE-LOAD-FAIL";
     public static final String LANGUAGE_LOCALE_SCAN_FAILED = "LIN-FILE-LANGUAGE-LOCALE-SCAN-FAIL";
     public static final String LANGUAGE_LOCALE_NORMALIZE_FAILED = "LIN-FILE-LANGUAGE-LOCALE-NORMALIZE-FAIL";
@@ -94,6 +98,16 @@ public final class BuiltinProblemCatalog {
 
     private static Map<String, ProblemDefinition> definitions() {
         Map<String, ProblemDefinition> values = new LinkedHashMap<>();
+        add(values, "LIN-RUNTIME-RELOAD-FAIL", "Runtime",
+                "重载存在失败步骤，未完成的步骤不会报告成功。",
+                "查看失败文件和步骤，修正后重新执行软重载。");
+        add(values, LANGUAGE_REFERENCE_FAILED, "File",
+                "配置语言引用不存在或文本类型不匹配，已使用回退内容。",
+                "检查语言包别名、包内路径以及字符串或字符串列表类型。");
+        add(values, LANGUAGE_LISTENER_FAILED, "File",
+                "语言变更监听器执行失败。", "根据异常检查消费语言变更的服务。");
+        add(values, VIEW_LANGUAGE_REFRESH_FAILED, "View",
+                "语言变更后界面重绘失败。", "根据 view 上下文检查语言引用和平台界面状态。");
         add(values, RUNTIME_CONFIG_LOAD_FAILED, "Audit",
                 "运行时审计配置无法加载，当前使用安全默认配置。",
                 "检查 audit.yml 的结构、字段类型和文件权限。");
@@ -117,16 +131,16 @@ public final class BuiltinProblemCatalog {
                 "检查上下文字段是否包含不可安全转换的对象。");
 
         add(values, RUNTIME_ENABLE_FAILED, "Runtime",
-                "Linlang Bukkit Runtime 启动失败。",
+                "Linlang 运行时启动失败。",
                 "检查同一异常的 cause，并确认 API 版本、服务注册和运行环境兼容。");
         add(values, VersionCheck.INCOMPATIBLE_CODE, "Runtime",
-                "依赖版本与运行时的 A 或 B 不同，已拒绝初始化。",
-                "使用 A.B 相同的 API 与运行时；版本过低时获取新的匹配构建：" + VersionCheck.PROJECT_URL);
+                "依赖版本与运行时的 A.B 版本号不同，或运行时缺少插件要求的 API 功能版本，已终止初始化。",
+                "安装满足插件要求的 Runtime；版本过低时获取新的匹配构建：" + VersionCheck.PROJECT_URL);
         add(values, VersionCheck.WARNING_CODE, "Runtime",
-                "依赖版本与运行时的 C 不同，允许运行，但需要确认功能兼容。",
-                "建议使用相同的 A.B.C；版本过低时获取新的匹配构建：" + VersionCheck.PROJECT_URL);
+                "运行时的 API 功能版本高于插件编译版本，请注意检查兼容性。",
+                "建议使用相同的 A.B.C；插件可以更新 API 依赖并重新测试：" + VersionCheck.PROJECT_URL);
         add(values, VersionCheck.INVALID_CODE, "Runtime",
-                "无法识别依赖或运行时的四段版本号，已拒绝初始化。",
+                "无法识别依赖或运行时的四段版本号，已终止初始化。",
                 "检查版本元数据是否为 A.B.C.D 格式，并重新获取完整构建：" + VersionCheck.PROJECT_URL);
         add(values, MESSAGE_TEMPLATE_INSTALL_FAILED, "Runtime",
                 "运行时内建消息模板无法安装。",
@@ -181,6 +195,9 @@ public final class BuiltinProblemCatalog {
         add(values, CONFIG_BIND_FAILED, "File",
                 "配置类无法完成首次绑定。",
                 "检查配置注解、构造方法、迁移器、文件格式和字段类型。");
+        add(values, CONFIG_LOAD_FAILED, "File",
+                "配置加载或类型校验失败，失败文件保留原有活动值。",
+                "查看文件内的 Linlang 诊断注释或同名 .errors.txt 文件，修正后重新加载。");
         add(values, LANGUAGE_LOCALE_SWITCH_FAILED, "File",
                 "语言对象无法切换到目标语言。",
                 "检查目标语言文件和已绑定语言字段的类型。");

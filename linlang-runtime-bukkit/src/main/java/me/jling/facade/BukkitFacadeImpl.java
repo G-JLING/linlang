@@ -158,8 +158,26 @@ public final class BukkitFacadeImpl implements Linlang, Linlang.Configurable, Li
         core.reload();
     }
 
+    @Override
+    public void applySettings() { core.applySettings(); }
+
+    @Override
+    public void applyParameters() { core.applyParameters(); }
+
+    @Override
+    public Linlang onRebuild(Runnable callback) {
+        core.onRebuild(callback);
+        return this;
+    }
+
+    @Override
+    public Linlang onReload(String name, Runnable callback) {
+        core.onReload(name, callback);
+        return this;
+    }
+
     /**
-     * 硬重启：销毁并重建该插件的 Linlang 服务实例。
+     * 显式重建门面服务，并执行插件注册的初始化回调。
      */
     @Override
     public void restart() {
@@ -167,10 +185,18 @@ public final class BukkitFacadeImpl implements Linlang, Linlang.Configurable, Li
     }
 
     /**
+     * 返回门面是否已关闭。
+     */
+    public boolean isClosed() {
+        return core.isClosed();
+    }
+
+    /**
      * 关闭门面实例并释放资源。
      */
     @Override
     public void close() {
+        core.close();
         try {
             runtime.unregisterFacade(this);
         } catch (RuntimeException exception) {
@@ -181,6 +207,5 @@ public final class BukkitFacadeImpl implements Linlang, Linlang.Configurable, Li
                     "owner", owner.getName()
             );
         }
-        core.close();
     }
 }

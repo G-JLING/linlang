@@ -27,11 +27,14 @@ import net.md_5.bungee.api.chat.ClickEvent;
 import net.md_5.bungee.api.chat.HoverEvent;
 import net.md_5.bungee.api.chat.TextComponent;
 
-public final class LinlangBukkitCommand implements LinCommand, CommandExecutor, TabCompleter, PrefixAware, AutoCloseable {
+public final class LinlangBukkitCommand implements LinCommand, CommandExecutor, TabCompleter, PrefixAware, core.linlang.total.i18n.LocaleAware, AutoCloseable {
     private final LinCommandImpl core = new LinCommandImpl();
     private JavaPlugin plugin;
     private LinAudit audit = LinLog.forOwner(null);
     private String root = null;
+    private boolean closed;
+    private org.bukkit.command.CommandExecutor previousExecutor;
+    private TabCompleter previousCompleter;
     private InteractionHub hub;
     private CommandMessages messages = CommandMessages.defaults();
     private final Map<UUID, java.util.List<BaseComponent>> pendingPlayerLine = new HashMap<>();
@@ -89,6 +92,7 @@ public final class LinlangBukkitCommand implements LinCommand, CommandExecutor, 
     }
 
     private synchronized void ensureBukkitBindingRoot(String first) {
+        if (closed) throw new IllegalStateException("Command service is closed");
         if (first == null || first.isBlank()) throw new IllegalArgumentException("root");
         String normalized = first.trim();
         if (root != null) {
@@ -114,6 +118,8 @@ public final class LinlangBukkitCommand implements LinCommand, CommandExecutor, 
                             + ": command=" + normalized
             );
         }
+        previousExecutor = pc.getExecutor();
+        previousCompleter = pc.getTabCompleter();
         pc.setExecutor(this);
         pc.setTabCompleter(this);
         this.root = normalized;
@@ -229,8 +235,9 @@ public final class LinlangBukkitCommand implements LinCommand, CommandExecutor, 
 
     // 执行与 Tab
     @Override public boolean onCommand(CommandSender sender, Command command, String label, String[] args){
+        if (closed) return false;
         try {
-            core.dispatch(sender, label, args, bridge);
+            core.dispatch(sender, root == null ? command.getName() : root, args, bridge);
         } catch (Interact.Suspend s) {
             awaitInteraction((Player) sender, s);
             return true;
@@ -238,7 +245,8 @@ public final class LinlangBukkitCommand implements LinCommand, CommandExecutor, 
         return true;
     }
     @Override public List<String> onTabComplete(CommandSender sender, Command command, String alias, String[] args){
-        return core.tab(sender, alias, args, bridge);
+        if (closed) return List.of();
+        return core.tab(sender, root == null ? command.getName() : root, args, bridge);
     }
 
     // —— 额外注入 Bukkit 解析器：minecraft:item / minecraft:player / event:block —— //
@@ -289,7 +297,24 @@ public final class LinlangBukkitCommand implements LinCommand, CommandExecutor, 
     }
 
     @Override
+    public String locale() { return core.locale(); }
+
+    @Override
+    public void setLocale(String locale) { core.setLocale(locale); }
+
+    @Override
     public void close(){
+        if (closed) return;
+        closed = true;
+        if (plugin != null && root != null) {
+            PluginCommand pc = plugin.getCommand(root);
+            if (pc != null) {
+                if (pc.getExecutor() == this) pc.setExecutor(previousExecutor);
+                if (pc.getTabCompleter() == this) pc.setTabCompleter(previousCompleter);
+            }
+        }
+        pendingPlayerLine.clear();
+        pendingConsoleLine.clear();
         try {
             if (hub != null) hub.close();
         } catch (Exception exception) {
