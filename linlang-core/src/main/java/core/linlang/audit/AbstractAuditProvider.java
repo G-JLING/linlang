@@ -12,6 +12,7 @@ import core.linlang.audit.format.AuditRecordFormatter;
 import core.linlang.audit.format.AuditRecordFormatter.FormattedMessage;
 import core.linlang.audit.io.AuditFileWriter;
 import core.linlang.audit.problem.BuiltinProblemCatalog;
+import core.linlang.audit.problem.BuiltinProblemMessageKeys;
 
 import java.nio.file.Path;
 import java.util.ArrayDeque;
@@ -131,6 +132,15 @@ public abstract class AbstractAuditProvider implements LinLog.Provider, AutoClos
         tenants.remove(ownerKey);
         pendingOp.remove(ownerKey);
         pendingStartup.remove(ownerKey);
+    }
+
+    /**
+     * 安装内建问题目录使用的动态语言字段。
+     *
+     * @param language 已由运行时语言服务绑定的字段
+     */
+    public final void problemLanguage(BuiltinProblemMessageKeys language) {
+        problems.language(language);
     }
 
     protected final Object normalizedOwner(Object ownerHint) {

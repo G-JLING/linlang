@@ -15,6 +15,7 @@ import core.linlang.audit.config.AuditConfig;
 import core.linlang.audit.internal.LinMsg;
 import core.linlang.audit.internal.LinlangInternalMessageKeys;
 import core.linlang.audit.problem.BuiltinProblemCatalog;
+import core.linlang.audit.problem.BuiltinProblemMessageKeys;
 import core.linlang.command.message.CommandMessageKeys;
 import core.linlang.command.message.CommandMessageRouter;
 import core.linlang.database.impl.DataServiceImpl;
@@ -299,7 +300,19 @@ public final class RuntimeCore<P> implements AutoCloseable {
                     t
             ));
         }
+        installProblemLanguage();
         return this;
+    }
+
+    private void installProblemLanguage() {
+        AbstractAuditProvider audit = globalAudit;
+        LangServiceImpl language = runtimeLanguage;
+        if (audit == null || language == null) return;
+        try {
+            audit.problemLanguage(language.bind(BuiltinProblemMessageKeys.class));
+        } catch (RuntimeException ignored) {
+            // 语言绑定失败时继续使用目录内建文本。
+        }
     }
 
     /** 为指定插件安装/刷新审计租户（应在创建 facade 前调用） */
