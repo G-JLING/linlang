@@ -38,7 +38,7 @@ public final class SpecParser {
             // 反引号包裹的一律当作字面量（并且不触发进入“参数阶段”）
             if (isQuotedLiteral(t)){
                 if (inParam) {
-                    throw new IllegalArgumentException("参数之后不能再声明字面量: " + t);
+                    throw new CommandSpecException("参数之后不能再声明字面量: " + t);
                 }
                 n.literals.add(unquote(t));
                 continue;
@@ -60,7 +60,7 @@ public final class SpecParser {
 
     private static void validate(Model.Node node) {
         if (node.literals.isEmpty()) {
-            throw new IllegalArgumentException("命令规范必须包含根字面量");
+            throw new CommandSpecException("命令规范必须包含根字面量");
         }
 
         Set<String> names = new HashSet<>();
@@ -69,26 +69,26 @@ public final class SpecParser {
             Model.Param parameter = node.params.get(i);
             String key = parameter.name.toLowerCase(java.util.Locale.ROOT);
             if (!names.add(key)) {
-                throw new IllegalArgumentException("命令参数名重复: " + parameter.name);
+                throw new CommandSpecException("命令参数名重复: " + parameter.name);
             }
             if (parameter.defVal != null && !parameter.optional) {
-                throw new IllegalArgumentException("只有可选参数可以设置默认值: " + parameter.name);
+                throw new CommandSpecException("只有可选参数可以设置默认值: " + parameter.name);
             }
             if (parameter.optional) {
                 optionalSeen = true;
             } else if (optionalSeen) {
-                throw new IllegalArgumentException("可选参数之后不能再声明必填参数: " + parameter.name);
+                throw new CommandSpecException("可选参数之后不能再声明必填参数: " + parameter.name);
             }
             boolean text = parameter.types.stream().anyMatch(type -> "text".equalsIgnoreCase(type.id));
             if (text && i != node.params.size() - 1) {
-                throw new IllegalArgumentException("text 参数必须位于命令末尾: " + parameter.name);
+                throw new CommandSpecException("text 参数必须位于命令末尾: " + parameter.name);
             }
         }
     }
 
     /** 把 spec 按空白切分，但保留 <> 或 [] 内的空白；支持 `...` 作为字面量整体。 */
     private static List<String> tokenize(String spec){
-        if (spec == null) throw new IllegalArgumentException("spec");
+        if (spec == null) throw new CommandSpecException("spec");
         List<String> out = new ArrayList<>();
         StringBuilder cur = new StringBuilder();
         char paramClose = 0;
@@ -161,7 +161,7 @@ public final class SpecParser {
             }
         }
         if (quoted || paramClose != 0) {
-            throw new IllegalArgumentException("unclosed token in command spec: " + spec);
+            throw new CommandSpecException("unclosed token in command spec: " + spec);
         }
         if (cur.length()>0) out.add(cur.toString());
         return out;
@@ -172,7 +172,7 @@ public final class SpecParser {
         boolean optional;
         if (tok.startsWith("<") && tok.endsWith(">")) optional = false;
         else if (tok.startsWith("[") && tok.endsWith("]")) optional = true;
-        else throw new IllegalArgumentException("bad param token: " + tok);
+        else throw new CommandSpecException("bad param token: " + tok);
         String body = tok.substring(1, tok.length()-1).trim();
 
         // 提取 @描述（若存在）
@@ -210,18 +210,18 @@ public final class SpecParser {
             nameOnly = body.trim();
             typeUnion = "string";
         }
-        if (nameOnly.isEmpty()) throw new IllegalArgumentException("parameter name is empty: " + tok);
-        if (typeUnion.isEmpty()) throw new IllegalArgumentException("parameter type is empty: " + tok);
+        if (nameOnly.isEmpty()) throw new CommandSpecException("parameter name is empty: " + tok);
+        if (typeUnion.isEmpty()) throw new CommandSpecException("parameter type is empty: " + tok);
 
         p.name = nameOnly;
         p.defVal = defVal;
 
         for (String rawType : splitTopLevel(typeUnion, '|')) {
             String type = rawType.trim();
-            if (type.isEmpty()) throw new IllegalArgumentException("parameter type is empty: " + tok);
+            if (type.isEmpty()) throw new CommandSpecException("parameter type is empty: " + tok);
             Model.TypeSpec typeSpec = parseType(type);
             if (typeSpec.id == null || typeSpec.id.isBlank()) {
-                throw new IllegalArgumentException("parameter type is empty: " + tok);
+                throw new CommandSpecException("parameter type is empty: " + tok);
             }
             p.types.add(typeSpec);
         }
@@ -242,21 +242,21 @@ public final class SpecParser {
 
         if (leftBrace >= 0 && (leftBracket < 0 || leftBrace < leftBracket)
                 && (leftParenthesis < 0 || leftBrace < leftParenthesis)) {
-            if (!type.endsWith("}")) throw new IllegalArgumentException("bad type rule: " + type);
+            if (!type.endsWith("}")) throw new CommandSpecException("bad type rule: " + type);
             result.id = type.substring(0, leftBrace).trim();
             result.meta.put("body", type.substring(leftBrace + 1, type.length() - 1));
             return result;
         }
 
         if (leftBracket >= 0 && (leftParenthesis < 0 || leftBracket < leftParenthesis)) {
-            if (!type.endsWith("]")) throw new IllegalArgumentException("bad type range: " + type);
+            if (!type.endsWith("]")) throw new CommandSpecException("bad type range: " + type);
             result.id = type.substring(0, leftBracket).trim();
             putRange(result, type.substring(leftBracket + 1, type.length() - 1), type);
             return result;
         }
 
         if (leftParenthesis >= 0) {
-            if (!type.endsWith(")")) throw new IllegalArgumentException("bad type options: " + type);
+            if (!type.endsWith(")")) throw new CommandSpecException("bad type options: " + type);
             result.id = type.substring(0, leftParenthesis).trim();
             putOptions(result, type.substring(leftParenthesis + 1, type.length() - 1), type);
             return result;
@@ -287,10 +287,10 @@ public final class SpecParser {
             String key = entry.substring(0, equals).trim();
             String optionValue = entry.substring(equals + 1).trim();
             if (key.isEmpty() || optionValue.isEmpty()) {
-                throw new IllegalArgumentException("bad type option: " + source);
+                throw new CommandSpecException("bad type option: " + source);
             }
             if (result.meta.putIfAbsent(key, optionValue) != null) {
-                throw new IllegalArgumentException("duplicate type option: " + key);
+                throw new CommandSpecException("duplicate type option: " + key);
             }
         }
     }
@@ -298,7 +298,7 @@ public final class SpecParser {
     private static void putRange(Model.TypeSpec result, String range, String source) {
         String[] limits = range.split("\\.\\.", -1);
         if (limits.length != 2 || limits[0].isBlank() || limits[1].isBlank()) {
-            throw new IllegalArgumentException("bad type range: " + source);
+            throw new CommandSpecException("bad type range: " + source);
         }
         result.meta.put("min", limits[0].trim());
         result.meta.put("max", limits[1].trim());

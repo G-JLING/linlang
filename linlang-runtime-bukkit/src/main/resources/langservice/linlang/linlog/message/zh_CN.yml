@@ -1,44 +1,33 @@
+lin-runtime:
+  loading: "Linlang 正在加载"
+  enabled: "Linlang 运行时已启用，耗时 {elapsed}ms。API={api}, Runtime={runtime}, Plugin={plugin}"
+  disabling: "Linlang 运行时正在关闭"
+  closed: "Linlang 运行时已关闭"
+
 lin-file:
   file:
-    missing-keys: " + 此键在旧文件中缺失!"
     file-missing-keys: "{file} 缺失键 {count} 个，已生成默认键。详情见 {diff}"
     file-generated-different: "已生成差异告知文件：{diff}"
     file-saved: "已保存配置：{file}"
-    file-save-failed: "保存配置失败：{file} 原因：{reason}"
     file-reloaded: "配置文件重新加载成功"
-    file-reload-failed: "重新加载配置失败：{file}。原因：{reason}"
 
   lang:
-    missing-keys: " + 此键在旧文件中缺失!"
     lang-missing-keys: "{file} 缺失键 {count} 个，已生成默认键。详情见 {diff}"
     lang-generated-different: "已生成差异告知文件：{diff}"
     lang-saved: "已保存语言：{file}"
-    lang-save-failed: "保存语言失败：{file} 原因：{reason}"
     lang-reloaded: "语言文件重新加载成功"
-    lang-reload-failed: "重新加载语言文件失败：{file}。原因：{reason}"
-    lang-change-locale: "语言已变更为：{locale}。"
 
   watcher:
-    reload-watching-start: "正在监听目录：{path}"
-    reload-file-changed: "检测到改动：{file}"
-    reload-failed: "热重载失败，请联系 {me}。原因：{reason}"
+    enabled: "文件动态重载已启用"
+    event-skipped: "已忽略文件服务自身写入产生的事件：{file}"
+    event-accepted: "已接受文件变更事件：{file}"
+    config-reloaded: "已动态重载配置文件：{file}"
+    addon-reloaded: "已动态重载附加文件：{file}"
+    language-reloaded: "已动态重载语言文件：{file}"
 
 lin-data:
-  repository-flush-completed: "仓库刷新调用完成：实体 {entity}，数据表 {table}"
   connection-pool-closed: "数据库连接池已关闭：{type}"
   db-init: "已初始化数据库：{type} {url}"
-  ensure-table: "已确保表：{table}"
-  flush-ok: "数据库 {data} 已落盘"
-  flush-failed: "数据库 {data} 落盘失败，原因：{reason}"
 
-lin-command:
-  command-set-prefix: "已设置命令前缀：{prefix}"
-  command-language-switched: "命令语言已切换为：{locale}"
-  command-router-rebuilt: "命令系统已重建"
-
-lin-log:
-  audit-config-loaded: "已加载审计配置"
-  audit-config-reloaded: "已重载审计配置"
-
-lin-text:
-  text-source-too-long: "此高级字符串太长了: {lintext}"
+lin-banner:
+  font-search: "Bukkit 正在查找字体文件资源"

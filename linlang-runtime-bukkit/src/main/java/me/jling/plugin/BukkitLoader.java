@@ -4,6 +4,7 @@ import api.linlang.audit.LinLog;
 import api.linlang.banner.LinBanner;
 import api.linlang.runtime.Lin;
 import api.linlang.runtime.Linlang;
+import core.linlang.audit.log.BuiltinLog;
 import core.linlang.audit.problem.BuiltinProblemCatalog;
 import me.jling.bukkit.LinlangBukkitBootstrap;
 import me.jling.runtime.BukkitRuntimeImpl;
@@ -38,16 +39,13 @@ public class BukkitLoader extends JavaPlugin {
             sm.register(Linlang.class, bootstrap, this, ServicePriority.Highest);
 
             long ms = (System.nanoTime() - t0) / 1_000_000L;
-            LinLog.info("Linlang runtime enabled in " + ms + "ms. API=" + Lin.API_VERSION
-                    + ", Runtime=" + bootstrap.runtimeVersion()
-                    + ", Plugin=" + getDescription().getVersion());
+            LinLog.info(BuiltinLog.RUNTIME_ENABLED,
+                    "elapsed", ms,
+                    "api", Lin.API_VERSION,
+                    "runtime", bootstrap.runtimeVersion(),
+                    "plugin", getDescription().getVersion());
 
             printBanner();
-
-//            LinLog.info("[linlang] registered Linlang provider: providerClass={}, providerCL={}",
-//                    bootstrap.getClass().getName(), bootstrap.getClass().getClassLoader());
-//
-//            LinLog.info("[linlang] Linlang interface classloader: {}", api.linlang.runtime.Linlang.class.getClassLoader());
 
         } catch (Throwable t) {
             if (runtime != null) {
@@ -74,7 +72,7 @@ public class BukkitLoader extends JavaPlugin {
 
     @Override
     public void onDisable() {
-        LinLog.info("Linlang runtime disabling.");
+        LinLog.info(BuiltinLog.RUNTIME_DISABLING);
         try {
             getServer().getServicesManager().unregisterAll(this);
         } catch (RuntimeException exception) {

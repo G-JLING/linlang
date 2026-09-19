@@ -15,6 +15,7 @@ import api.linlang.view.LinView;
 import core.linlang.file.impl.ConfigServiceImpl;
 import core.linlang.file.impl.LangServiceImpl;
 import core.linlang.audit.problem.BuiltinProblemCatalog;
+import core.linlang.audit.log.BuiltinLog;
 import core.linlang.total.prefix.PrefixAware;
 
 import lombok.Getter;
@@ -85,9 +86,8 @@ public final class LinlangBukkitBootstrap implements AutoCloseable, Linlang, Lin
 
         this.audit = LinLog.forOwner(runtimePlugin);
         this.runtime.installAudit(false);
-        this.runtime.installLinMsg();
 
-        LinLog.info("Linlang loading");
+        LinLog.info(BuiltinLog.RUNTIME_LOADING);
 
         this.language.setLocale(this.locale);
         this.commandText = this.language.bind(RuntimeCommandKeys.class);

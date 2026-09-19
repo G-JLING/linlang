@@ -65,7 +65,7 @@ public final class RepositoryImpl<T, ID> implements Repository<T, ID> {
 
             f.setAccessible(true);
             if (id != null) {
-                if (idF != null) throw new IllegalArgumentException("Multiple @Id fields on " + type.getName());
+                if (idF != null) throw new DataMappingException("Multiple @Id fields on " + type.getName());
                 idF = f;
             }
             String name = (c != null && !c.name().isEmpty()) ? c.name() : f.getName();
@@ -74,12 +74,13 @@ public final class RepositoryImpl<T, ID> implements Repository<T, ID> {
         }
         this.fields = tmp;
         this.colName = names;
-        this.idField = Objects.requireNonNull(idF, "@Id missing on " + type.getName());
+        if (idF == null) throw new DataMappingException("@Id missing on " + type.getName());
+        this.idField = idF;
         try {
             this.constructor = type.getDeclaredConstructor();
             this.constructor.setAccessible(true);
         } catch (ReflectiveOperationException exception) {
-            throw new IllegalArgumentException("No zero-argument constructor on " + type.getName(), exception);
+            throw new DataMappingException("No zero-argument constructor on " + type.getName(), exception);
         }
     }
 

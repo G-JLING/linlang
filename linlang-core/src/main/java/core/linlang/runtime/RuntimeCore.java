@@ -12,8 +12,8 @@ import api.linlang.messenger.LinMessenger;
 import api.linlang.view.LinView;
 import core.linlang.audit.AbstractAuditProvider;
 import core.linlang.audit.config.AuditConfig;
-import core.linlang.audit.internal.LinMsg;
-import core.linlang.audit.internal.LinlangInternalMessageKeys;
+import core.linlang.audit.log.BuiltinLogMessageKeys;
+import core.linlang.audit.log.BuiltinLog;
 import core.linlang.audit.problem.BuiltinProblemCatalog;
 import core.linlang.audit.problem.BuiltinProblemMessageKeys;
 import core.linlang.command.message.CommandMessageKeys;
@@ -300,18 +300,31 @@ public final class RuntimeCore<P> implements AutoCloseable {
                     t
             ));
         }
-        installProblemLanguage();
+        installAuditLanguages();
         return this;
     }
 
-    private void installProblemLanguage() {
+    private void installAuditLanguages() {
         AbstractAuditProvider audit = globalAudit;
         LangServiceImpl language = runtimeLanguage;
-        if (audit == null || language == null) return;
+        if (audit == null) return;
+        audit.problemLanguage(null);
+        audit.logLanguage(null);
+        if (language == null) return;
         try {
             audit.problemLanguage(language.bind(BuiltinProblemMessageKeys.class));
         } catch (RuntimeException ignored) {
             // 语言绑定失败时继续使用目录内建文本。
+        }
+        try {
+            audit.logLanguage(language.bind(BuiltinLogMessageKeys.class));
+        } catch (RuntimeException exception) {
+            if (!(exception instanceof core.linlang.file.config.ConfigMappingException)) {
+                reportProblem(runtimeHost,
+                        BuiltinProblemCatalog.MESSAGE_TEMPLATE_INSTALL_FAILED,
+                        exception,
+                        "stage", "log-language");
+            }
         }
     }
 
@@ -337,34 +350,6 @@ public final class RuntimeCore<P> implements AutoCloseable {
      */
     public void refreshAudit(P owner) {
         installAuditFor(owner, auditModes.getOrDefault(owner, false));
-    }
-
-    /** 安装 LinMsg（运行时内部消息模板）。建议在 runtimeLanguage attach 后调用。 */
-    public void installLinMsg() {
-        LangServiceImpl lang = this.runtimeLanguage;
-        if (lang == null) {
-            try {
-                lang = createLangService(runtimeHost);
-            } catch (RuntimeException exception) {
-                reportProblem(runtimeHost,
-                        BuiltinProblemCatalog.MESSAGE_TEMPLATE_INSTALL_FAILED,
-                        exception,
-                        "stage", "create-language-service");
-            }
-        }
-        if (lang == null) return;
-
-        try {
-            var keys = lang.bind(
-                    LinlangInternalMessageKeys.class
-            );
-            LinMsg.installKeys(() -> keys);
-            LinMsg.install(lang::tr);
-        } catch (Throwable t) {
-            if (!(t instanceof core.linlang.file.config.ConfigMappingException)) {
-                reportProblem(runtimeHost, BuiltinProblemCatalog.MESSAGE_TEMPLATE_INSTALL_FAILED, t);
-            }
-        }
     }
 
     /**
@@ -464,7 +449,6 @@ public final class RuntimeCore<P> implements AutoCloseable {
             }
             facades.clear();
         }
-        LinLog.info("Goodbye!");
         for (P owner : new ArrayList<>(interactCores.keySet())) {
             releaseOwner(owner);
         }
@@ -484,6 +468,7 @@ public final class RuntimeCore<P> implements AutoCloseable {
                     "resource", "runtime-event-bus");
         }
         if (globalAudit != null) {
+            LinLog.info(BuiltinLog.RUNTIME_CLOSED);
             globalAudit.flush(null);
             LinLog.uninstall(globalAudit);
             globalAudit.close();

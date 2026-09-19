@@ -20,7 +20,7 @@ import api.linlang.file.file.annotations.NoEmit;
 import api.linlang.file.file.migrator.Migrator;
 import api.linlang.file.file.migrator.MutableDocument;
 import api.linlang.file.file.path.PathResolver;
-import core.linlang.audit.internal.LinMsg;
+import core.linlang.audit.log.BuiltinLog;
 import core.linlang.audit.problem.BuiltinProblemCatalog;
 import core.linlang.file.runtime.TreeMapper;
 import core.linlang.json.JsonCodec;
@@ -275,7 +275,7 @@ public final class ConfigServiceImpl implements ConfigService {
             }
         }
         if (!failures.isEmpty()) throw new ConfigLoadException(failures);
-        audit.logger().file(LinMsg.k("linFile.file.fileReloaded"));
+        audit.logger().file(BuiltinLog.CONFIG_RELOADED);
     }
 
     /**
@@ -365,7 +365,7 @@ public final class ConfigServiceImpl implements ConfigService {
                 }
             } else out = fmt == FileType.YAML ? YamlCodec.dumpWithComments(doc, comments) : JsonCodec.dump(doc);
             ConfigDiagnostics.writeAtomic(file, out);
-            audit.logger().debug(LinMsg.k("linFile.file.fileSaved"), "file", file);
+            audit.logger().debug(BuiltinLog.CONFIG_SAVED, "file", file);
         } catch (Exception e) {
             throw new IllegalStateException(BuiltinProblemCatalog.CONFIG_SAVE_FAILED, e);
         }
@@ -554,15 +554,15 @@ public final class ConfigServiceImpl implements ConfigService {
                 String base = YamlCodec.dump(pruned);
                 String marked = insertYamlMissingMarkers(base, missingVals);
                 IOs.writeString(diff, marked);
-                audit.logger().info(LinMsg.k("linFile.file.fileGeneratedDifferent"), "diff", diff);
+                audit.logger().info(BuiltinLog.CONFIG_DIFF_GENERATED, "diff", diff);
             } else {
                 Map<String, Object> wrapper = new LinkedHashMap<>();
                 wrapper.put("_missing", new java.util.ArrayList<>(missing));
                 wrapper.put("_file", fullDoc);
                 IOs.writeString(diff, JsonCodec.dump(wrapper));
-                audit.logger().info(LinMsg.k("linFile.file.fileGeneratedDifferent"), "diff", diff);
+                audit.logger().info(BuiltinLog.CONFIG_DIFF_GENERATED, "diff", diff);
             }
-            audit.logger().warn(LinMsg.k("linFile.file.fileMissingKeys"), "file", f, "count", missing.size(), "diff", diff);
+            audit.logger().warn(BuiltinLog.CONFIG_MISSING_KEYS, "file", f, "count", missing.size(), "diff", diff);
         } catch (Exception exception) {
             audit.problem().report(
                     BuiltinProblemCatalog.DIFF_WRITE_FAILED, exception,
@@ -620,7 +620,7 @@ public final class ConfigServiceImpl implements ConfigService {
 
             String ci = " ".repeat(childIndent);
             String rendered = renderYamlScalar(missingWithValues.get(path));
-            lines.add(insertAt,     ci + LinMsg.kh("linFile.file.missingKeys"));
+            lines.add(insertAt, ci + "# [Linlang] MISSING_KEY");
             lines.add(insertAt + 1, ci + last + ": " + rendered);
         }
         return String.join("\n", lines);

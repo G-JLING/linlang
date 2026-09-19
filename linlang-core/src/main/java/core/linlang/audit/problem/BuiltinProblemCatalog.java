@@ -39,6 +39,7 @@ public final class BuiltinProblemCatalog {
     public static final String COMMAND_BUKKIT_BIND_FAILED = "LIN-COMMAND-BUKKIT-BIND-FAIL";
     public static final String COMMAND_EXECUTION_FAILED = "LIN-COMMAND-EXECUTE-FAIL";
     public static final String COMMAND_ARGUMENT_PARSE_FAILED = "LIN-COMMAND-ARGUMENT-PARSE-FAIL";
+    public static final String COMMAND_REGISTRATION_FAILED = "LIN-COMMAND-REGISTRATION-FAIL";
     public static final String COMMAND_LOCALE_REFRESH_FAILED = "LIN-COMMAND-LOCALE-REFRESH-FAIL";
     public static final String COMMAND_GROUP_CALLBACK_FAILED = "LIN-COMMAND-GROUP-CALLBACK-FAIL";
 
@@ -54,6 +55,7 @@ public final class BuiltinProblemCatalog {
     public static final String LANGUAGE_LAZY_LOAD_FAILED = "LIN-FILE-LANGUAGE-LAZY-LOAD-FAIL";
     public static final String LANGUAGE_LISTENER_FAILED = "LIN-FILE-LANGUAGE-LISTENER-FAIL";
     public static final String LANGUAGE_REFERENCE_FAILED = "LIN-FILE-LANGUAGE-REFERENCE-FAIL";
+    public static final String LANGUAGE_FORMAT_FAILED = "LIN-FILE-LANGUAGE-FORMAT-FAIL";
     public static final String VIEW_LANGUAGE_REFRESH_FAILED = "LIN-VIEW-LANGUAGE-REFRESH-FAIL";
     public static final String LANGUAGE_RESOURCE_LOAD_FAILED = "LIN-FILE-LANGUAGE-RESOURCE-LOAD-FAIL";
     public static final String LANGUAGE_LOCALE_SCAN_FAILED = "LIN-FILE-LANGUAGE-LOCALE-SCAN-FAIL";
@@ -66,6 +68,7 @@ public final class BuiltinProblemCatalog {
     public static final String WATCH_LOOP_FAILED = "LIN-FILE-WATCH-LOOP-FAIL";
 
     public static final String DATA_FLUSH_FAILED = "LIN-DATA-FLUSH-FAIL";
+    public static final String DATA_MAPPING_INVALID = "LIN-DATA-MAPPING-INVALID";
     public static final String DATA_INITIALIZATION_FAILED = "LIN-DATA-INITIALIZE-FAIL";
     public static final String DATA_MIGRATION_FAILED = "LIN-DATA-MIGRATE-FAIL";
     public static final String DATA_OPERATION_FAILED = "LIN-DATA-OPERATION-FAIL";
@@ -147,6 +150,9 @@ public final class BuiltinProblemCatalog {
                 "请检查语言包别名、包内路径以及字符串或字符串列表类型。");
         add(values, LANGUAGE_LISTENER_FAILED, "File",
                 "语言变更监听器执行失败。", "请根据异常检查消费语言变更的服务。");
+        add(values, LANGUAGE_FORMAT_FAILED, "File",
+                "语言文本无法使用给定参数完成格式化。",
+                "请根据 key 与 template 上下文检查占位符语法和传入参数。");
         add(values, VIEW_LANGUAGE_REFRESH_FAILED, "View",
                 "语言变更后界面重绘失败。", "请根据 view 上下文检查语言引用和平台界面状态。");
         add(values, RUNTIME_CONFIG_LOAD_FAILED, "Audit",
@@ -220,6 +226,9 @@ public final class BuiltinProblemCatalog {
         add(values, COMMAND_ARGUMENT_PARSE_FAILED, "Command",
                 "命令参数解析器发生非预期异常。",
                 "请检查参数规范、解析器实现和收到的参数类型。");
+        add(values, COMMAND_REGISTRATION_FAILED, "Command",
+                "命令描述语句或注册结构无效，命令未完成注册。",
+                "请根据 spec 上下文检查根命名空间、参数顺序、类型选项和重复签名。");
         add(values, COMMAND_LOCALE_REFRESH_FAILED, "Command",
                 "命令用法和参数说明无法刷新到新语言。",
                 "请检查延迟语言字段提供者以及命令描述、参数标签的实现。");
@@ -288,6 +297,9 @@ public final class BuiltinProblemCatalog {
         add(values, DATA_FLUSH_FAILED, "Data",
                 "仓库中的待处理数据无法刷新。",
                 "请检查数据库连接、事务状态和仓库实现。");
+        add(values, DATA_MAPPING_INVALID, "Data",
+                "数据库实体声明无法映射为有效的数据表结构。",
+                "请检查实体注解、主键、字段类型、索引、列名和无参构造方法。");
         add(values, DATA_INITIALIZATION_FAILED, "Data",
                 "数据库目录或连接池无法初始化。",
                 "请检查 JDBC 配置、驱动、数据库目录权限和数据库可用性。");

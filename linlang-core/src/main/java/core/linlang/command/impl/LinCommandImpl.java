@@ -19,6 +19,8 @@ import core.linlang.file.runtime.LocaleTag;
 import core.linlang.command.model.Model;
 import core.linlang.command.model.Registration;
 import core.linlang.command.parser.ArgEngine;
+import core.linlang.command.parser.CommandArgumentException;
+import core.linlang.command.parser.CommandSpecException;
 import core.linlang.command.parser.SpecParser;
 import core.linlang.command.signal.Interact;
 import core.linlang.audit.problem.BuiltinProblemCatalog;
@@ -90,12 +92,17 @@ public final class LinCommandImpl implements LinCommand, LocaleAware, PrefixAwar
 
     @Override
     public synchronized CommandRoot root(String namespace) {
-        CommandGroupImpl commandRoot = roots.computeIfAbsent(
-                normalizeLiteral(namespace),
-                ignored -> new CommandGroupImpl(this, namespace)
-        );
-        bindRoot(namespace);
-        return commandRoot;
+        try {
+            CommandGroupImpl commandRoot = roots.computeIfAbsent(
+                    normalizeLiteral(namespace),
+                    ignored -> new CommandGroupImpl(this, namespace)
+            );
+            bindRoot(namespace);
+            return commandRoot;
+        } catch (IllegalArgumentException exception) {
+            reportRegistrationFailure(namespace, exception);
+            throw exception;
+        }
     }
 
     public LinCommand install(String pluginPrefix, Object platform, CommandMessages msgs) {
@@ -260,12 +267,18 @@ public final class LinCommandImpl implements LinCommand, LocaleAware, PrefixAwar
             List<CommandFailureHandler> failureHandlers
     ) {
         Objects.requireNonNull(exec, "exec");
-        var n = SpecParser.parse(spec);
-        bindRoot(n.literals.get(0));
-
-        String signature = canonicalSignature(n);
-        if (signatures.containsKey(signature)) {
-            throw new IllegalArgumentException("命令签名重复: " + signature);
+        final Model.Node n;
+        final String signature;
+        try {
+            n = SpecParser.parse(spec);
+            bindRoot(n.literals.get(0));
+            signature = canonicalSignature(n);
+            if (signatures.containsKey(signature)) {
+                throw new CommandSpecException("命令签名重复: " + signature);
+            }
+        } catch (IllegalArgumentException exception) {
+            reportRegistrationFailure(spec, exception);
+            throw exception;
         }
 
         n.exec = new Model.Exec();
@@ -291,22 +304,30 @@ public final class LinCommandImpl implements LinCommand, LocaleAware, PrefixAwar
         return new Registration(this, n);
     }
 
+    private void reportRegistrationFailure(String spec, IllegalArgumentException exception) {
+        audit.problem().report(
+                BuiltinProblemCatalog.COMMAND_REGISTRATION_FAILED,
+                exception,
+                "spec", spec == null ? "null" : spec
+        );
+    }
+
     private synchronized void bindRoot(String namespace) {
         String value = namespace == null ? "" : namespace.trim();
         if (value.isEmpty() || value.chars().anyMatch(Character::isWhitespace)) {
-            throw new IllegalArgumentException("根命令必须是单个字面量: " + namespace);
+            throw new CommandSpecException("根命令必须是单个字面量: " + namespace);
         }
         if (root.isEmpty()) {
             root = value;
             return;
         }
         if (!root.equalsIgnoreCase(value)) {
-            throw new IllegalArgumentException("同一命令服务不能注册多个根命令: " + root + ", " + value);
+            throw new CommandSpecException("同一命令服务不能注册多个根命令: " + root + ", " + value);
         }
     }
 
     private static String normalizeLiteral(String value) {
-        if (value == null || value.isBlank()) throw new IllegalArgumentException("namespace");
+        if (value == null || value.isBlank()) throw new CommandSpecException("namespace");
         return value.trim().toLowerCase(Locale.ROOT);
     }
 
@@ -429,7 +450,7 @@ public final class LinCommandImpl implements LinCommand, LocaleAware, PrefixAwar
                 throw s;
             } catch (Exception e) {
                 // 参数阶段出错
-                if (!(e instanceof IllegalArgumentException)) {
+                if (!isArgumentRejection(e)) {
                     notifyFailure(
                             n, new CtxImpl(sender, vars, locale(), bridge.checkTarget(sender, ExecTarget.PLAYER)),
                             CommandFailure.Reason.ARGUMENT, e
@@ -607,7 +628,7 @@ public final class LinCommandImpl implements LinCommand, LocaleAware, PrefixAwar
                     sender, vars, locale(), bridge.checkTarget(sender, ExecTarget.PLAYER)
             );
             notifyFailure(node, context, CommandFailure.Reason.ARGUMENT, exception);
-            if (!(exception instanceof IllegalArgumentException)) {
+            if (!isArgumentRejection(exception)) {
                 audit.problem().report(
                         BuiltinProblemCatalog.COMMAND_ARGUMENT_PARSE_FAILED, exception,
                         "command", node.usage,
@@ -635,7 +656,7 @@ public final class LinCommandImpl implements LinCommand, LocaleAware, PrefixAwar
             Model.Param parameter = node.params.get(parameterIndex);
             if (tokenIndex >= tokens.length) {
                 if (!parameter.optional) {
-                    throw new IllegalArgumentException("missing <" + parameter.name + ">");
+                    throw new CommandArgumentException("missing <" + parameter.name + ">");
                 }
                 if (parameter.defVal != null) {
                     vars.put(parameter.name, parseUnion(engine, context, parameter, parameter.defVal));
@@ -648,7 +669,7 @@ public final class LinCommandImpl implements LinCommand, LocaleAware, PrefixAwar
                     ? String.join(" ", Arrays.copyOfRange(tokens, tokenIndex, tokens.length))
                     : tokens[tokenIndex];
             if (!text && parameterIndex == node.params.size() - 1 && tokens.length - tokenIndex > 1) {
-                throw new IllegalArgumentException("too many arguments for tail param");
+                throw new CommandArgumentException("too many arguments for tail param");
             }
 
             try {
@@ -664,7 +685,7 @@ public final class LinCommandImpl implements LinCommand, LocaleAware, PrefixAwar
         }
 
         if (tokenIndex < tokens.length) {
-            throw new IllegalArgumentException("too many arguments");
+            throw new CommandArgumentException("too many arguments");
         }
     }
 
@@ -685,7 +706,12 @@ public final class LinCommandImpl implements LinCommand, LocaleAware, PrefixAwar
             }
         }
         if (last != null) throw last;
-        throw new IllegalArgumentException("bad argument for param " + parameter.name);
+        throw new CommandArgumentException("bad argument for param " + parameter.name);
+    }
+
+    private static boolean isArgumentRejection(Throwable exception) {
+        return exception instanceof CommandArgumentException
+                || exception instanceof IllegalArgumentException;
     }
 
     private void executeNode(

@@ -81,14 +81,6 @@ public final class BukkitRuntimeImpl implements AutoCloseable {
     }
 
     /**
-     * 安装全局 LinMsg 消息键并绑定到运行时插件语言服务。
-     */
-    public void installLinMsg() {
-        core.attachRuntimeFileServices(bootstrap.getConfig(), bootstrap.getLanguage());
-        core.installLinMsg();
-    }
-
-    /**
      * 安装运行时自身的审计与日志。
      *
      * @param usePluginLogger 是否使用运行时插件自己的 logger 作为 console 输出
@@ -295,7 +287,5 @@ public final class BukkitRuntimeImpl implements AutoCloseable {
                     "resource", "runtime-core"
             );
         }
-
-        LinLog.info("[linlang] Runtime closed.");
     }
 }

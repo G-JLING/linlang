@@ -100,6 +100,9 @@ public final class AuditRecordFormatter {
                 line.append('[').append(tenant).append("] ");
             }
         }
+        if (timestamp && record.code() != null) {
+            line.append('[').append(record.code()).append("] ");
+        }
         line.append(formatted.text());
         return line.toString();
     }
@@ -148,6 +151,7 @@ public final class AuditRecordFormatter {
         Map<String, Object> root = base("log", record.timestamp(), tenant);
         root.put("level", record.level().name());
         root.put("channel", record.channel().name());
+        if (record.code() != null) root.put("code", record.code());
         root.put("message", formatted.text());
         if (!formatted.positional().isEmpty()) root.put("arguments", formatted.positional());
         if (!formatted.fields().isEmpty()) root.put("fields", formatted.fields());

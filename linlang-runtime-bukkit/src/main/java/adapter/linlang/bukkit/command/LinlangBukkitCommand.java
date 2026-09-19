@@ -11,6 +11,7 @@ import api.linlang.command.LinCommand;
 import api.linlang.command.group.CommandRoot;
 import api.linlang.command.message.CommandMessages;
 import core.linlang.command.impl.LinCommandImpl;
+import core.linlang.command.parser.CommandSpecException;
 import core.linlang.command.parser.SpecParser;
 import core.linlang.command.signal.Interact;
 import core.linlang.audit.problem.BuiltinProblemCatalog;
@@ -93,11 +94,11 @@ public final class LinlangBukkitCommand implements LinCommand, CommandExecutor, 
 
     private synchronized void ensureBukkitBindingRoot(String first) {
         if (closed) throw new IllegalStateException("Command service is closed");
-        if (first == null || first.isBlank()) throw new IllegalArgumentException("root");
+        if (first == null || first.isBlank()) throw new CommandSpecException("root");
         String normalized = first.trim();
         if (root != null) {
             if (!root.equalsIgnoreCase(normalized)) {
-                throw new IllegalArgumentException("同一命令服务不能绑定多个根命令: " + root + ", " + normalized);
+                throw new CommandSpecException("同一命令服务不能绑定多个根命令: " + root + ", " + normalized);
             }
             return;
         }

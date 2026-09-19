@@ -14,7 +14,7 @@ import api.linlang.file.file.annotations.LangPack;
 import api.linlang.file.file.annotations.NoEmit;
 import api.linlang.file.file.tool.LocaleId;
 import api.linlang.file.file.path.PathResolver;
-import core.linlang.audit.internal.LinMsg;
+import core.linlang.audit.log.BuiltinLog;
 import core.linlang.audit.problem.BuiltinProblemCatalog;
 import core.linlang.file.runtime.TreeMapper;
 import core.linlang.file.util.IOs;
@@ -373,7 +373,7 @@ public final class LangServiceImpl implements LangService, LocaleAware {
                 catch (ReloadException exception) { failures.putAll(exception.failures()); }
             }
             if (!failures.isEmpty()) throw new ReloadException(failures);
-            audit.logger().file(LinMsg.k("linFile.lang.langReloaded"));
+            audit.logger().file(BuiltinLog.LANGUAGE_RELOADED);
         } finally {
             updating = false;
         }
@@ -575,7 +575,12 @@ public final class LangServiceImpl implements LangService, LocaleAware {
             }
             return v;
         } catch (Exception e) {
-            audit.logger().debug("tr.format-error", "key", key, "msg", v, "err", e);
+            audit.problem().report(
+                    BuiltinProblemCatalog.LANGUAGE_FORMAT_FAILED,
+                    e,
+                    "key", key,
+                    "template", v
+            );
             return v;
         }
     }
@@ -999,7 +1004,7 @@ public final class LangServiceImpl implements LangService, LocaleAware {
             out = JsonCodec.dump(doc);
         }
         IOs.writeString(file, out);
-        audit.logger().debug(LinMsg.k("linFile.lang.langSaved"), "lang", file);
+        audit.logger().debug(BuiltinLog.LANGUAGE_SAVED, "lang", file);
     }
 
     private boolean writeBuiltinResourceToDisk(ClassLoader resourceLoader,
@@ -1214,15 +1219,15 @@ public final class LangServiceImpl implements LangService, LocaleAware {
                 String base = YamlCodec.dump(pruned);
                 String marked = insertYamlMissingMarkers(base, missingVals);
                 IOs.writeString(diff, marked);
-                audit.logger().info(LinMsg.k("linFile.lang.langGeneratedDifferent"), "diff", diff);
+                audit.logger().info(BuiltinLog.LANGUAGE_DIFF_GENERATED, "diff", diff);
             } else {
                 Map<String, Object> wrapper = new LinkedHashMap<>();
                 wrapper.put("_missing", new ArrayList<>(missing));
                 wrapper.put("_file", fullDoc);
                 IOs.writeString(diff, JsonCodec.dump(wrapper));
-                audit.logger().info(LinMsg.k("linFile.lang.langGeneratedDifferent"), "diff", diff);
+                audit.logger().info(BuiltinLog.LANGUAGE_DIFF_GENERATED, "diff", diff);
             }
-            audit.logger().warn(LinMsg.k("linFile.lang.langMissingKeys"), "file", f, "count", missing.size(), "diff", diff);
+            audit.logger().warn(BuiltinLog.LANGUAGE_MISSING_KEYS, "file", f, "count", missing.size(), "diff", diff);
         } catch (Exception exception) {
             audit.problem().report(
                     BuiltinProblemCatalog.DIFF_WRITE_FAILED, exception,
@@ -1335,7 +1340,7 @@ public final class LangServiceImpl implements LangService, LocaleAware {
 
             String ci = " ".repeat(childIndent);
             String rendered = renderYamlScalar(missingWithValues.get(path));
-            lines.add(insertAt, ci + LinMsg.kh("linFile.lang.missingKeys"));
+            lines.add(insertAt, ci + "# [Linlang] MISSING_KEY");
             lines.add(insertAt + 1, ci + last + ": " + rendered);
         }
         return String.join("\n", lines);

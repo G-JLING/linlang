@@ -6,6 +6,7 @@ import api.linlang.command.group.CommandGroup;
 import api.linlang.command.group.CommandRoot;
 import api.linlang.command.group.CommandSuccessHandler;
 import core.linlang.command.impl.LinCommandImpl;
+import core.linlang.command.parser.CommandSpecException;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -141,7 +142,7 @@ public final class CommandGroupImpl implements CommandRoot {
 
     private synchronized GroupRegistration registration(String relativeSpec, LinCommand.Permission leafPermission) {
         if (relativeSpec == null || relativeSpec.isBlank()) {
-            throw new IllegalArgumentException("spec");
+            throw new CommandSpecException("spec");
         }
 
         List<CommandGroupImpl> chain = chainFromRoot();
@@ -246,13 +247,13 @@ public final class CommandGroupImpl implements CommandRoot {
 
     private static String validateNamespace(String namespace) {
         if (namespace == null || namespace.isBlank()) {
-            throw new IllegalArgumentException("namespace");
+            throw new CommandSpecException("namespace");
         }
         String value = namespace.trim();
         if (value.chars().anyMatch(Character::isWhitespace)
                 || value.indexOf('<') >= 0 || value.indexOf('>') >= 0
                 || value.indexOf('[') >= 0 || value.indexOf(']') >= 0) {
-            throw new IllegalArgumentException("命令组命名空间必须是单个字面量: " + namespace);
+            throw new CommandSpecException("命令组命名空间必须是单个字面量: " + namespace);
         }
         return value;
     }

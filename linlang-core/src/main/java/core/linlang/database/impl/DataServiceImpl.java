@@ -14,7 +14,7 @@ import api.linlang.file.file.path.PathResolver;
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
 import api.linlang.file.database.repo.Repository;
-import core.linlang.audit.internal.LinMsg;
+import core.linlang.audit.log.BuiltinLog;
 import core.linlang.audit.problem.BuiltinProblemCatalog;
 import core.linlang.file.runtime.Binder;
 
@@ -79,7 +79,7 @@ public final class DataServiceImpl implements DataService {
             created = new HikariDataSource(hc);
             this.mode = type;
             this.ds = created;
-            audit.logger().file(LinMsg.k("linData.dbInit"),
+            audit.logger().file(BuiltinLog.DATABASE_INITIALIZED,
                     "type", type,
                     "url", sanitizedJdbcUrl(cfg.url()));
         } catch (RuntimeException exception) {
@@ -95,27 +95,46 @@ public final class DataServiceImpl implements DataService {
     public synchronized void migrate() {
         requireDataSource();
         for (Class<?> et : registeredEntities) {
-            Binder.BoundTable t = Binder.tableOf(et).orElse(null);
-            if (t == null) continue;
-            ensureSchema(et, t);
+            try {
+                Binder.BoundTable t = Binder.tableOf(et).orElse(null);
+                if (t == null) continue;
+                ensureSchema(et, t);
+            } catch (DataMappingException exception) {
+                reportInvalidEntity(et, exception);
+                throw exception;
+            }
         }
     }
 
     @Override
     public synchronized <T, ID> Repository<T, ID> repo(Class<T> entityType) {
         Objects.requireNonNull(entityType, "entityType");
-        HikariDataSource dataSource = requireDataSource();
-        Binder.BoundTable t = Binder.tableOf(entityType)
-                .orElseThrow(() -> new IllegalArgumentException("@Table missing on " + entityType));
-        @SuppressWarnings("unchecked")
-        Repository<T, ID> existing = (Repository<T, ID>) openRepos.get(entityType);
-        if (existing != null) return existing;
-        registeredEntities.add(entityType);
-        final Repository<T, ID> repo;
-        ensureSchema(entityType, t);
-        repo = new RepositoryImpl<>(dataSource, entityType, t.name(), DatabaseDialect.from(mode), audit);
-        openRepos.put(entityType, repo);
-        return repo;
+        try {
+            HikariDataSource dataSource = requireDataSource();
+            Binder.BoundTable t = Binder.tableOf(entityType)
+                    .orElseThrow(() -> new DataMappingException("@Table missing on " + entityType));
+            @SuppressWarnings("unchecked")
+            Repository<T, ID> existing = (Repository<T, ID>) openRepos.get(entityType);
+            if (existing != null) return existing;
+            ensureSchema(entityType, t);
+            Repository<T, ID> repository = new RepositoryImpl<>(
+                    dataSource, entityType, t.name(), DatabaseDialect.from(mode), audit
+            );
+            registeredEntities.add(entityType);
+            openRepos.put(entityType, repository);
+            return repository;
+        } catch (DataMappingException exception) {
+            reportInvalidEntity(entityType, exception);
+            throw exception;
+        }
+    }
+
+    private void reportInvalidEntity(Class<?> entityType, DataMappingException exception) {
+        audit.problem().report(
+                BuiltinProblemCatalog.DATA_MAPPING_INVALID,
+                exception,
+                "entity", entityType == null ? "null" : entityType.getName()
+        );
     }
 
     private <T> void ensureSchema(Class<T> type, Binder.BoundTable table) {
@@ -195,10 +214,10 @@ public final class DataServiceImpl implements DataService {
         Class<?> t = f.getType();
         Length length = f.getAnnotation(Length.class);
         if (length != null && length.value() <= 0) {
-            throw new IllegalArgumentException("@Length must be positive on " + f);
+            throw new DataMappingException("@Length must be positive on " + f);
         }
         int len = col != null && col.length() > 0 ? col.length() : length == null ? 0 : length.value();
-        if (len < 0) throw new IllegalArgumentException("Negative column length on " + f);
+        if (len < 0) throw new DataMappingException("Negative column length on " + f);
         if (t == Long.class || t == long.class) return "BIGINT";
         if (t == Integer.class || t == int.class) return "INT";
         if (t == Short.class || t == short.class) return "SMALLINT";
@@ -215,23 +234,23 @@ public final class DataServiceImpl implements DataService {
             if (len > 0) return "VARCHAR(" + len + ")";
             return "TEXT";
         }
-        throw new IllegalArgumentException("Unsupported database field type: " + f);
+        throw new DataMappingException("Unsupported database field type: " + f);
     }
 
     private static void validateEntity(Class<?> type, String table, List<Col> cols) {
         DatabaseDialect.quote(table);
-        if (cols.isEmpty()) throw new IllegalArgumentException("No persistent fields on " + type.getName());
+        if (cols.isEmpty()) throw new DataMappingException("No persistent fields on " + type.getName());
         long ids = cols.stream().filter(Col::id).count();
-        if (ids != 1) throw new IllegalArgumentException("Exactly one @Id field is required on " + type.getName());
+        if (ids != 1) throw new DataMappingException("Exactly one @Id field is required on " + type.getName());
         Set<String> names = new HashSet<>();
         for (Col col : cols) {
             DatabaseDialect.quote(col.name());
             if (!names.add(DatabaseDialect.normalizeIdentifier(col.name()))) {
-                throw new IllegalArgumentException("Duplicate mapped column: " + col.name());
+                throw new DataMappingException("Duplicate mapped column: " + col.name());
             }
             if (col.auto() && col.field().getType() != Long.class && col.field().getType() != long.class
                     && col.field().getType() != Integer.class && col.field().getType() != int.class) {
-                throw new IllegalArgumentException("Auto-generated @Id must be int or long on " + type.getName());
+                throw new DataMappingException("Auto-generated @Id must be int or long on " + type.getName());
             }
         }
     }
@@ -299,7 +318,7 @@ public final class DataServiceImpl implements DataService {
             } else {
                 for (String requested : index.columns()) {
                     String resolved = mapped.get(DatabaseDialect.normalizeIdentifier(requested));
-                    if (resolved == null) throw new IllegalArgumentException("Unknown index column: " + requested);
+                    if (resolved == null) throw new DataMappingException("Unknown index column: " + requested);
                     indexColumns.add(resolved);
                 }
             }
@@ -320,7 +339,7 @@ public final class DataServiceImpl implements DataService {
     private static String safeDefault(String expression) {
         if (expression.indexOf(';') >= 0 || expression.contains("--") || expression.contains("/*")
                 || expression.contains("*/") || expression.indexOf('\n') >= 0 || expression.indexOf('\r') >= 0) {
-            throw new IllegalArgumentException("Unsafe database default expression");
+            throw new DataMappingException("Unsafe database default expression");
         }
         return expression;
     }
@@ -397,7 +416,7 @@ public final class DataServiceImpl implements DataService {
         if (dataSource != null) {
             try {
                 dataSource.close();
-                audit.logger().file(LinMsg.k("linData.connectionPoolClosed"), "type", mode);
+                audit.logger().file(BuiltinLog.CONNECTION_POOL_CLOSED, "type", mode);
             } catch (RuntimeException exception) {
                 audit.problem().report(BuiltinProblemCatalog.DATA_RESOURCE_CLOSE_FAILED, exception,
                         "resource", "connection-pool");

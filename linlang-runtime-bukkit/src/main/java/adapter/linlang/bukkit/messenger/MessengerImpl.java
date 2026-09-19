@@ -91,7 +91,16 @@ public final class MessengerImpl implements LinMessenger, PrefixAware {
 
     @Override
     public void send(Object recipient, LinMessage message) {
-        TransportMessage normalized = normalizer.normalize(message, prefix());
+        final TransportMessage normalized;
+        try {
+            normalized = normalizer.normalize(message, prefix());
+        } catch (RuntimeException exception) {
+            audit.problem().report(BuiltinProblemCatalog.MESSAGE_DELIVERY_FAILED, exception,
+                    "recipient", recipient == null ? "null" : recipient.getClass().getName(),
+                    "operation", "normalize");
+            return;
+        }
+        boolean selectionFailed = false;
         for (MessageTransport transport : transports) {
             boolean supported;
             try {
@@ -101,6 +110,7 @@ public final class MessengerImpl implements LinMessenger, PrefixAware {
                         "transport", transportId(transport),
                         "recipient", recipient == null ? "null" : recipient.getClass().getName(),
                         "operation", "supports");
+                selectionFailed = true;
                 continue;
             }
             if (!supported) continue;
@@ -112,13 +122,17 @@ public final class MessengerImpl implements LinMessenger, PrefixAware {
                         "transport", transportId(transport),
                         "recipient", recipient == null ? "null" : recipient.getClass().getName(),
                         "operation", "send");
-                throw new IllegalStateException(BuiltinProblemCatalog.MESSAGE_DELIVERY_FAILED, exception);
+                return;
             }
         }
-        throw new IllegalArgumentException(
-                "No message transport supports recipient type: "
-                        + (recipient == null ? "null" : recipient.getClass().getName())
-        );
+        if (!selectionFailed) {
+            audit.problem().report(
+                    BuiltinProblemCatalog.MESSAGE_DELIVERY_FAILED,
+                    null,
+                    "recipient", recipient == null ? "null" : recipient.getClass().getName(),
+                    "operation", "select-transport"
+            );
+        }
     }
 
     @Override

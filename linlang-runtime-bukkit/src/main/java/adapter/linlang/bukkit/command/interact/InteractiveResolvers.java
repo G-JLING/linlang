@@ -3,6 +3,7 @@ package adapter.linlang.bukkit.command.interact;
 // io/linlang/lincommand/plugin/BukkitInteractiveResolvers.java
 
 import core.linlang.command.signal.Interact;
+import core.linlang.command.parser.CommandArgumentException;
 import api.linlang.command.LinCommand;
 import org.bukkit.entity.Player;
 
@@ -12,7 +13,7 @@ public final class InteractiveResolvers {
 
     private static Player requirePlayer(LinCommand.ParseCtx c){
         if (c.sender() instanceof Player p) return p;
-        throw new IllegalArgumentException("仅玩家可执行此参数");
+        throw new CommandArgumentException("仅玩家可执行此参数");
     }
 
     public static final class ClickBlock implements LinCommand.TypeResolver {

@@ -20,7 +20,7 @@ public final class ArgEngine {
             var m = new LinkedHashMap<String,String>(ts.meta);
             return r.parse(new Ctx(pctx.vars(), m, pctx.platform(), pctx.sender()), token);
         }
-        throw new IllegalArgumentException("error.type.no-resolver");
+        throw new CommandArgumentException("error.type.no-resolver");
     }
 
     public List<String> completeOne(LinCommand.ParseCtx pctx, Model.TypeSpec ts, String prefix) {
@@ -40,7 +40,7 @@ public final class ArgEngine {
                         String[] opts = c.meta().getOrDefault("body","").split("[|,]");
                         for (String o: opts) if (o.equalsIgnoreCase(t)) return o;
                         // Message key: error.enum.notfound
-                        throw new IllegalArgumentException("error.enum.notfound");
+                        throw new CommandArgumentException("error.enum.notfound");
                     }
                     public List<String> complete(LinCommand.ParseCtx c, String p){
                         var out=new ArrayList<String>();
@@ -52,15 +52,15 @@ public final class ArgEngine {
                 new LinCommand.TypeResolver(){
                     public boolean supports(String id){ return id.equals("int"); }
                     public Object parse(LinCommand.ParseCtx c, String t){
-                        int v = Integer.parseInt(t);
+                        int v = parseInteger(t);
                         String min=c.meta().get("min"), max=c.meta().get("max");
                         if (min!=null && v<Integer.parseInt(min)) {
                             // Message key: error.int.range
-                            throw new IllegalArgumentException("error.int.range");
+                            throw new CommandArgumentException("error.int.range");
                         }
                         if (max!=null && v>Integer.parseInt(max)) {
                             // Message key: error.int.range
-                            throw new IllegalArgumentException("error.int.range");
+                            throw new CommandArgumentException("error.int.range");
                         }
                         return v;
                     }
@@ -70,15 +70,15 @@ public final class ArgEngine {
                 new LinCommand.TypeResolver(){
                     public boolean supports(String id){ return id.equals("double"); }
                     public Object parse(LinCommand.ParseCtx c, String t){
-                        double v = Double.parseDouble(t);
+                        double v = parseDouble(t);
                         String min=c.meta().get("min"), max=c.meta().get("max");
                         if (min!=null && v<Double.parseDouble(min)) {
                             // Message key: error.double.range
-                            throw new IllegalArgumentException("error.double.range");
+                            throw new CommandArgumentException("error.double.range");
                         }
                         if (max!=null && v>Double.parseDouble(max)) {
                             // Message key: error.double.range
-                            throw new IllegalArgumentException("error.double.range");
+                            throw new CommandArgumentException("error.double.range");
                         }
                         return v;
                     }
@@ -91,7 +91,7 @@ public final class ArgEngine {
                     public Object parse(LinCommand.ParseCtx c, String t){
                         if ("true".equalsIgnoreCase(t)) return Boolean.TRUE;
                         if ("false".equalsIgnoreCase(t)) return Boolean.FALSE;
-                        throw new IllegalArgumentException("invalid bool: " + t);
+                        throw new CommandArgumentException("invalid bool: " + t);
                     }
                     public List<String> complete(LinCommand.ParseCtx c, String p){
                         String prefix = p == null ? "" : p.toLowerCase(Locale.ROOT);
@@ -103,11 +103,18 @@ public final class ArgEngine {
                 new LinCommand.TypeResolver(){
                     public boolean supports(String id){ return id.equalsIgnoreCase("uuid"); }
                     public Object parse(LinCommand.ParseCtx c, String t){
-                        UUID value = UUID.fromString(t);
-                        if (!value.toString().equalsIgnoreCase(t)) {
-                            throw new IllegalArgumentException("invalid uuid: " + t);
+                        try {
+                            UUID value = UUID.fromString(t);
+                            if (!value.toString().equalsIgnoreCase(t)) {
+                                throw new CommandArgumentException("invalid uuid: " + t);
+                            }
+                            return value;
+                        } catch (IllegalArgumentException exception) {
+                            if (exception instanceof CommandArgumentException argumentException) {
+                                throw argumentException;
+                            }
+                            throw new CommandArgumentException("invalid uuid: " + t, exception);
                         }
-                        return value;
                     }
                     public List<String> complete(LinCommand.ParseCtx c, String p){ return List.of(); }
                 },
@@ -119,10 +126,26 @@ public final class ArgEngine {
                         if (re==null || re.isEmpty()) return t;
                         if (t.matches(re)) return t;
                         // Message key: error.string.regex
-                        throw new IllegalArgumentException("error.string.regex");
+                        throw new CommandArgumentException("error.string.regex");
                     }
                     public List<String> complete(LinCommand.ParseCtx c, String p){ return List.of(); }
                 }
         );
+    }
+
+    private static int parseInteger(String token) {
+        try {
+            return Integer.parseInt(token);
+        } catch (NumberFormatException exception) {
+            throw new CommandArgumentException("invalid int: " + token, exception);
+        }
+    }
+
+    private static double parseDouble(String token) {
+        try {
+            return Double.parseDouble(token);
+        } catch (NumberFormatException exception) {
+            throw new CommandArgumentException("invalid double: " + token, exception);
+        }
     }
 }

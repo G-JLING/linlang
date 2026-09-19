@@ -11,6 +11,8 @@ import core.linlang.audit.config.AuditConfig;
 import core.linlang.audit.format.AuditRecordFormatter;
 import core.linlang.audit.format.AuditRecordFormatter.FormattedMessage;
 import core.linlang.audit.io.AuditFileWriter;
+import core.linlang.audit.log.BuiltinLogCatalog;
+import core.linlang.audit.log.BuiltinLogMessageKeys;
 import core.linlang.audit.problem.BuiltinProblemCatalog;
 import core.linlang.audit.problem.BuiltinProblemMessageKeys;
 
@@ -66,6 +68,7 @@ public abstract class AbstractAuditProvider implements LinLog.Provider, AutoClos
     private final Map<Object, Deque<String>> pendingStartup = new ConcurrentHashMap<>();
     private final AuditRecordFormatter formatter = new AuditRecordFormatter();
     private final AuditFileWriter fileWriter;
+    private final BuiltinLogCatalog logs = new BuiltinLogCatalog();
     private final BuiltinProblemCatalog problems = new BuiltinProblemCatalog();
     private final AtomicBoolean closed = new AtomicBoolean();
 
@@ -143,6 +146,15 @@ public abstract class AbstractAuditProvider implements LinLog.Provider, AutoClos
         problems.language(language);
     }
 
+    /**
+     * 安装内建日志目录使用的动态语言字段。
+     *
+     * @param language 已由运行时语言服务绑定的字段
+     */
+    public final void logLanguage(BuiltinLogMessageKeys language) {
+        logs.language(language);
+    }
+
     protected final Object normalizedOwner(Object ownerHint) {
         Object key = normalizeOwnerKey(ownerHint);
         return key == null ? runtimeOwnerKey : key;
@@ -174,7 +186,8 @@ public abstract class AbstractAuditProvider implements LinLog.Provider, AutoClos
         AuditConfig config = tenant.config;
         if (!shouldLog(config, record.level())) return;
 
-        FormattedMessage formatted = formatter.format(record.message(), record.arguments());
+        String message = logs.resolve(record.code(), record.message());
+        FormattedMessage formatted = formatter.format(message, record.arguments());
         boolean includeTenant = record.channel() == LogChannel.OP || !tenant.pluginLogger;
         String consoleLine = formatter.logText(
                 tenant.name,

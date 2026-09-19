@@ -3,6 +3,7 @@ package adapter.linlang.bukkit.command.resolvers;
 // linlang-adapter-plugin/src/main/java/io/linlang/lincommand/plugin/BukkitResolvers.java
 
 import api.linlang.command.LinCommand;
+import core.linlang.command.parser.CommandArgumentException;
 import org.bukkit.Bukkit;
 import org.bukkit.Location;
 import org.bukkit.Material;
@@ -21,7 +22,7 @@ public final class BukkitResolvers {
         public boolean supports(String id){ return id.equalsIgnoreCase("minecraft:item"); }
         public Object parse(LinCommand.ParseCtx c, String t){
             Material m = Material.matchMaterial(t);
-            if (!isItem(m)) throw new IllegalArgumentException("unknown item: "+t);
+            if (!isItem(m)) throw new CommandArgumentException("unknown item: " + t);
             return m;
         }
         public List<String> complete(LinCommand.ParseCtx c, String p){
@@ -45,7 +46,7 @@ public final class BukkitResolvers {
         public boolean supports(String id){ return id.equalsIgnoreCase("minecraft:player"); }
         public Object parse(LinCommand.ParseCtx c, String t){
             Player p = Bukkit.getPlayerExact(t);
-            if (p == null) throw new IllegalArgumentException("player offline: "+t);
+            if (p == null) throw new CommandArgumentException("player offline: " + t);
             return p;
         }
         public List<String> complete(LinCommand.ParseCtx c, String p){
@@ -73,7 +74,7 @@ public final class BukkitResolvers {
                 String name = player.getName();
                 if (name != null && name.equalsIgnoreCase(t)) return player;
             }
-            throw new IllegalArgumentException("unknown offline player: " + t);
+            throw new CommandArgumentException("unknown offline player: " + t);
         }
         public List<String> complete(LinCommand.ParseCtx c, String p){
             String prefix = p == null ? "" : p.toLowerCase(Locale.ROOT);
@@ -124,13 +125,13 @@ public final class BukkitResolvers {
         String[] parts = token == null ? new String[0] : token.split(",", -1);
         boolean explicitWorld = parts.length == 4 || parts.length == 6;
         if (!explicitWorld && parts.length != 3 && parts.length != 5) {
-            throw new IllegalArgumentException("invalid location: " + token);
+            throw new CommandArgumentException("invalid location: " + token);
         }
 
         int offset = explicitWorld ? 1 : 0;
         String worldName = explicitWorld ? parts[0].trim() : null;
         if (explicitWorld && worldName.isEmpty()) {
-            throw new IllegalArgumentException("location world is empty");
+            throw new CommandArgumentException("location world is empty");
         }
 
         double x = finiteDouble(parts[offset], "x");
@@ -147,7 +148,7 @@ public final class BukkitResolvers {
 
     private static World senderWorld(LinCommand.ParseCtx context) {
         if (context.sender() instanceof Player player) return player.getWorld();
-        throw new IllegalArgumentException("location requires a world for non-player senders");
+        throw new CommandArgumentException("location requires a world for non-player senders");
     }
 
     private static World findWorld(String name) {
@@ -156,19 +157,27 @@ public final class BukkitResolvers {
         for (World world : Bukkit.getWorlds()) {
             if (world.getName().equalsIgnoreCase(name)) return world;
         }
-        throw new IllegalArgumentException("unknown world: " + name);
+        throw new CommandArgumentException("unknown world: " + name);
     }
 
     private static double finiteDouble(String text, String name) {
-        double value = Double.parseDouble(text.trim());
-        if (!Double.isFinite(value)) throw new IllegalArgumentException("invalid " + name);
-        return value;
+        try {
+            double value = Double.parseDouble(text.trim());
+            if (!Double.isFinite(value)) throw new CommandArgumentException("invalid " + name);
+            return value;
+        } catch (NumberFormatException exception) {
+            throw new CommandArgumentException("invalid " + name, exception);
+        }
     }
 
     private static float finiteFloat(String text, String name) {
-        float value = Float.parseFloat(text.trim());
-        if (!Float.isFinite(value)) throw new IllegalArgumentException("invalid " + name);
-        return value;
+        try {
+            float value = Float.parseFloat(text.trim());
+            if (!Float.isFinite(value)) throw new CommandArgumentException("invalid " + name);
+            return value;
+        } catch (NumberFormatException exception) {
+            throw new CommandArgumentException("invalid " + name, exception);
+        }
     }
 
     private static UUID parseUuid(String text) {
