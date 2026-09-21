@@ -46,7 +46,7 @@ public enum BuiltinLog implements LogTemplate {
     ),
     CONFIG_MISSING_KEYS(
             "LIN-FILE-CONFIG-MISSING-KEYS",
-            "配置文件 {file} 缺失键 {count} 个，已生成默认键。详情见 {diff}",
+            "配置文件 {file} 缺失键 {count} 个。详情见 {diff}",
             keys -> keys.linFile.file.fileMissingKeys
     ),
     LANGUAGE_RELOADED(
@@ -66,7 +66,7 @@ public enum BuiltinLog implements LogTemplate {
     ),
     LANGUAGE_MISSING_KEYS(
             "LIN-FILE-LANGUAGE-MISSING-KEYS",
-            "语言文件 {file} 缺失键 {count} 个，已生成默认键。详情见 {diff}",
+            "语言文件 {file} 缺失键 {count} 个。详情见 {diff}",
             keys -> keys.linFile.lang.langMissingKeys
     ),
     DATABASE_INITIALIZED(

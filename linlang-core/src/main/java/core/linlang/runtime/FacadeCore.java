@@ -174,6 +174,11 @@ public final class FacadeCore<P> implements Linlang, Linlang.Configurable, Linla
         return events;
     }
 
+    void autoRepairMissingKeys(boolean enabled) {
+        config.autoRepairMissingKeys(enabled);
+        language.autoRepairMissingKeys(enabled);
+    }
+
     @Override
     public void close() {
         synchronized (lifecycleLock) {

@@ -43,6 +43,18 @@ restart-all:
   description: "Rebuild all registered plugin facades"
   result: " &7Rebuilt plugin facades: &f{success} &7/ &f{total}&7."
 
+file-repair:
+  description: "Repair missing keys in a registered plugin or the runtime"
+  plugin-label: "plugin or runtime name"
+  success: " &aRepaired &f{total} &amissing key(s) for &f{name}&a: config {config}, language {language}."
+  unchanged: " &7No missing keys need repair for &f{name}&7."
+  failed: " &cMissing-key repair failed. Problem code: &f{code}"
+
+file-repair-all:
+  description: "Repair missing keys for the runtime and all registered plugins"
+  success: " &aChecked &f{targets} &atarget(s) and repaired &f{total} &amissing key(s)."
+  partial: " &eChecked {targets} target(s) and repaired {total} missing key(s), but {failures} target(s) failed."
+
 problems:
   description: "List all built-in Linlang problem codes"
   title: " &7Built-in problem codes ({count}):"

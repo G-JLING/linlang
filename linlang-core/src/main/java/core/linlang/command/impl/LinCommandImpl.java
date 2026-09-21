@@ -872,8 +872,9 @@ public final class LinCommandImpl implements LinCommand, LocaleAware, PrefixAwar
         return new ArrayList<>(literals.isEmpty() ? arguments : literals);
     }
 
-    public void addResolver(LinCommand.TypeResolver r) {
-        this.resolvers.add(r);
+    @Override
+    public void addResolver(LinCommand.TypeResolver resolver) {
+        this.resolvers.add(Objects.requireNonNull(resolver, "resolver"));
     }
 
 

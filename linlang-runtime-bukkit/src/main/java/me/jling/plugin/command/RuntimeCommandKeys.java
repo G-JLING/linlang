@@ -21,6 +21,8 @@ public final class RuntimeCommandKeys {
     public Reload reload = new Reload();
     public ReloadAll reloadAll = new ReloadAll();
     public RestartAll restartAll = new RestartAll();
+    public FileRepair fileRepair = new FileRepair();
+    public FileRepairAll fileRepairAll = new FileRepairAll();
     public Problems problems = new Problems();
     public Problem problem = new Problem();
 
@@ -72,6 +74,26 @@ public final class RuntimeCommandKeys {
     public static final class RestartAll {
         public LangText description = LangText.of("Rebuild all registered plugin facades");
         public LangText result = LangText.of(" &7Rebuilt plugin facades: &f{success} &7/ &f{total}&7.");
+    }
+
+    public static final class FileRepair {
+        public LangText description = LangText.of("Repair missing keys in a registered plugin or the runtime");
+        public LangText pluginLabel = LangText.of("plugin or runtime name");
+        public LangText success = LangText.of(
+                " &aRepaired &f{total} &amissing key(s) for &f{name}&a: config {config}, language {language}."
+        );
+        public LangText unchanged = LangText.of(" &7No missing keys need repair for &f{name}&7.");
+        public LangText failed = LangText.of(" &cMissing-key repair failed. Problem code: &f{code}");
+    }
+
+    public static final class FileRepairAll {
+        public LangText description = LangText.of("Repair missing keys for the runtime and all registered plugins");
+        public LangText success = LangText.of(
+                " &aChecked &f{targets} &atarget(s) and repaired &f{total} &amissing key(s)."
+        );
+        public LangText partial = LangText.of(
+                " &eChecked {targets} target(s) and repaired {total} missing key(s), but {failures} target(s) failed."
+        );
     }
 
     public static final class Problems {

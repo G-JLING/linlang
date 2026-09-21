@@ -27,7 +27,6 @@ public class BukkitLoader extends JavaPlugin {
             // 初始化运行时装配器
             this.bootstrap = LinlangBukkitBootstrap.install(this);
             this.runtime = bootstrap.getRuntime();
-            this.bootstrap.reload();
 
             // 重复实例处理
             var sm = getServer().getServicesManager();

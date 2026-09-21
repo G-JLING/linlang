@@ -5,6 +5,7 @@ import api.linlang.audit.event.AuditEvent;
 import api.linlang.audit.event.AuditOutcome;
 import api.linlang.audit.problem.ProblemDefinition;
 import api.linlang.command.LinCommand;
+import api.linlang.file.LinFile;
 import api.linlang.file.file.LangText;
 import api.linlang.messenger.LinMessage;
 import api.linlang.messenger.LinMessenger;
@@ -20,6 +21,8 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
 import java.util.Set;
+import java.util.TreeMap;
+import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
 import static api.linlang.command.CommandOptions.options;
@@ -31,8 +34,14 @@ import static api.linlang.command.CommandOptions.options;
  */
 public final class CommandListener {
 
-    static final String RELOAD_SPEC = "linlang reload <bukkit:string{.+}>";
+    private static final String PLUGIN_TYPE = "linlang-plugin";
+    private static final String FILE_OWNER_TYPE = "linlang-file-owner";
+
+    static final String RESTART_SPEC = "linlang restart <bukkit:" + PLUGIN_TYPE + ">";
+    static final String RELOAD_SPEC = "linlang reload <bukkit:" + PLUGIN_TYPE + ">";
     static final String RELOAD_ALL_SPEC = "linlang reload-all";
+    static final String FILE_REPAIR_SPEC = "linlang files repair <bukkit:" + FILE_OWNER_TYPE + ">";
+    static final String FILE_REPAIR_ALL_SPEC = "linlang files repair-all";
 
     private static final LinCommand.Permission ADMIN =
             LinCommand.Permission.perms("linlangruntimebukkit.admin");
@@ -57,12 +66,16 @@ public final class CommandListener {
      */
     public void register(LinCommand registry) {
         Objects.requireNonNull(registry, "registry");
+        registry.addResolver(namedResolver(PLUGIN_TYPE, this::facadeNames));
+        registry.addResolver(namedResolver(FILE_OWNER_TYPE, this::fileOwnerNames));
         registerInfo(registry);
         registerPlugins(registry);
         registerRestart(registry);
         registerReload(registry);
         registerReloadAll(registry);
         registerRestartAll(registry);
+        registerFileRepair(registry);
+        registerFileRepairAll(registry);
         registerProblems(registry);
         registerProblem(registry);
     }
@@ -132,7 +145,7 @@ public final class CommandListener {
 
     private void registerRestart(LinCommand registry) {
         registry.register(
-                "linlang restart <bukkit:string{.+}>",
+                RESTART_SPEC,
                 ctx -> {
                     CommandSender sender = (CommandSender) ctx.sender();
                     BukkitFacadeImpl target = findFacade(sender, ctx.get("bukkit"));
@@ -303,6 +316,200 @@ public final class CommandListener {
                         .permission(ADMIN)
                         .desc(text.restartAll.description)
         );
+    }
+
+    private void registerFileRepair(LinCommand registry) {
+        registry.register(
+                FILE_REPAIR_SPEC,
+                ctx -> {
+                    CommandSender sender = (CommandSender) ctx.sender();
+                    FileTarget target = findFileTarget(sender, ctx.get("bukkit"));
+                    if (target == null) return;
+                    try {
+                        RepairResult result = repair(target);
+                        if (result.total() == 0) {
+                            send(sender, messenger, text.fileRepair.unchanged,
+                                    "name", target.name());
+                        } else {
+                            send(sender, messenger, text.fileRepair.success,
+                                    "name", target.name(),
+                                    "total", result.total(),
+                                    "config", result.config(),
+                                    "language", result.language());
+                        }
+                        recordRepair(sender, target, result, AuditOutcome.SUCCESS);
+                    } catch (RuntimeException exception) {
+                        reportRepairFailure(sender, target, exception);
+                        send(sender, messenger, text.fileRepair.failed,
+                                "code", BuiltinProblemCatalog.MISSING_KEY_REPAIR_FAILED);
+                    }
+                },
+                options()
+                        .permission(ADMIN)
+                        .desc(text.fileRepair.description)
+                        .label("bukkit", text.fileRepair.pluginLabel)
+        );
+    }
+
+    private void registerFileRepairAll(LinCommand registry) {
+        registry.register(
+                FILE_REPAIR_ALL_SPEC,
+                ctx -> {
+                    CommandSender sender = (CommandSender) ctx.sender();
+                    List<FileTarget> targets = fileTargets();
+                    int repaired = 0;
+                    int failures = 0;
+
+                    for (FileTarget target : targets) {
+                        try {
+                            RepairResult result = repair(target);
+                            repaired += result.total();
+                            recordRepair(sender, target, result, AuditOutcome.SUCCESS);
+                        } catch (RuntimeException exception) {
+                            failures++;
+                            reportRepairFailure(sender, target, exception);
+                        }
+                    }
+
+                    if (failures == 0) {
+                        send(sender, messenger, text.fileRepairAll.success,
+                                "targets", targets.size(),
+                                "total", repaired);
+                    } else {
+                        send(sender, messenger, text.fileRepairAll.partial,
+                                "targets", targets.size(),
+                                "total", repaired,
+                                "failures", failures);
+                    }
+                    runtime.audit().record(AuditEvent.builder("runtime.file.missing-key-repair-all")
+                            .actor(actor(sender))
+                            .outcome(failures == 0 ? AuditOutcome.SUCCESS : AuditOutcome.FAILURE)
+                            .field("targets", targets.size())
+                            .field("repaired", repaired)
+                            .field("failures", failures)
+                            .build());
+                },
+                options()
+                        .permission(ADMIN)
+                        .desc(text.fileRepairAll.description)
+        );
+    }
+
+    private List<String> facadeNames() {
+        return runtime.listFacades().stream()
+                .map(facade -> facade.owner().getName())
+                .sorted(String.CASE_INSENSITIVE_ORDER)
+                .toList();
+    }
+
+    private List<String> fileOwnerNames() {
+        return fileTargets().stream()
+                .map(FileTarget::name)
+                .toList();
+    }
+
+    private List<FileTarget> fileTargets() {
+        TreeMap<String, FileTarget> targets = new TreeMap<>(String.CASE_INSENSITIVE_ORDER);
+        targets.put(runtimePlugin.getName(),
+                new FileTarget(runtimePlugin.getName(), runtime.getBootstrap().linFile()));
+        for (BukkitFacadeImpl facade : runtime.listFacades()) {
+            targets.putIfAbsent(facade.owner().getName(),
+                    new FileTarget(facade.owner().getName(), facade.linFile()));
+        }
+        return List.copyOf(targets.values());
+    }
+
+    private FileTarget findFileTarget(CommandSender sender, String pluginName) {
+        if (pluginName == null || pluginName.isBlank()) {
+            send(sender, messenger, text.restart.emptyName);
+            return null;
+        }
+
+        List<FileTarget> targets = fileTargets();
+        FileTarget exact = targets.stream()
+                .filter(target -> target.name().equalsIgnoreCase(pluginName))
+                .findFirst()
+                .orElse(null);
+        if (exact != null) return exact;
+
+        String lower = pluginName.toLowerCase(Locale.ROOT);
+        List<FileTarget> candidates = targets.stream()
+                .filter(target -> target.name().toLowerCase(Locale.ROOT).contains(lower))
+                .toList();
+        if (candidates.size() == 1) return candidates.get(0);
+        if (candidates.size() > 1) {
+            send(sender, messenger, text.restart.ambiguous);
+            for (FileTarget candidate : candidates) {
+                sendLine(sender, messenger, text.restart.candidate, "name", candidate.name());
+            }
+            return null;
+        }
+
+        send(sender, messenger, text.restart.notFound, "name", pluginName);
+        return null;
+    }
+
+    private RepairResult repair(FileTarget target) {
+        int config = target.files().config().repairMissingKeys();
+        int language = target.files().language().repairMissingKeys();
+        return new RepairResult(config, language);
+    }
+
+    private void recordRepair(CommandSender sender, FileTarget target,
+                              RepairResult result, AuditOutcome outcome) {
+        runtime.audit().record(AuditEvent.builder("runtime.file.missing-key-repair")
+                .actor(actor(sender))
+                .resource(target.name())
+                .outcome(outcome)
+                .field("config", result.config())
+                .field("language", result.language())
+                .build());
+    }
+
+    private void reportRepairFailure(CommandSender sender, FileTarget target,
+                                     RuntimeException exception) {
+        runtime.audit().problem().report(
+                BuiltinProblemCatalog.MISSING_KEY_REPAIR_FAILED,
+                exception,
+                "owner", target.name(),
+                "actor", actor(sender)
+        );
+        recordRepair(sender, target, new RepairResult(0, 0), AuditOutcome.FAILURE);
+    }
+
+    static LinCommand.TypeResolver namedResolver(String typeId, Supplier<List<String>> names) {
+        Objects.requireNonNull(typeId, "typeId");
+        Objects.requireNonNull(names, "names");
+        return new LinCommand.TypeResolver() {
+            @Override
+            public boolean supports(String candidate) {
+                return typeId.equalsIgnoreCase(candidate);
+            }
+
+            @Override
+            public Object parse(LinCommand.ParseCtx context, String token) {
+                return token;
+            }
+
+            @Override
+            public List<String> complete(LinCommand.ParseCtx context, String prefix) {
+                String normalized = prefix == null ? "" : prefix.toLowerCase(Locale.ROOT);
+                return names.get().stream()
+                        .filter(Objects::nonNull)
+                        .filter(name -> name.toLowerCase(Locale.ROOT).startsWith(normalized))
+                        .sorted(String.CASE_INSENSITIVE_ORDER)
+                        .toList();
+            }
+        };
+    }
+
+    private record FileTarget(String name, LinFile files) {
+    }
+
+    private record RepairResult(int config, int language) {
+        private int total() {
+            return config + language;
+        }
     }
 
     private void registerProblems(LinCommand registry) {

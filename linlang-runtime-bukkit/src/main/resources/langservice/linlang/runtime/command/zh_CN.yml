@@ -43,6 +43,18 @@ restart-all:
   description: "重建所有已注册插件的琳琅服务"
   result: " &7已尝试对所有插件执行重建：成功 &f{success} &7/ &f{total}&7。"
 
+file-repair:
+  description: "修复指定插件或运行时托管文件中的缺失键"
+  plugin-label: "插件或运行时名称"
+  success: " &a已为 &f{name} &a修复 {total} 个缺失键：配置 {config} 个，语言 {language} 个。"
+  unchanged: " &f{name} &7没有需要修复的缺失键。"
+  failed: " &c缺失键修复失败，问题代码：&f{code}"
+
+file-repair-all:
+  description: "修复运行时和全部已注册插件托管文件中的缺失键"
+  success: " &a已检查 &f{targets} &a个目标，共修复 &f{total} &a个缺失键。"
+  partial: " &e已检查 {targets} 个目标并修复 {total} 个缺失键，但有 {failures} 个目标失败。"
+
 problems:
   description: "列出全部琳琅内建问题代码"
   title: " &7内建问题代码（{count}）："

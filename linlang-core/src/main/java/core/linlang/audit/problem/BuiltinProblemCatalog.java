@@ -62,6 +62,7 @@ public final class BuiltinProblemCatalog {
     public static final String LANGUAGE_LOCALE_NORMALIZE_FAILED = "LIN-FILE-LANGUAGE-LOCALE-NORMALIZE-FAIL";
     public static final String LANGUAGE_RESOURCE_COPY_FAILED = "LIN-FILE-LANGUAGE-RESOURCE-COPY-FAIL";
     public static final String DIFF_WRITE_FAILED = "LIN-FILE-DIFF-WRITE-FAIL";
+    public static final String MISSING_KEY_REPAIR_FAILED = "LIN-FILE-MISSING-KEY-REPAIR-FAIL";
     public static final String FILE_MAPPING_FAILED = "LIN-FILE-OBJECT-MAPPING-FAIL";
     public static final String WATCH_CALLBACK_FAILED = "LIN-FILE-WATCH-CALLBACK-FAIL";
     public static final String WATCH_START_FAILED = "LIN-FILE-WATCH-START-FAIL";
@@ -281,6 +282,9 @@ public final class BuiltinProblemCatalog {
         add(values, DIFF_WRITE_FAILED, "File",
                 "缺失字段差异文件无法生成。",
                 "请检查目标目录权限和配置或语言文档是否能够序列化。");
+        add(values, MISSING_KEY_REPAIR_FAILED, "File",
+                "缺失键修复未能完成。",
+                "请检查差异文件、目标文件权限与字段默认值，修正后重新执行修复命令。");
         add(values, FILE_MAPPING_FAILED, "File",
                 "文件文档与 Java 对象之间的字段映射失败。",
                 "请检查字段可访问性、嵌套对象无参构造方法和集合字段类型。");

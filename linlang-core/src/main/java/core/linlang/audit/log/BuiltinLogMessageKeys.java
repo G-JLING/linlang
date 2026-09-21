@@ -31,7 +31,7 @@ public final class BuiltinLogMessageKeys {
 
         public static final class File {
             public String fileMissingKeys =
-                    "配置文件 {file} 缺失键 {count} 个，已生成默认键。详情见 {diff}";
+                    "配置文件 {file} 缺失键 {count} 个。详情见 {diff}";
             public String fileGeneratedDifferent =
                     "已生成差异告知文件：{diff}";
             public String fileReloaded =
@@ -42,7 +42,7 @@ public final class BuiltinLogMessageKeys {
 
         public static final class Lang {
             public String langMissingKeys =
-                    "语言文件 {file} 缺失键 {count} 个，已生成默认键。详情见 {diff}";
+                    "语言文件 {file} 缺失键 {count} 个。详情见 {diff}";
             public String langGeneratedDifferent =
                     "已生成差异告知文件：{diff}";
             public String langSaved =

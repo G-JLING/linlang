@@ -95,6 +95,7 @@ public final class LangServiceImpl implements LangService, LocaleAware {
     private final Map<String, Class<?>> aliases = new ConcurrentHashMap<>();
     private final Set<Class<?>> failedPacks = new HashSet<>();
     private boolean updating;
+    private volatile boolean autoRepairMissingKeys;
     private Runnable threadCheck = () -> {};
 
     /**
@@ -173,6 +174,13 @@ public final class LangServiceImpl implements LangService, LocaleAware {
     public LangServiceImpl(PathResolver paths, Object owner) {
         this.paths = paths;
         this.audit = LinLog.forOwner(owner);
+    }
+
+    /**
+     * 设置后续绑定与重载是否自动修复已有文件中的缺失键。
+     */
+    public void autoRepairMissingKeys(boolean enabled) {
+        this.autoRepairMissingKeys = enabled;
     }
 
     // ------------------------------------------------------------
@@ -492,6 +500,40 @@ public final class LangServiceImpl implements LangService, LocaleAware {
     }
 
     @Override
+    public synchronized int repairMissingKeys() {
+        threadCheck.run();
+        int repaired = 0;
+        for (BoundMeta meta : new ArrayList<>(bound.values())) {
+            if (meta == null) continue;
+            repaired += repairMissingKeys(meta);
+        }
+        if (repaired > 0) reload();
+        return repaired;
+    }
+
+    private int repairMissingKeys(BoundMeta meta) {
+        if (!meta.emit || meta.keysClass.isAnnotationPresent(NoEmit.class)) return 0;
+        PackSpec spec = meta.spec();
+        int repaired = 0;
+        for (String locale : scanLocalesOnDisk(spec)) {
+            java.nio.file.Path file = diskFile(spec.filePath, locale, spec.fmt, false);
+            if (!IOs.exists(file)) continue;
+            String source = IOs.readString(file);
+            Map<String, Object> document = ConfigDiagnostics.load(source, spec.fmt);
+            Set<String> missing = new LinkedHashSet<>();
+            Map<String, Object> resource = readBuiltinResource(
+                    meta.keysClass.getClassLoader(), spec.filePath, locale, spec.fmt
+            );
+            if (resource != null) mergeDefaultsCollect(resource, document, "", missing);
+            mergeDefaultsCollect(meta.defaults, document, "", missing);
+            if (missing.isEmpty()) continue;
+            persistMissingKeys(file, spec.fmt, document, missing, source);
+            repaired += missing.size();
+        }
+        return repaired;
+    }
+
+    @Override
     public <T> void ensure(Class<T> keysClass) {
         BoundMeta bm = bound.get(keysClass);
         PackSpec spec = bm != null ? bm.spec() : packSpec(keysClass);
@@ -523,10 +565,6 @@ public final class LangServiceImpl implements LangService, LocaleAware {
                             keysClass.getClassLoader(), spec.filePath, loc, spec.fmt, f, doc
                     );
                     if (!wrote) {
-                        persist(f, spec.fmt, doc);
-                    }
-                } else {
-                    if (spec.fmt == FileType.JSON) {
                         persist(f, spec.fmt, doc);
                     }
                 }
@@ -752,9 +790,9 @@ public final class LangServiceImpl implements LangService, LocaleAware {
                 } else {
                     if (!missing.isEmpty()) {
                         writeDiff(f, spec.fmt, doc, missing);
-                    }
-                    if (spec.fmt == FileType.JSON) {
-                        persist(f, spec.fmt, doc);
+                        if (autoRepairMissingKeys) {
+                            persistMissingKeys(f, spec.fmt, doc, missing);
+                        }
                     }
                 }
                 ensureDefaultLocaleFile(resourceLoader, spec, meta.defaults);
@@ -1007,6 +1045,34 @@ public final class LangServiceImpl implements LangService, LocaleAware {
         audit.logger().debug(BuiltinLog.LANGUAGE_SAVED, "lang", file);
     }
 
+    private void persistMissingKeys(java.nio.file.Path file, FileType fmt,
+                                    Map<String, Object> doc, Set<String> missing) {
+        persistMissingKeys(file, fmt, doc, missing, null);
+    }
+
+    private void persistMissingKeys(java.nio.file.Path file, FileType fmt,
+                                    Map<String, Object> doc, Set<String> missing,
+                                    String expectedSource) {
+        String current = IOs.exists(file) ? IOs.readString(file) : null;
+        if (expectedSource != null && !Objects.equals(expectedSource, current)) {
+            throw new IllegalStateException("Language file changed while repairing: " + file);
+        }
+        String output;
+        if (fmt == FileType.JSON) {
+            output = JsonCodec.dump(doc);
+        } else {
+            Map<String, List<String>> comments = current == null
+                    ? new LinkedHashMap<>()
+                    : YamlCodec.extractComments(ConfigDiagnostics.clear(current));
+            for (String path : missing) {
+                comments.put(path, List.of("[Linlang] 缺失键修复自动补入"));
+            }
+            output = YamlCodec.dumpWithComments(doc, comments);
+        }
+        ConfigDiagnostics.writeAtomic(file, output);
+        audit.logger().debug(BuiltinLog.LANGUAGE_SAVED, "lang", file);
+    }
+
     private boolean writeBuiltinResourceToDisk(ClassLoader resourceLoader,
                                                String filePath,
                                                String locale,
@@ -1199,7 +1265,7 @@ public final class LangServiceImpl implements LangService, LocaleAware {
     }
 
     // ------------------------------------------------------------
-    // Diff writer (keep old behavior)
+    // Diff writer
     // ------------------------------------------------------------
 
     private void writeDiff(java.nio.file.Path f, FileType fmt, Map<String, Object> fullDoc, Set<String> missing) {
@@ -1207,18 +1273,11 @@ public final class LangServiceImpl implements LangService, LocaleAware {
         try {
             java.nio.file.Path diff = f.getParent().resolve(stripExt(f.getFileName().toString()) + "-diff" + extOf(fmt));
             if (fmt == FileType.YAML) {
-                Map<String, Object> missingVals = new LinkedHashMap<>();
+                Map<String, List<String>> comments = new LinkedHashMap<>();
                 for (String path : missing) {
-                    Object v = readPath(fullDoc, path);
-                    missingVals.put(path, v);
+                    comments.put(path, List.of("[Linlang] MISSING_KEY"));
                 }
-                Map<String, Object> pruned = deepCopyMap(fullDoc);
-                for (String path : missing) {
-                    deletePath(pruned, path);
-                }
-                String base = YamlCodec.dump(pruned);
-                String marked = insertYamlMissingMarkers(base, missingVals);
-                IOs.writeString(diff, marked);
+                IOs.writeString(diff, YamlCodec.dumpWithComments(fullDoc, comments));
                 audit.logger().info(BuiltinLog.LANGUAGE_DIFF_GENERATED, "diff", diff);
             } else {
                 Map<String, Object> wrapper = new LinkedHashMap<>();
@@ -1240,31 +1299,6 @@ public final class LangServiceImpl implements LangService, LocaleAware {
     private static String stripExt(String name) {
         int i = name.lastIndexOf('.');
         return i > 0 ? name.substring(0, i) : name;
-    }
-
-    @SuppressWarnings("unchecked")
-    private static Object readPath(Map<String, Object> root, String path) {
-        String[] ps = path.split("\\.");
-        Map<String, Object> curr = root;
-        for (int i = 0; i < ps.length - 1; i++) {
-            Object n = curr.get(ps[i]);
-            if (!(n instanceof Map)) return null;
-            curr = (Map<String, Object>) n;
-        }
-        return curr.get(ps[ps.length - 1]);
-    }
-
-    @SuppressWarnings("unchecked")
-    private static Map<String, Object> deepCopyMap(Map<String, Object> src) {
-        return mutableDeepCopy(src);
-    }
-
-    private static Map<String, Object> mutableDeepCopy(Map<String, Object> src) {
-        Map<String, Object> out = new LinkedHashMap<>();
-        for (var e : src.entrySet()) {
-            out.put(e.getKey(), mutableDeepCopyValue(e.getValue()));
-        }
-        return out;
     }
 
     private static Object mutableDeepCopyValue(Object value) {
@@ -1307,125 +1341,4 @@ public final class LangServiceImpl implements LangService, LocaleAware {
         return value;
     }
 
-    @SuppressWarnings("unchecked")
-    private static void deletePath(Map<String, Object> root, String dottedPath) {
-        if (dottedPath == null || dottedPath.isBlank()) return;
-        String[] ps = dottedPath.split("\\.");
-        Map<String, Object> curr = root;
-        for (int i = 0; i < ps.length - 1; i++) {
-            Object n = curr.get(ps[i]);
-            if (!(n instanceof Map)) return;
-            curr = (Map<String, Object>) n;
-        }
-        curr.remove(ps[ps.length - 1]);
-    }
-
-    private static String insertYamlMissingMarkers(String yaml, Map<String, Object> missingWithValues) {
-        List<String> lines = new ArrayList<>(Arrays.asList(yaml.split("\n", -1)));
-        List<String> paths = new ArrayList<>(missingWithValues.keySet());
-        Collections.sort(paths);
-
-        for (String path : paths) {
-            String[] segs = path.split("\\.");
-            if (segs.length == 0) continue;
-            String last = segs[segs.length - 1];
-            int parentDepth = Math.max(0, segs.length - 1);
-            int parentIndent = parentDepth * 2;
-            int childIndent = parentIndent + 2;
-
-            if (findKeyAtIndent(lines, last, childIndent) >= 0) continue;
-
-            int parentStart = ensureParentBlock(lines, segs, segs.length - 1);
-            int insertAt = findBlockEnd(lines, parentStart);
-
-            String ci = " ".repeat(childIndent);
-            String rendered = renderYamlScalar(missingWithValues.get(path));
-            lines.add(insertAt, ci + "# [Linlang] MISSING_KEY");
-            lines.add(insertAt + 1, ci + last + ": " + rendered);
-        }
-        return String.join("\n", lines);
-    }
-
-    private static String renderYamlScalar(Object v) {
-        if (v == null) return "";
-        if (v instanceof Number || v instanceof Boolean) return String.valueOf(v);
-        if (v instanceof CharSequence) {
-            String s = v.toString();
-            s = s.replace("'", "''");
-            return "'" + s + "'";
-        }
-        return "";
-    }
-
-    private static int ensureParentBlock(List<String> lines, String[] segs, int depthExclusive) {
-        if (depthExclusive <= 0) {
-            return ensureTopLevel(lines, segs[0], 0);
-        }
-
-        int startIdx = -1;
-        int levelIndent;
-        for (int i = 0; i < depthExclusive; i++) {
-            String key = segs[i];
-            levelIndent = i * 2;
-            int found = findKeyAtIndent(lines, key, levelIndent);
-            if (found < 0) {
-                int anchor = (startIdx >= 0) ? findBlockEnd(lines, startIdx) : findDocumentEnd(lines);
-                String ind = " ".repeat(levelIndent);
-                lines.add(anchor, ind + key + ":");
-                startIdx = anchor;
-            } else {
-                startIdx = found;
-            }
-        }
-        return startIdx;
-    }
-
-    private static int findKeyAtIndent(List<String> lines, String key, int indent) {
-        String plain = " ".repeat(indent) + key + ":";
-        String squoted = " ".repeat(indent) + "'" + key + "'" + ":";
-        String dquoted = " ".repeat(indent) + "\"" + key + "\":";
-        for (int i = 0; i < lines.size(); i++) {
-            String line = lines.get(i);
-            if (line.startsWith(plain) || line.startsWith(squoted) || line.startsWith(dquoted)) {
-                return i;
-            }
-        }
-        return -1;
-    }
-
-    private static int findBlockEnd(List<String> lines, int startIdx) {
-        if (startIdx < 0 || startIdx >= lines.size()) return lines.size();
-        int parentIndent = leadingSpaces(lines.get(startIdx));
-        for (int i = startIdx + 1; i < lines.size(); i++) {
-            String ln = lines.get(i);
-            String t = ln.stripLeading();
-            if (t.isEmpty() || t.startsWith("#")) continue;
-            int ind = leadingSpaces(ln);
-            if (ind <= parentIndent && t.endsWith(":")) {
-                return i;
-            }
-        }
-        return lines.size();
-    }
-
-    private static int findDocumentEnd(List<String> lines) {
-        int i = 0;
-        while (i < lines.size() && (lines.get(i).isBlank() || lines.get(i).trim().startsWith("#"))) i++;
-        return lines.size();
-    }
-
-    private static int leadingSpaces(String s) {
-        int i = 0;
-        while (i < s.length() && s.charAt(i) == ' ') i++;
-        return i;
-    }
-
-    private static int ensureTopLevel(List<String> lines, String key, int indent) {
-        int found = findKeyAtIndent(lines, key, indent);
-        if (found >= 0) return found;
-        int anchor = findDocumentEnd(lines);
-        String ind = " ".repeat(indent);
-        lines.add(anchor, ind + key + ":");
-        return anchor;
-    }
 }

@@ -6,13 +6,13 @@ lin-runtime:
 
 lin-file:
   file:
-    file-missing-keys: "{file} 缺失键 {count} 个，已生成默认键。详情见 {diff}"
+    file-missing-keys: "{file} 缺失键 {count} 个。详情见 {diff}"
     file-generated-different: "已生成差异告知文件：{diff}"
     file-saved: "已保存配置：{file}"
     file-reloaded: "配置文件重新加载成功"
 
   lang:
-    lang-missing-keys: "{file} 缺失键 {count} 个，已生成默认键。详情见 {diff}"
+    lang-missing-keys: "{file} 缺失键 {count} 个。详情见 {diff}"
     lang-generated-different: "已生成差异告知文件：{diff}"
     lang-saved: "已保存语言：{file}"
     lang-reloaded: "语言文件重新加载成功"

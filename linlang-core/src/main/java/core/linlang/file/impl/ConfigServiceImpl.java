@@ -41,6 +41,9 @@ public final class ConfigServiceImpl implements ConfigService {
     private final ConfigTextResolver textResolver;
     private final Map<Class<?>, ConfigLoadException> failedConfigs = new LinkedHashMap<>();
     private Attempt attempt;
+    private volatile boolean autoRepairMissingKeys;
+    private boolean repairingMissingKeys;
+    private int repairedMissingKeys;
 
     private record Attempt(Path file, FileType format, String raw) {}
     private final java.util.Map<Class<?>, Object> liveConfigs = new java.util.LinkedHashMap<>();
@@ -66,6 +69,13 @@ public final class ConfigServiceImpl implements ConfigService {
     public void language(LangService service) {
         this.language = service;
         textResolver.reset();
+    }
+
+    /**
+     * 设置后续绑定与重载是否自动修复已有文件中的缺失键。
+     */
+    public void autoRepairMissingKeys(boolean enabled) {
+        this.autoRepairMissingKeys = enabled;
     }
 
     @Override
@@ -134,6 +144,7 @@ public final class ConfigServiceImpl implements ConfigService {
         Map<String, Object> doc = loadOrInit(file, meta, defaults);
         if (!exists) writeCurrentVersion(type, doc);
         applyMigrations(type, doc);
+        Map<String, Object> diskDocument = deepCopyMap(doc);
 
         java.util.Set<String> missing = new java.util.LinkedHashSet<>();
         if (exists) mergeDefaultsCollect(defaults, doc, "", missing);
@@ -142,12 +153,19 @@ public final class ConfigServiceImpl implements ConfigService {
 
         boolean annotatedNoEmit = type.isAnnotationPresent(NoEmit.class);
         boolean shouldEmit = emit && !annotatedNoEmit;
+        boolean repair = shouldEmit && exists && !missing.isEmpty()
+                && (autoRepairMissingKeys || repairingMissingKeys);
 
         Map<String, List<String>> comments = TreeMapper.extractComments(type);
         prepared.commit(() -> {
-            if (shouldEmit) persist(file, meta.fmt(), doc, comments);
+            if (!shouldEmit) return;
+            if (!missing.isEmpty() && !repairingMissingKeys) {
+                writeDiff(file, meta.fmt(), doc, missing);
+            }
+            persist(file, meta.fmt(), repair ? doc : diskDocument, comments,
+                    repair ? missing : Set.of());
+            if (repair && repairingMissingKeys) repairedMissingKeys += missing.size();
         });
-        if (shouldEmit && !missing.isEmpty()) writeDiff(file, meta.fmt(), doc, missing);
         if (shouldEmit) ConfigDiagnostics.clearSidecar(file);
 
         // 记录实例与落盘偏好
@@ -251,6 +269,21 @@ public final class ConfigServiceImpl implements ConfigService {
         }
     }
 
+    @Override
+    public synchronized int repairMissingKeys() {
+        boolean previous = repairingMissingKeys;
+        int previousCount = repairedMissingKeys;
+        repairingMissingKeys = true;
+        repairedMissingKeys = 0;
+        try {
+            reload();
+            return repairedMissingKeys;
+        } finally {
+            repairingMissingKeys = previous;
+            if (previous) repairedMissingKeys += previousCount;
+        }
+    }
+
     public synchronized void reload() {
         Map<Path, List<ConfigIssue>> failures = new LinkedHashMap<>();
         textResolver.reset();
@@ -305,6 +338,7 @@ public final class ConfigServiceImpl implements ConfigService {
         // 迁移
         if (!exists) writeCurrentVersion(type, doc);
         applyMigrations(type, doc);
+        Map<String, Object> diskDocument = deepCopyMap(doc);
 
         // 合并默认值并收集缺失键，保证删除字段在 reload 后回到绑定时默认值
         java.util.Set<String> missing = new java.util.LinkedHashSet<>();
@@ -316,13 +350,20 @@ public final class ConfigServiceImpl implements ConfigService {
             Boolean flag = emitFlags.get(type);
             shouldEmit = (flag != null ? flag : true) && !annotatedNoEmit;
         }
+        boolean repair = shouldEmit && exists && !missing.isEmpty()
+                && (autoRepairMissingKeys || repairingMissingKeys);
 
         ConfigMapper.Prepared prepared = prepare(target, doc);
         Map<String, List<String>> comments = TreeMapper.extractComments(type);
         prepared.commit(() -> {
-            if (shouldEmit) persist(file, meta.fmt(), doc, comments);
+            if (!shouldEmit) return;
+            if (!missing.isEmpty() && !repairingMissingKeys) {
+                writeDiff(file, meta.fmt(), doc, missing);
+            }
+            persist(file, meta.fmt(), repair ? doc : diskDocument, comments,
+                    repair ? missing : Set.of());
+            if (repair && repairingMissingKeys) repairedMissingKeys += missing.size();
         });
-        if (shouldEmit && !missing.isEmpty()) writeDiff(file, meta.fmt(), doc, missing);
         if (shouldEmit) ConfigDiagnostics.clearSidecar(file);
 
         synchronized (emitFlags) {
@@ -348,7 +389,14 @@ public final class ConfigServiceImpl implements ConfigService {
         attempt = new Attempt(file, meta.fmt(), raw);
         return ConfigDiagnostics.load(raw, meta.fmt());
     }
-    private void persist(Path file, FileType fmt, Map<String,Object> doc, Map<String,java.util.List<String>> comments) {
+    private void persist(Path file, FileType fmt, Map<String,Object> doc,
+                         Map<String,java.util.List<String>> comments) {
+        persist(file, fmt, doc, comments, Set.of());
+    }
+
+    private void persist(Path file, FileType fmt, Map<String,Object> doc,
+                         Map<String,java.util.List<String>> comments,
+                         Set<String> repairedKeys) {
         try {
             String raw = IOs.exists(file) ? IOs.readString(file) : null;
             if (attempt != null && attempt.file().equals(file) && !Objects.equals(attempt.raw(), raw)) {
@@ -361,9 +409,18 @@ public final class ConfigServiceImpl implements ConfigService {
                 else {
                     Map<String, List<String>> merged = new LinkedHashMap<>(comments);
                     merged.putAll(YamlCodec.extractComments(clean));
+                    for (String path : repairedKeys) {
+                        merged.put(path, List.of("[Linlang] 缺失键修复自动补入"));
+                    }
                     out = YamlCodec.dumpWithComments(doc, merged);
                 }
-            } else out = fmt == FileType.YAML ? YamlCodec.dumpWithComments(doc, comments) : JsonCodec.dump(doc);
+            } else {
+                Map<String, List<String>> marked = new LinkedHashMap<>(comments);
+                for (String path : repairedKeys) {
+                    marked.put(path, List.of("[Linlang] 缺失键修复自动补入"));
+                }
+                out = fmt == FileType.YAML ? YamlCodec.dumpWithComments(doc, marked) : JsonCodec.dump(doc);
+            }
             ConfigDiagnostics.writeAtomic(file, out);
             audit.logger().debug(BuiltinLog.CONFIG_SAVED, "file", file);
         } catch (Exception e) {
@@ -476,34 +533,6 @@ public final class ConfigServiceImpl implements ConfigService {
         return new ConfigLoadException(Map.of(file, issues));
     }
 
-    // 简易路径读写
-    @SuppressWarnings("unchecked")
-    private static Object readPath(Map<String, Object> root, String path) {
-        String[] ps = path.split("\\.");
-        Map<String, Object> curr = root;
-        for (int i = 0; i < ps.length - 1; i++) {
-            Object n = curr.get(ps[i]);
-            if (!(n instanceof Map)) return null;
-            curr = (Map<String, Object>) n;
-        }
-        return curr.get(ps[ps.length - 1]);
-    }
-
-    @SuppressWarnings("unchecked")
-    private static void writePath(Map<String, Object> root, String path, Object val) {
-        String[] ps = path.split("\\.");
-        Map<String, Object> curr = root;
-        for (int i = 0; i < ps.length - 1; i++) {
-            Object n = curr.get(ps[i]);
-            if (!(n instanceof Map)) {
-                n = new LinkedHashMap<String, Object>();
-                curr.put(ps[i], n);
-            }
-            curr = (Map<String, Object>) n;
-        }
-        curr.put(ps[ps.length - 1], val);
-    }
-
     // 极简类型转换
     private static Object convert(Object val, Class<?> target) {
         if (val == null || target.isInstance(val)) return val;
@@ -540,20 +569,11 @@ public final class ConfigServiceImpl implements ConfigService {
         try {
             Path diff = f.getParent().resolve(stripExt(f.getFileName().toString()) + "-diff" + extOf(fmt));
             if (fmt == FileType.YAML) {
-                // 计算每个缺失路径的默认值
-                Map<String, Object> missingVals = new LinkedHashMap<>();
+                Map<String, List<String>> comments = new LinkedHashMap<>();
                 for (String path : missing) {
-                    Object v = readPath(fullDoc, path);
-                    missingVals.put(path, v);
+                    comments.put(path, List.of("[Linlang] MISSING_KEY"));
                 }
-                // 先删掉缺失键，避免重复，再插回去并附注释与默认值
-                Map<String, Object> pruned = deepCopyMap(fullDoc);
-                for (String path : missing) {
-                    deletePath(pruned, path);
-                }
-                String base = YamlCodec.dump(pruned);
-                String marked = insertYamlMissingMarkers(base, missingVals);
-                IOs.writeString(diff, marked);
+                IOs.writeString(diff, YamlCodec.dumpWithComments(fullDoc, comments));
                 audit.logger().info(BuiltinLog.CONFIG_DIFF_GENERATED, "diff", diff);
             } else {
                 Map<String, Object> wrapper = new LinkedHashMap<>();
@@ -572,25 +592,6 @@ public final class ConfigServiceImpl implements ConfigService {
         }
     }
 
-    private static String insertYamlMissingMarkers(String yaml, java.util.Set<String> missing) {
-        java.util.List<String> lines = new java.util.ArrayList<>(java.util.Arrays.asList(yaml.split("\n", -1)));
-        java.util.List<String> paths = new java.util.ArrayList<>(missing);
-        java.util.Collections.sort(paths);
-        for (String path : paths) {
-            String[] ps = path.split("\\.");
-            String last = ps[ps.length - 1];
-            int indent = (ps.length - 1) * 2;
-            String prefix = " ".repeat(indent) + last + ":";
-            for (int i = 0; i < lines.size(); i++) {
-                if (lines.get(i).startsWith(prefix)) {
-                    lines.add(i, " ".repeat(indent) + "# + missing");
-                    break;
-                }
-            }
-        }
-        return String.join("\n", lines);
-    }
-
     private static String stripExt(String name) {
         int i = name.lastIndexOf('.');
         return i > 0 ? name.substring(0, i) : name;
@@ -598,113 +599,6 @@ public final class ConfigServiceImpl implements ConfigService {
 
     private static String extOf(FileType fmt) {
         return fmt == FileType.YAML ? ".yml" : ".json";
-    }
-
-    private static String insertYamlMissingMarkers(String yaml, Map<String, Object> missingWithValues) {
-        List<String> lines = new ArrayList<>(Arrays.asList(yaml.split("\n", -1)));
-        List<String> paths = new ArrayList<>(missingWithValues.keySet());
-        Collections.sort(paths);
-
-        for (String path : paths) {
-            String[] segs = path.split("\\.");
-            if (segs.length == 0) continue;
-            String last = segs[segs.length - 1];
-            int parentDepth = Math.max(0, segs.length - 1);
-            int parentIndent = parentDepth * 2;
-            int childIndent  = parentIndent + 2;
-
-            if (findKeyAtIndent(lines, last, childIndent) >= 0) continue;
-
-            int parentStart = ensureParentBlock(lines, segs, segs.length - 1);
-            int insertAt = findBlockEnd(lines, parentStart);
-
-            String ci = " ".repeat(childIndent);
-            String rendered = renderYamlScalar(missingWithValues.get(path));
-            lines.add(insertAt, ci + "# [Linlang] MISSING_KEY");
-            lines.add(insertAt + 1, ci + last + ": " + rendered);
-        }
-        return String.join("\n", lines);
-    }
-
-    private static String renderYamlScalar(Object v) {
-        if (v == null) return "";
-        if (v instanceof Number || v instanceof Boolean) return String.valueOf(v);
-        if (v instanceof CharSequence) {
-            String s = v.toString().replace("'", "''");
-            return "'" + s + "'";
-        }
-        return "";
-    }
-
-    private static int ensureParentBlock(java.util.List<String> lines, String[] segs, int depthExclusive) {
-        if (depthExclusive <= 0) {
-            return ensureTopLevel(lines, segs[0], 0);
-        }
-        int startIdx = -1;
-        int levelIndent = 0;
-        for (int i = 0; i < depthExclusive; i++) {
-            String key = segs[i];
-            levelIndent = i * 2;
-            int found = findKeyAtIndent(lines, key, levelIndent);
-            if (found < 0) {
-                int anchor = (startIdx >= 0) ? findBlockEnd(lines, startIdx) : findDocumentEnd(lines);
-                String ind = " ".repeat(levelIndent);
-                lines.add(anchor, ind + key + ":");
-                startIdx = anchor;
-            } else {
-                startIdx = found;
-            }
-        }
-        return startIdx;
-    }
-
-    private static int findKeyAtIndent(List<String> lines, String key, int indent) {
-        String plain   = " ".repeat(indent) + key + ":";
-        String squoted = " ".repeat(indent) + "'" + key + "'" + ":";
-        String dquoted = " ".repeat(indent) + "\"" + key + "\":";
-        for (int i = 0; i < lines.size(); i++) {
-            String line = lines.get(i);
-            if (line.startsWith(plain) || line.startsWith(squoted) || line.startsWith(dquoted)) {
-                return i;
-            }
-        }
-        return -1;
-    }
-
-    private static int findBlockEnd(List<String> lines, int startIdx) {
-        if (startIdx < 0 || startIdx >= lines.size()) return lines.size();
-        int parentIndent = leadingSpaces(lines.get(startIdx));
-        for (int i = startIdx + 1; i < lines.size(); i++) {
-            String ln = lines.get(i);
-            String t = ln.stripLeading();
-            if (t.isEmpty() || t.startsWith("#")) continue;
-            int ind = leadingSpaces(ln);
-            if (ind <= parentIndent && t.endsWith(":")) {
-                return i;
-            }
-        }
-        return lines.size();
-    }
-
-    private static int findDocumentEnd(java.util.List<String> lines) {
-        int i = 0;
-        while (i < lines.size() && (lines.get(i).isBlank() || lines.get(i).trim().startsWith("#"))) i++;
-        return lines.size();
-    }
-
-    private static int ensureTopLevel(java.util.List<String> lines, String key, int indent) {
-        int found = findKeyAtIndent(lines, key, indent);
-        if (found >= 0) return found;
-        int anchor = findDocumentEnd(lines);
-        String ind = " ".repeat(indent);
-        lines.add(anchor, ind + key + ":");
-        return anchor;
-    }
-
-    private static int leadingSpaces(String s) {
-        int i = 0;
-        while (i < s.length() && s.charAt(i) == ' ') i++;
-        return i;
     }
 
     @SuppressWarnings("unchecked")
@@ -759,19 +653,6 @@ public final class ConfigServiceImpl implements ConfigService {
             return Collections.unmodifiableList(copy);
         }
         return value;
-    }
-
-    @SuppressWarnings("unchecked")
-    private static void deletePath(Map<String, Object> root, String dottedPath) {
-        if (dottedPath == null || dottedPath.isBlank()) return;
-        String[] ps = dottedPath.split("\\.");
-        Map<String, Object> curr = root;
-        for (int i = 0; i < ps.length - 1; i++) {
-            Object n = curr.get(ps[i]);
-            if (!(n instanceof Map)) return;
-            curr = (Map<String, Object>) n;
-        }
-        curr.remove(ps[ps.length - 1]);
     }
 
 }

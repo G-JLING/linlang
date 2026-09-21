@@ -22,6 +22,7 @@ import lombok.Getter;
 import me.jling.facade.BukkitFacadeImpl;
 import me.jling.plugin.command.CommandListener;
 import me.jling.plugin.command.RuntimeCommandKeys;
+import me.jling.plugin.config.RuntimeConfig;
 import me.jling.runtime.BukkitRuntimeImpl;
 import org.bukkit.plugin.java.JavaPlugin;
 
@@ -48,6 +49,7 @@ public final class LinlangBukkitBootstrap implements AutoCloseable, Linlang, Lin
     private LinMessenger messenger;          // 消息接口
     private final LinAudit audit;
     private final RuntimeCommandKeys commandText;
+    private final RuntimeConfig runtimeConfig;
     private boolean closed;
     private boolean reloading;
 
@@ -85,9 +87,13 @@ public final class LinlangBukkitBootstrap implements AutoCloseable, Linlang, Lin
         this.config.language(this.language);
 
         this.audit = LinLog.forOwner(runtimePlugin);
-        this.runtime.installAudit(false);
+        this.runtime.installAudit(false, false);
 
         LinLog.info(BuiltinLog.RUNTIME_LOADING);
+
+        this.runtimeConfig = this.config.bind(RuntimeConfig.class);
+        applyRuntimeConfig();
+        this.runtime.installAuditLanguages();
 
         this.language.setLocale(this.locale);
         this.commandText = this.language.bind(RuntimeCommandKeys.class);
@@ -219,6 +225,7 @@ public final class LinlangBukkitBootstrap implements AutoCloseable, Linlang, Lin
     @Override
     public void applySettings() {
         checkLifecycle();
+        applyRuntimeConfig();
         refreshRuntimeCommandLanguage();
     }
 
@@ -240,6 +247,7 @@ public final class LinlangBukkitBootstrap implements AutoCloseable, Linlang, Lin
         java.util.Map<String, Throwable> failures = new java.util.LinkedHashMap<>();
         try {
             reloadStep(failures, "config", config::reload);
+            reloadStep(failures, "file-policy", this::applyRuntimeConfig);
             reloadStep(failures, "language", () -> {
                 if (language.locale().equalsIgnoreCase(locale)) language.reload();
                 else applyParameters();
@@ -249,6 +257,10 @@ public final class LinlangBukkitBootstrap implements AutoCloseable, Linlang, Lin
             reloading = false;
         }
         if (!failures.isEmpty()) throw new api.linlang.runtime.ReloadException(failures);
+    }
+
+    private void applyRuntimeConfig() {
+        runtime.autoRepairMissingKeys(runtimeConfig.fileService.autoRepairMissingKeys);
     }
 
     private void reloadStep(java.util.Map<String, Throwable> failures, String stage, Runnable action) {

@@ -82,6 +82,11 @@ public final class LinlangBukkitCommand implements LinCommand, CommandExecutor, 
     }
 
     @Override
+    public void addResolver(TypeResolver resolver) {
+        core.addResolver(resolver);
+    }
+
+    @Override
     public void setTotalPrefix(String prefix) {
         core.setTotalPrefix(prefix);
     }

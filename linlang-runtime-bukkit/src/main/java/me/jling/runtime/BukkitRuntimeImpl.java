@@ -86,9 +86,23 @@ public final class BukkitRuntimeImpl implements AutoCloseable {
      * @param usePluginLogger 是否使用运行时插件自己的 logger 作为 console 输出
      */
     public BukkitRuntimeImpl installAudit(boolean usePluginLogger) {
+        return installAudit(usePluginLogger, true);
+    }
+
+    /**
+     * 安装运行时审计，并按需延后内建语言绑定。
+     */
+    public BukkitRuntimeImpl installAudit(boolean usePluginLogger, boolean bindLanguages) {
         core.attachRuntimeFileServices(bootstrap.getConfig(), bootstrap.getLanguage());
-        core.installAudit(usePluginLogger);
+        core.installAudit(usePluginLogger, bindLanguages);
         return this;
+    }
+
+    /**
+     * 为已经安装的运行时审计绑定内建语言。
+     */
+    public void installAuditLanguages() {
+        core.installAuditLanguages();
     }
 
     /**
@@ -117,6 +131,13 @@ public final class BukkitRuntimeImpl implements AutoCloseable {
      */
     public LangServiceImpl createLangService(JavaPlugin owner) {
         return core.createLangService(owner);
+    }
+
+    /**
+     * 设置运行时及所有插件文件服务的缺失键自动修复策略。
+     */
+    public void autoRepairMissingKeys(boolean enabled) {
+        core.autoRepairMissingKeys(enabled);
     }
 
     /**

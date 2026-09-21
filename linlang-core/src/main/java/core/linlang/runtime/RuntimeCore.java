@@ -54,6 +54,7 @@ public final class RuntimeCore<P> implements AutoCloseable {
     // 可选：运行时自身的文件服务（如果你有 bootstrap，建议 attach 进来）
     private volatile ConfigServiceImpl runtimeConfig;
     private volatile LangServiceImpl runtimeLanguage;
+    private volatile boolean autoRepairMissingKeys;
     private final Map<P, Boolean> auditModes = new ConcurrentHashMap<>();
     private boolean reloading;
     private boolean closed;
@@ -93,7 +94,11 @@ public final class RuntimeCore<P> implements AutoCloseable {
     public void attachRuntimeFileServices(ConfigServiceImpl cfg, LangServiceImpl lang) {
         this.runtimeConfig = cfg;
         this.runtimeLanguage = lang;
-        if (cfg != null) cfg.language(lang);
+        if (cfg != null) {
+            cfg.language(lang);
+            cfg.autoRepairMissingKeys(autoRepairMissingKeys);
+        }
+        if (lang != null) lang.autoRepairMissingKeys(autoRepairMissingKeys);
         ViewCoreImpl view = interactCores.get(runtimeHost);
         if (view != null) view.language(lang);
     }
@@ -105,14 +110,33 @@ public final class RuntimeCore<P> implements AutoCloseable {
 
     /** 为指定 owner 创建独立配置服务实例 */
     public ConfigServiceImpl createConfigService(P owner) {
-        return new ConfigServiceImpl(resolver(owner), List.of(), owner);
+        ConfigServiceImpl service = new ConfigServiceImpl(resolver(owner), List.of(), owner);
+        service.autoRepairMissingKeys(autoRepairMissingKeys);
+        return service;
     }
 
     /** 为指定 owner 创建独立语言服务实例 */
     public LangServiceImpl createLangService(P owner) {
         LangServiceImpl language = new LangServiceImpl(resolver(owner), owner);
         language.threadCheck(() -> adapter.checkLifecycleThread(owner));
+        language.autoRepairMissingKeys(autoRepairMissingKeys);
         return language;
+    }
+
+    /**
+     * 设置所有文件服务是否在发现缺失键时自动修复原文件。
+     */
+    public void autoRepairMissingKeys(boolean enabled) {
+        autoRepairMissingKeys = enabled;
+        ConfigServiceImpl config = runtimeConfig;
+        LangServiceImpl language = runtimeLanguage;
+        if (config != null) config.autoRepairMissingKeys(enabled);
+        if (language != null) language.autoRepairMissingKeys(enabled);
+        synchronized (facades) {
+            for (FacadeCore<P> facade : facades) {
+                facade.autoRepairMissingKeys(enabled);
+            }
+        }
     }
 
     /** 为指定 owner 创建独立数据服务实例 */
@@ -280,6 +304,13 @@ public final class RuntimeCore<P> implements AutoCloseable {
 
     /** 安装运行时自身审计（会读取 runtimeHost 自身目录下的 audit.yml） */
     public RuntimeCore<P> installAudit(boolean usePluginLogger) {
+        return installAudit(usePluginLogger, true);
+    }
+
+    /**
+     * 安装运行时自身审计，并按需延后内建语言绑定。
+     */
+    public RuntimeCore<P> installAudit(boolean usePluginLogger, boolean bindLanguages) {
         boolean hadProvider = LinLog.isInstalled();
         try {
             ConfigServiceImpl cfgSvc = (runtimeConfig != null) ? runtimeConfig : createConfigService(runtimeHost);
@@ -300,11 +331,14 @@ public final class RuntimeCore<P> implements AutoCloseable {
                     t
             ));
         }
-        installAuditLanguages();
+        if (bindLanguages) installAuditLanguages();
         return this;
     }
 
-    private void installAuditLanguages() {
+    /**
+     * 为已经安装的运行时审计绑定内建语言。
+     */
+    public void installAuditLanguages() {
         AbstractAuditProvider audit = globalAudit;
         LangServiceImpl language = runtimeLanguage;
         if (audit == null) return;
