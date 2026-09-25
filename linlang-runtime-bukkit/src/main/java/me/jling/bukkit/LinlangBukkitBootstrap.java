@@ -70,8 +70,12 @@ public final class LinlangBukkitBootstrap implements AutoCloseable, Linlang, Lin
      */
     public static LinlangBukkitBootstrap install(JavaPlugin runtimePlugin) {
         VersionCheck.requireCompatible(Lin.API_VERSION, runtimePlugin.getDescription().getVersion(),
-                runtimePlugin.getLogger()::warning);
-        return new LinlangBukkitBootstrap(runtimePlugin);
+                message -> {
+                });
+        LinlangBukkitBootstrap bootstrap = new LinlangBukkitBootstrap(runtimePlugin);
+        VersionCheck.requireCompatible(Lin.API_VERSION, runtimePlugin.getDescription().getVersion(),
+                bootstrap.runtime.audit());
+        return bootstrap;
     }
 
     /**
@@ -132,7 +136,7 @@ public final class LinlangBukkitBootstrap implements AutoCloseable, Linlang, Lin
             return this;
         }
 
-        // 若是 Runtime bukkit 自己 => 返回当前 bootstrap
+        // 对于 Runtime 插件自身
         if (owner == this.runtimePlugin) {
             return this;
         }
@@ -261,6 +265,9 @@ public final class LinlangBukkitBootstrap implements AutoCloseable, Linlang, Lin
 
     private void applyRuntimeConfig() {
         runtime.autoRepairMissingKeys(runtimeConfig.fileService.autoRepairMissingKeys);
+        VersionCheck.compatibleVersionWarnings(
+                runtimeConfig.compatibility.warnOnCompatibleVersionDifference
+        );
     }
 
     private void reloadStep(java.util.Map<String, Throwable> failures, String stage, Runnable action) {
@@ -342,6 +349,7 @@ public final class LinlangBukkitBootstrap implements AutoCloseable, Linlang, Lin
         checkLifecycle();
         if (reloading) throw new IllegalStateException("Cannot close during reload");
         closed = true;
+        VersionCheck.compatibleVersionWarnings(true);
         try {
             if (command instanceof AutoCloseable) ((AutoCloseable) command).close();
         } catch (Exception exception) {

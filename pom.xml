@@ -61,9 +61,9 @@
         <maven.compiler.source>17</maven.compiler.source>
         <maven.compiler.target>17</maven.compiler.target>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-        <linlang.api.version>2.6.4.0</linlang.api.version>
+        <linlang.api.version>2.6.5.0</linlang.api.version>
         <shade.version>3.5.3</shade.version>
-        <revision>2.6.4.0</revision>
+        <revision>2.6.5.0</revision>
     </properties>
 
     <build>

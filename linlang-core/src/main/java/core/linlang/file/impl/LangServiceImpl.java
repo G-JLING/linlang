@@ -6,6 +6,7 @@ import core.linlang.file.config.ConfigMapper;
 import core.linlang.file.config.ConfigDiagnostics;
 import api.linlang.audit.LinLog;
 import api.linlang.file.file.FileType;
+import api.linlang.file.file.FileSaveException;
 import api.linlang.file.file.LangList;
 import api.linlang.file.file.LangMap;
 import api.linlang.file.file.LangService;
@@ -321,16 +322,14 @@ public final class LangServiceImpl implements LangService, LocaleAware {
         if (bm == null || bm.holder == null) return;
         String loc = localeFor(bm.normalizeLocale, locale);
 
-        @SuppressWarnings("unchecked")
-        T holder = (T) bm.holder;
-
-        Map<String, Object> out = new LinkedHashMap<>();
-        TreeMapper.export(holder, out);
-
         java.nio.file.Path f = diskFile(bm.filePath, loc, bm.fmt, false);
         if (!bm.emit) return;
 
         try {
+            @SuppressWarnings("unchecked")
+            T holder = (T) bm.holder;
+            Map<String, Object> out = new LinkedHashMap<>();
+            TreeMapper.export(holder, out);
             Map<String, Object> curr = IOs.exists(f)
                     ? readDoc(f, bm.fmt)
                     : new LinkedHashMap<>();
@@ -340,21 +339,28 @@ public final class LangServiceImpl implements LangService, LocaleAware {
             persist(f, bm.fmt, curr);
 
             cacheDocument(bm, loc, curr);
-            notifyChanged();
-        } catch (Exception e) {
+        } catch (RuntimeException exception) {
             audit.problem().report(
-                    BuiltinProblemCatalog.LANGUAGE_SAVE_FAILED, e,
+                    BuiltinProblemCatalog.LANGUAGE_SAVE_FAILED, exception,
                     "lang", f,
                     "locale", loc
             );
+            throw new FileSaveException(
+                    BuiltinProblemCatalog.LANGUAGE_SAVE_FAILED, f.toString(), exception);
         }
+        notifyChanged();
     }
 
     @Override
     public void saveAll() {
         for (BoundMeta bm : new ArrayList<>(bound.values())) {
             if (bm == null) continue;
-            if (!failedPacks.contains(bm.keysClass)) save((Class<Object>) bm.keysClass, locale());
+            if (failedPacks.contains(bm.keysClass)) continue;
+            try {
+                save((Class<Object>) bm.keysClass, locale());
+            } catch (FileSaveException | ReloadException ignored) {
+                // 单项失败已在保存或监听器边界报告，继续处理其他语言包。
+            }
         }
     }
 
@@ -1065,7 +1071,7 @@ public final class LangServiceImpl implements LangService, LocaleAware {
                     ? new LinkedHashMap<>()
                     : YamlCodec.extractComments(ConfigDiagnostics.clear(current));
             for (String path : missing) {
-                comments.put(path, List.of("[Linlang] 缺失键修复自动补入"));
+                comments.put(path, List.of("[Linlang] Files Repair +"));
             }
             output = YamlCodec.dumpWithComments(doc, comments);
         }
@@ -1119,8 +1125,9 @@ public final class LangServiceImpl implements LangService, LocaleAware {
     private static <T> T newInstance(Class<T> t) {
         try {
             return t.getDeclaredConstructor().newInstance();
-        } catch (Exception e) {
-            throw new RuntimeException(e);
+        } catch (ReflectiveOperationException exception) {
+            throw new IllegalStateException(
+                    "Cannot instantiate language class: " + t.getName(), exception);
         }
     }
 

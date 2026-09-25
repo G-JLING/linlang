@@ -15,7 +15,9 @@ public final class Binder {
     public static Optional<BoundConfig> configOf(Class<?> type) {
         ConfigFile cf = type.getAnnotation(ConfigFile.class);
         if (cf == null) return Optional.empty();
-        return Optional.of(new BoundConfig(cf.path(), cf.name(), cf.format(), comments(type), fieldKeys(type)));
+        return Optional.of(new BoundConfig(
+                cf.path(), cf.name(), cf.format(), cf.emit(), comments(type), fieldKeys(type)
+        ));
     }
 
     public static Optional<BoundTable> tableOf(Class<?> type) {
@@ -25,7 +27,7 @@ public final class Binder {
     }
 
 
-    public record BoundConfig(String path, String name, FileType fmt, List<String> comments,
+    public record BoundConfig(String path, String name, FileType fmt, boolean emit, List<String> comments,
                               Map<Field, String> keyMap) {
     }
 

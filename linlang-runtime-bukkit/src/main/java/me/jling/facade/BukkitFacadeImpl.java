@@ -35,7 +35,8 @@ public final class BukkitFacadeImpl implements Linlang, Linlang.Configurable, Li
         Objects.requireNonNull(runtime, "runtime");
         Objects.requireNonNull(owner, "owner bukkit");
         BukkitFacadeImpl f = new BukkitFacadeImpl(runtime, owner);
-        // 兼容旧逻辑：运行时仍维护一份 facade 集合
+
+        // TODO: 下一世代取消支持
         runtime.registerFacade(f);
         return f;
     }
@@ -43,7 +44,7 @@ public final class BukkitFacadeImpl implements Linlang, Linlang.Configurable, Li
     private BukkitFacadeImpl(BukkitRuntimeImpl runtime, JavaPlugin owner) {
         this.runtime = runtime;
         this.owner = owner;
-        // core Facade（平台无关逻辑）
+
         this.core = runtime.getCore().createFacade(owner);
     }
 

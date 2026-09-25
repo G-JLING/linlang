@@ -6,6 +6,7 @@ import api.linlang.audit.LinAudit;
 import api.linlang.audit.LinLog;
 import api.linlang.audit.problem.LinProblem;
 import api.linlang.file.file.LangService;
+import api.linlang.file.file.FileSaveException;
 import api.linlang.file.file.config.ConfigIssue;
 import api.linlang.file.file.config.ConfigLoadException;
 import core.linlang.file.config.ConfigDiagnostics;
@@ -119,7 +120,8 @@ public final class ConfigServiceImpl implements ConfigService {
             failedConfigs.remove(type);
             return result;
         } catch (RuntimeException exception) {
-            ConfigLoadException failure = reportFailure(type, exception, emit);
+            ConfigLoadException failure = reportFailure(
+                    type, exception, emit, BuiltinProblemCatalog.CONFIG_BIND_FAILED);
             failedConfigs.put(type, failure);
             throw failure;
         } finally {
@@ -152,7 +154,7 @@ public final class ConfigServiceImpl implements ConfigService {
         ConfigMapper.Prepared prepared = prepare(inst, doc);
 
         boolean annotatedNoEmit = type.isAnnotationPresent(NoEmit.class);
-        boolean shouldEmit = emit && !annotatedNoEmit;
+        boolean shouldEmit = emit && meta.emit() && !annotatedNoEmit;
         boolean repair = shouldEmit && exists && !missing.isEmpty()
                 && (autoRepairMissingKeys || repairingMissingKeys);
 
@@ -197,19 +199,20 @@ public final class ConfigServiceImpl implements ConfigService {
 
     private synchronized <T> void save(Class<T> type, T config, Boolean emitOverride) {
         attempt = null;
+        Objects.requireNonNull(type, "type");
+        Objects.requireNonNull(config, "config");
         if (failedConfigs.containsKey(type)) throw failedConfigs.get(type);
         try {
             saveInternal(type, config, emitOverride);
         } catch (RuntimeException exception) {
             audit.problem().report(BuiltinProblemCatalog.CONFIG_SAVE_FAILED, exception,
-                    "config", type == null ? "null" : type.getName());
-            throw new IllegalStateException(BuiltinProblemCatalog.CONFIG_SAVE_FAILED, exception);
+                    "config", type.getName());
+            throw new FileSaveException(
+                    BuiltinProblemCatalog.CONFIG_SAVE_FAILED, type.getName(), exception);
         }
     }
 
     private <T> void saveInternal(Class<T> type, T config, Boolean emitOverride) {
-        if (config == null) throw new IllegalArgumentException("config is null");
-
         Binder.BoundConfig meta = Binder.configOf(type)
                 .orElseThrow(() -> new IllegalArgumentException("[linlang] missing @ConfigFile on " + type));
         Path file = toFile(meta.path(), meta.name(), meta.fmt());
@@ -224,7 +227,7 @@ public final class ConfigServiceImpl implements ConfigService {
         boolean shouldEmit;
         synchronized (emitFlags) {
             Boolean flag = emitOverride == null ? emitFlags.get(type) : emitOverride;
-            shouldEmit = (flag == null || flag) && !annotatedNoEmit;
+            shouldEmit = (flag == null || flag) && meta.emit() && !annotatedNoEmit;
             if (emitOverride != null) emitFlags.put(type, shouldEmit);
         }
 
@@ -242,15 +245,15 @@ public final class ConfigServiceImpl implements ConfigService {
             Object config = e.getValue();
             if (failedConfigs.containsKey(type)) continue;
 
-            boolean annotatedNoEmit = type.isAnnotationPresent(NoEmit.class);
-            boolean shouldEmit;
-            synchronized (emitFlags) {
-                Boolean flag = emitFlags.get(type);
-                shouldEmit = (flag != null ? flag : true) && !annotatedNoEmit;
-            }
             try {
                 Binder.BoundConfig meta = Binder.configOf(type)
                         .orElseThrow(() -> new IllegalArgumentException("[linlang] missing @ConfigFile on " + type));
+                boolean annotatedNoEmit = type.isAnnotationPresent(NoEmit.class);
+                boolean shouldEmit;
+                synchronized (emitFlags) {
+                    Boolean flag = emitFlags.get(type);
+                    shouldEmit = (flag != null ? flag : true) && meta.emit() && !annotatedNoEmit;
+                }
                 Path file = toFile(meta.path(), meta.name(), meta.fmt());
 
                 Map<String, Object> doc = new LinkedHashMap<>();
@@ -300,7 +303,9 @@ public final class ConfigServiceImpl implements ConfigService {
                 reloadIntoExisting(type, target);
                 failedConfigs.remove(type);
             } catch (Exception ex) {
-                ConfigLoadException failure = reportFailure(type, ex, emitFlags.getOrDefault(type, true));
+                ConfigLoadException failure = reportFailure(
+                        type, ex, emitFlags.getOrDefault(type, true),
+                        BuiltinProblemCatalog.CONFIG_RELOAD_FAILED);
                 failedConfigs.put(type, failure);
                 failures.putAll(failure.failures());
             } finally {
@@ -348,7 +353,7 @@ public final class ConfigServiceImpl implements ConfigService {
         boolean shouldEmit;
         synchronized (emitFlags) {
             Boolean flag = emitFlags.get(type);
-            shouldEmit = (flag != null ? flag : true) && !annotatedNoEmit;
+            shouldEmit = (flag != null ? flag : true) && meta.emit() && !annotatedNoEmit;
         }
         boolean repair = shouldEmit && exists && !missing.isEmpty()
                 && (autoRepairMissingKeys || repairingMissingKeys);
@@ -397,35 +402,31 @@ public final class ConfigServiceImpl implements ConfigService {
     private void persist(Path file, FileType fmt, Map<String,Object> doc,
                          Map<String,java.util.List<String>> comments,
                          Set<String> repairedKeys) {
-        try {
-            String raw = IOs.exists(file) ? IOs.readString(file) : null;
-            if (attempt != null && attempt.file().equals(file) && !Objects.equals(attempt.raw(), raw)) {
-                throw new IllegalStateException("Configuration changed while loading");
-            }
-            String out;
-            if (fmt == FileType.YAML && raw != null) {
-                String clean = ConfigDiagnostics.clear(raw);
-                if (Objects.equals(ConfigDiagnostics.load(clean, fmt), doc)) out = clean;
-                else {
-                    Map<String, List<String>> merged = new LinkedHashMap<>(comments);
-                    merged.putAll(YamlCodec.extractComments(clean));
-                    for (String path : repairedKeys) {
-                        merged.put(path, List.of("[Linlang] 缺失键修复自动补入"));
-                    }
-                    out = YamlCodec.dumpWithComments(doc, merged);
-                }
-            } else {
-                Map<String, List<String>> marked = new LinkedHashMap<>(comments);
-                for (String path : repairedKeys) {
-                    marked.put(path, List.of("[Linlang] 缺失键修复自动补入"));
-                }
-                out = fmt == FileType.YAML ? YamlCodec.dumpWithComments(doc, marked) : JsonCodec.dump(doc);
-            }
-            ConfigDiagnostics.writeAtomic(file, out);
-            audit.logger().debug(BuiltinLog.CONFIG_SAVED, "file", file);
-        } catch (Exception e) {
-            throw new IllegalStateException(BuiltinProblemCatalog.CONFIG_SAVE_FAILED, e);
+        String raw = IOs.exists(file) ? IOs.readString(file) : null;
+        if (attempt != null && attempt.file().equals(file) && !Objects.equals(attempt.raw(), raw)) {
+            throw new IllegalStateException("Configuration changed while loading");
         }
+        String out;
+        if (fmt == FileType.YAML && raw != null) {
+            String clean = ConfigDiagnostics.clear(raw);
+            if (Objects.equals(ConfigDiagnostics.load(clean, fmt), doc)) out = clean;
+            else {
+                Map<String, List<String>> merged = new LinkedHashMap<>(comments);
+                merged.putAll(YamlCodec.extractComments(clean));
+                for (String path : repairedKeys) {
+                    merged.put(path, List.of("[Linlang] Files Repair +"));
+                }
+                out = YamlCodec.dumpWithComments(doc, merged);
+            }
+        } else {
+            Map<String, List<String>> marked = new LinkedHashMap<>(comments);
+            for (String path : repairedKeys) {
+                marked.put(path, List.of("[Linlang] Files Repair +"));
+            }
+            out = fmt == FileType.YAML ? YamlCodec.dumpWithComments(doc, marked) : JsonCodec.dump(doc);
+        }
+        ConfigDiagnostics.writeAtomic(file, out);
+        audit.logger().debug(BuiltinLog.CONFIG_SAVED, "file", file);
     }
     private void applyMigrations(Class<?> type, Map<String, Object> doc) {
         ConfigVersion ver = type.getAnnotation(ConfigVersion.class);
@@ -492,8 +493,9 @@ public final class ConfigServiceImpl implements ConfigService {
     private static <T> T newInstance(Class<T> type) {
         try {
             return type.getDeclaredConstructor().newInstance();
-        } catch (Exception e) {
-            throw new RuntimeException(e);
+        } catch (ReflectiveOperationException exception) {
+            throw new IllegalStateException(
+                    "Cannot instantiate configuration class: " + type.getName(), exception);
         }
     }
 
@@ -511,7 +513,7 @@ public final class ConfigServiceImpl implements ConfigService {
         return immutableDeepCopy(defaults);
     }
 
-    private ConfigLoadException reportFailure(Class<?> type, Exception exception, boolean emit) {
+    private ConfigLoadException reportFailure(Class<?> type, Exception exception, boolean emit, String code) {
         Attempt current = attempt;
         Path file = current == null ? paths.sub(type == null ? "config" : type.getSimpleName()) : current.file();
         List<ConfigIssue> issues = exception instanceof ConfigMappingException mapping ? mapping.issues()
@@ -520,17 +522,22 @@ public final class ConfigServiceImpl implements ConfigService {
         try {
             ConfigDiagnostics.report(file, current == null ? FileType.JSON : current.format(),
                     current == null ? null : current.raw(), issues,
-                    emit && type != null && !type.isAnnotationPresent(NoEmit.class));
+                    emit && configAnnotationAllowsEmit(type) && !type.isAnnotationPresent(NoEmit.class));
         } catch (RuntimeException diagnosticFailure) {
             summary += "；" + issues.stream().limit(3)
                     .map(issue -> ConfigDiagnostics.safe(issue.key() + "：" + issue.message())).toList();
         }
-        audit.problem().report(LinProblem.builder("LIN-FILE-CONFIG-LOAD-FAIL")
+        audit.problem().report(LinProblem.builder(code)
                 .consoleSummary(summary).context("file", file.toString())
                 .cause(exception instanceof ConfigMappingException ? null : exception)
                 .context("issues", issues.stream().map(issue -> Map.of("key", issue.key(), "message", issue.message())).toList())
                 .build());
         return new ConfigLoadException(Map.of(file, issues));
+    }
+
+    private static boolean configAnnotationAllowsEmit(Class<?> type) {
+        if (type == null) return false;
+        return Binder.configOf(type).map(Binder.BoundConfig::emit).orElse(false);
     }
 
     // 极简类型转换
