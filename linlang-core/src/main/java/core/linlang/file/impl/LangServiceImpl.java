@@ -127,7 +127,7 @@ public final class LangServiceImpl implements LangService, LocaleAware {
                 listener.run();
             } catch (RuntimeException exception) {
                 failures.put("listener:" + index, exception);
-                if (!(exception instanceof ReloadException)) {
+                if (!(exception instanceof api.linlang.audit.problem.ReportedProblemException)) {
                     audit.problem().report(BuiltinProblemCatalog.LANGUAGE_LISTENER_FAILED, exception);
                 }
             }

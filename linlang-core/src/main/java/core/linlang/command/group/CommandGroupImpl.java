@@ -6,6 +6,7 @@ import api.linlang.command.group.CommandGroup;
 import api.linlang.command.group.CommandRoot;
 import api.linlang.command.group.CommandSuccessHandler;
 import core.linlang.command.impl.LinCommandImpl;
+import core.linlang.command.parser.CommandGroupConfigurationException;
 import core.linlang.command.parser.CommandSpecException;
 
 import java.util.ArrayList;
@@ -63,10 +64,10 @@ public final class CommandGroupImpl implements CommandRoot {
     @Override
     public synchronized CommandRoot permissionPrefix(String prefix) {
         if (parent != null) {
-            throw new IllegalStateException("permissionPrefix 只能设置在根命令上");
+            throw configurationFailure("permissionPrefix", "permissionPrefix 只能设置在根命令上");
         }
         String normalized = normalizePermission(prefix);
-        if (normalized != null) ensureConfigurable();
+        if (normalized != null) ensureConfigurable("permissionPrefix");
         permissionPrefix = mergeSetting(permissionPrefix, normalized, "permissionPrefix");
         return this;
     }
@@ -74,7 +75,7 @@ public final class CommandGroupImpl implements CommandRoot {
     @Override
     public synchronized CommandGroupImpl permissionSegment(String segment) {
         String normalized = normalizePermission(segment);
-        if (normalized != null) ensureConfigurable();
+        if (normalized != null) ensureConfigurable("permissionSegment");
         permissionSegment = mergeSetting(permissionSegment, normalized, "permissionSegment");
         return this;
     }
@@ -82,7 +83,7 @@ public final class CommandGroupImpl implements CommandRoot {
     @Override
     public synchronized CommandGroupImpl requires(LinCommand.Permission permission) {
         if (permission != null && !requirements.contains(permission)) {
-            ensureConfigurable();
+            ensureConfigurable("requires");
             requirements.add(permission);
         }
         return this;
@@ -91,7 +92,7 @@ public final class CommandGroupImpl implements CommandRoot {
     @Override
     public synchronized CommandGroupImpl onSuccess(CommandSuccessHandler handler) {
         if (handler != null) {
-            ensureConfigurable();
+            ensureConfigurable("onSuccess");
             successHandlers.add(handler);
         }
         return this;
@@ -100,7 +101,7 @@ public final class CommandGroupImpl implements CommandRoot {
     @Override
     public synchronized CommandGroupImpl onFailure(CommandFailureHandler handler) {
         if (handler != null) {
-            ensureConfigurable();
+            ensureConfigurable("onFailure");
             failureHandlers.add(handler);
         }
         return this;
@@ -233,16 +234,24 @@ public final class CommandGroupImpl implements CommandRoot {
         return normalized.isBlank() ? null : normalized;
     }
 
-    private static String mergeSetting(String current, String next, String name) {
+    private String mergeSetting(String current, String next, String name) {
         if (next == null) return current;
         if (current == null || current.equalsIgnoreCase(next)) return next;
-        throw new IllegalStateException(name + " 已设置为 " + current + "，不能再次设置为 " + next);
+        throw configurationFailure(name,
+                name + " 已设置为 " + current + "，不能再次设置为 " + next);
     }
 
-    private void ensureConfigurable() {
+    private void ensureConfigurable(String setting) {
         if (registrationStarted) {
-            throw new IllegalStateException("命令组已开始注册后代命令，不能再修改公共配置: " + path());
+            throw configurationFailure(setting,
+                    "命令组已开始注册后代命令，不能再修改公共配置: " + path());
         }
+    }
+
+    private CommandGroupConfigurationException configurationFailure(String setting, String message) {
+        CommandGroupConfigurationException exception = new CommandGroupConfigurationException(message);
+        owner.reportGroupConfigurationFailure(path(), setting, exception);
+        return exception;
     }
 
     private static String validateNamespace(String namespace) {

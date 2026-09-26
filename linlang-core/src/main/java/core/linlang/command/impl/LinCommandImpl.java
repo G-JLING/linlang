@@ -8,6 +8,7 @@ package core.linlang.command.impl;
 
 import api.linlang.audit.LinAudit;
 import api.linlang.audit.LinLog;
+import api.linlang.audit.problem.ReportedProblemException;
 import api.linlang.command.LinCommand;
 import api.linlang.command.group.CommandFailure;
 import api.linlang.command.group.CommandFailureHandler;
@@ -309,6 +310,18 @@ public final class LinCommandImpl implements LinCommand, LocaleAware, PrefixAwar
                 BuiltinProblemCatalog.COMMAND_REGISTRATION_FAILED,
                 exception,
                 "spec", spec == null ? "null" : spec
+        );
+    }
+
+    /**
+     * 报告命令组公共配置的非法修改。
+     */
+    public void reportGroupConfigurationFailure(String group, String setting, RuntimeException exception) {
+        audit.problem().report(
+                BuiltinProblemCatalog.COMMAND_GROUP_CONFIGURATION_FAILED,
+                exception,
+                "group", group,
+                "setting", setting
         );
     }
 
@@ -728,8 +741,7 @@ public final class LinCommandImpl implements LinCommand, LocaleAware, PrefixAwar
             notifySuccess(node, context);
         } catch (Exception exception) {
             notifyFailure(node, context, CommandFailure.Reason.EXECUTION, exception);
-            if (!(exception instanceof api.linlang.file.file.config.ConfigLoadException)
-                    && !(exception instanceof api.linlang.runtime.ReloadException)) audit.problem().report(
+            if (!(exception instanceof ReportedProblemException)) audit.problem().report(
                     BuiltinProblemCatalog.COMMAND_EXECUTION_FAILED, exception,
                     "command", node.usage,
                     "sender", sender == null ? "null" : sender.getClass().getName()

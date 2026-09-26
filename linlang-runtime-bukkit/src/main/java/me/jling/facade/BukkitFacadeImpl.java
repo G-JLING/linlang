@@ -48,17 +48,23 @@ public final class BukkitFacadeImpl implements Linlang, Linlang.Configurable, Li
         this.core = runtime.getCore().createFacade(owner);
     }
 
-    /** 获取该门面对应的 Bukkit 插件实例。 */
+    /**
+     * 获取该门面对应的 Bukkit 插件实例。
+     */
     public JavaPlugin owner() {
         return owner;
     }
 
-    /** 获取 facade 级事件总线。 */
+    /**
+     * 获取 facade 级事件总线。
+     */
     public LinEventBus events() {
         return core.events();
     }
 
-    /** 获取 facade 级语言控制器（语言代码唯一真相源）。 */
+    /**
+     * 获取 facade 级语言控制器（语言代码唯一真相源）。
+     */
     public LocaleController locale() {
         return core.locale();
     }
@@ -160,10 +166,14 @@ public final class BukkitFacadeImpl implements Linlang, Linlang.Configurable, Li
     }
 
     @Override
-    public void applySettings() { core.applySettings(); }
+    public void applySettings() {
+        core.applySettings();
+    }
 
     @Override
-    public void applyParameters() { core.applyParameters(); }
+    public void applyParameters() {
+        core.applyParameters();
+    }
 
     @Override
     public Linlang onRebuild(Runnable callback) {

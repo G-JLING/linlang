@@ -371,7 +371,7 @@ public final class RuntimeCore<P> implements AutoCloseable {
             adapter.registerAuditTenant(globalAudit, owner, cfg, usePluginLogger);
             auditModes.put(owner, usePluginLogger);
         } catch (RuntimeException t) {
-            if (!(t instanceof api.linlang.file.file.config.ConfigLoadException)) auditFor(owner).problem().report(
+            if (!(t instanceof api.linlang.audit.problem.ReportedProblemException)) auditFor(owner).problem().report(
                     BuiltinProblemCatalog.TENANT_CONFIG_LOAD_FAILED, t,
                     "owner", owner
             );
@@ -426,8 +426,7 @@ public final class RuntimeCore<P> implements AutoCloseable {
             action.run();
         } catch (RuntimeException exception) {
             failures.put(name, exception);
-            if (!(exception instanceof api.linlang.runtime.ReloadException)
-                    && !(exception instanceof api.linlang.file.file.config.ConfigLoadException)) {
+            if (!(exception instanceof api.linlang.audit.problem.ReportedProblemException)) {
                 reportProblem(owner, BuiltinProblemCatalog.FACADE_RELOAD_FAILED, exception, "stage", name);
             }
         }
@@ -447,7 +446,7 @@ public final class RuntimeCore<P> implements AutoCloseable {
                     facade.restart();
                     success++;
                 } catch (RuntimeException exception) {
-                    if (!(exception instanceof api.linlang.runtime.ReloadException)) {
+                    if (!(exception instanceof api.linlang.audit.problem.ReportedProblemException)) {
                         reportProblem(facade.getOwner(), BuiltinProblemCatalog.FACADE_RESTART_FAILED, exception);
                     }
                 }

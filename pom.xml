@@ -61,9 +61,9 @@
         <maven.compiler.source>17</maven.compiler.source>
         <maven.compiler.target>17</maven.compiler.target>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-        <linlang.api.version>2.6.5.0</linlang.api.version>
+        <linlang.api.version>2.6.5.1</linlang.api.version>
         <shade.version>3.5.3</shade.version>
-        <revision>2.6.5.0</revision>
+        <revision>2.6.5.1</revision>
     </properties>
 
     <build>
@@ -75,6 +75,8 @@
                 <configuration>
                     <updatePomFile>true</updatePomFile>
                     <flattenMode>resolveCiFriendliesOnly</flattenMode>
+                    <outputDirectory>${project.build.directory}</outputDirectory>
+                    <flattenedPomFilename>flattened-pom.xml</flattenedPomFilename>
                 </configuration>
                 <executions>
                     <execution>

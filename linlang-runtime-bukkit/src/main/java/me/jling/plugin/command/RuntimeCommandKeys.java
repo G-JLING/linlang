@@ -77,8 +77,8 @@ public final class RuntimeCommandKeys {
     }
 
     public static final class FileRepair {
-        public LangText description = LangText.of("Repair missing keys in a registered plugin or the runtime");
-        public LangText pluginLabel = LangText.of("plugin or runtime name");
+        public LangText description = LangText.of("Repair missing keys in a registered plugin");
+        public LangText pluginLabel = LangText.of("plugin name");
         public LangText success = LangText.of(
                 " &aRepaired &f{total} &amissing key(s) for &f{name}&a: config {config}, language {language}."
         );
@@ -87,12 +87,18 @@ public final class RuntimeCommandKeys {
     }
 
     public static final class FileRepairAll {
-        public LangText description = LangText.of("Repair missing keys for the runtime and all registered plugins");
+        public LangText description = LangText.of("Repair missing keys for all registered plugins");
         public LangText success = LangText.of(
-                " &aChecked &f{targets} &atarget(s) and repaired &f{total} &amissing key(s)."
+                " &aChecked &f{targets} &aplugin(s) and repaired &f{total} &amissing key(s)."
         );
         public LangText partial = LangText.of(
-                " &eChecked {targets} target(s) and repaired {total} missing key(s), but {failures} target(s) failed."
+                " &eChecked {targets} plugin(s) and repaired {total} missing key(s), but {failures} plugin(s) failed."
+        );
+        public LangText entry = LangText.of(
+                "&7  - &f{name}&7: {total} key(s) (config {config}, language {language})"
+        );
+        public LangText failedEntry = LangText.of(
+                "&7  - &f{name}&c: repair failed"
         );
     }
 

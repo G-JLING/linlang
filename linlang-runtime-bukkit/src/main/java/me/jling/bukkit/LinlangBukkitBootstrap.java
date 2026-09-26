@@ -275,8 +275,7 @@ public final class LinlangBukkitBootstrap implements AutoCloseable, Linlang, Lin
             action.run();
         } catch (RuntimeException exception) {
             failures.put(stage, exception);
-            if (!(exception instanceof api.linlang.runtime.ReloadException)
-                    && !(exception instanceof api.linlang.file.file.config.ConfigLoadException)) {
+            if (!(exception instanceof api.linlang.audit.problem.ReportedProblemException)) {
                 audit.problem().report(BuiltinProblemCatalog.FACADE_RELOAD_FAILED, exception, "stage", stage);
             }
         }

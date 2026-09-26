@@ -415,8 +415,7 @@ public final class FacadeCore<P> implements Linlang, Linlang.Configurable, Linla
             action.run();
         } catch (RuntimeException exception) {
             failures.put(name, exception);
-            if (!(exception instanceof ReloadException)
-                    && !(exception instanceof api.linlang.file.file.config.ConfigLoadException)) {
+            if (!(exception instanceof api.linlang.audit.problem.ReportedProblemException)) {
                 report(BuiltinProblemCatalog.FACADE_RELOAD_FAILED, exception, "stage", name);
             }
         }

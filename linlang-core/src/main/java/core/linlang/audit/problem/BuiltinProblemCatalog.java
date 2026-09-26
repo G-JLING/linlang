@@ -42,6 +42,7 @@ public final class BuiltinProblemCatalog {
     public static final String COMMAND_REGISTRATION_FAILED = "LIN-COMMAND-REGISTRATION-FAIL";
     public static final String COMMAND_LOCALE_REFRESH_FAILED = "LIN-COMMAND-LOCALE-REFRESH-FAIL";
     public static final String COMMAND_GROUP_CALLBACK_FAILED = "LIN-COMMAND-GROUP-CALLBACK-FAIL";
+    public static final String COMMAND_GROUP_CONFIGURATION_FAILED = "LIN-COMMAND-GROUP-CONFIG-FAIL";
 
     public static final String CONFIG_SAVE_FAILED = "LIN-FILE-CONFIG-SAVE-FAIL";
     public static final String CONFIG_RELOAD_FAILED = "LIN-FILE-CONFIG-RELOAD-FAIL";
@@ -236,6 +237,9 @@ public final class BuiltinProblemCatalog {
         add(values, COMMAND_GROUP_CALLBACK_FAILED, "Command",
                 "命令组的公共结果回调执行失败。",
                 "请根据 command、stage 与 handler 上下文检查命令组回调代码。");
+        add(values, COMMAND_GROUP_CONFIGURATION_FAILED, "Command",
+                "命令组开始注册后又修改了公共配置，修改未生效。",
+                "请根据 group 与 setting 上下文，将权限、回调等公共配置移到后代命令注册之前，并避免在软重载中重复注册命令。");
 
         add(values, CONFIG_SAVE_FAILED, "File",
                 "配置对象无法写入文件。",

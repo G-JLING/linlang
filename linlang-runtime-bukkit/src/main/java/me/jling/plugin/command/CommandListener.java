@@ -17,6 +17,7 @@ import org.bukkit.command.CommandSender;
 import org.bukkit.plugin.Plugin;
 import org.bukkit.plugin.java.JavaPlugin;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
@@ -160,7 +161,7 @@ public final class CommandListener {
                                 .outcome(AuditOutcome.SUCCESS)
                                 .build());
                     } catch (Throwable throwable) {
-                        if (!(throwable instanceof api.linlang.runtime.ReloadException)) runtime.audit().problem().report(
+                        if (!(throwable instanceof api.linlang.audit.problem.ReportedProblemException)) runtime.audit().problem().report(
                                 BuiltinProblemCatalog.FACADE_RESTART_FAILED,
                                 throwable,
                                 "owner", target.owner().getName(),
@@ -235,8 +236,7 @@ public final class CommandListener {
                                 .build());
                         send(sender, messenger, text.reload.success, "name", target.owner().getName());
                     } catch (RuntimeException exception) {
-                        if (!(exception instanceof api.linlang.runtime.ReloadException)
-                                && !(exception instanceof api.linlang.file.file.config.ConfigLoadException)) {
+                        if (!(exception instanceof api.linlang.audit.problem.ReportedProblemException)) {
                             runtime.audit().problem().report(BuiltinProblemCatalog.FACADE_RELOAD_FAILED,
                                     exception, "owner", target.owner().getName(), "actor", actor(sender));
                         }
@@ -357,21 +357,25 @@ public final class CommandListener {
                 ctx -> {
                     CommandSender sender = (CommandSender) ctx.sender();
                     List<FileTarget> targets = fileTargets();
+                    List<RepairDetail> repairedTargets = new ArrayList<>();
+                    List<String> failedTargets = new ArrayList<>();
                     int repaired = 0;
-                    int failures = 0;
 
                     for (FileTarget target : targets) {
                         try {
                             RepairResult result = repair(target);
                             repaired += result.total();
+                            if (result.total() > 0) {
+                                repairedTargets.add(new RepairDetail(target.name(), result));
+                            }
                             recordRepair(sender, target, result, AuditOutcome.SUCCESS);
                         } catch (RuntimeException exception) {
-                            failures++;
+                            failedTargets.add(target.name());
                             reportRepairFailure(sender, target, exception);
                         }
                     }
 
-                    if (failures == 0) {
+                    if (failedTargets.isEmpty()) {
                         send(sender, messenger, text.fileRepairAll.success,
                                 "targets", targets.size(),
                                 "total", repaired);
@@ -379,14 +383,26 @@ public final class CommandListener {
                         send(sender, messenger, text.fileRepairAll.partial,
                                 "targets", targets.size(),
                                 "total", repaired,
-                                "failures", failures);
+                                "failures", failedTargets.size());
+                    }
+                    for (RepairDetail detail : repairedTargets) {
+                        sendLine(sender, messenger, text.fileRepairAll.entry,
+                                "name", detail.name(),
+                                "total", detail.result().total(),
+                                "config", detail.result().config(),
+                                "language", detail.result().language());
+                    }
+                    for (String name : failedTargets) {
+                        sendLine(sender, messenger, text.fileRepairAll.failedEntry,
+                                "name", name);
                     }
                     runtime.audit().record(AuditEvent.builder("runtime.file.missing-key-repair-all")
                             .actor(actor(sender))
-                            .outcome(failures == 0 ? AuditOutcome.SUCCESS : AuditOutcome.FAILURE)
+                            .outcome(failedTargets.isEmpty() ? AuditOutcome.SUCCESS : AuditOutcome.FAILURE)
                             .field("targets", targets.size())
+                            .field("changedTargets", repairedTargets.size())
                             .field("repaired", repaired)
-                            .field("failures", failures)
+                            .field("failures", failedTargets.size())
                             .build());
                 },
                 options()
@@ -410,8 +426,6 @@ public final class CommandListener {
 
     private List<FileTarget> fileTargets() {
         TreeMap<String, FileTarget> targets = new TreeMap<>(String.CASE_INSENSITIVE_ORDER);
-        targets.put(runtimePlugin.getName(),
-                new FileTarget(runtimePlugin.getName(), runtime.getBootstrap().linFile()));
         for (BukkitFacadeImpl facade : runtime.listFacades()) {
             targets.putIfAbsent(facade.owner().getName(),
                     new FileTarget(facade.owner().getName(), facade.linFile()));
@@ -510,6 +524,9 @@ public final class CommandListener {
         private int total() {
             return config + language;
         }
+    }
+
+    private record RepairDetail(String name, RepairResult result) {
     }
 
     private void registerProblems(LinCommand registry) {
