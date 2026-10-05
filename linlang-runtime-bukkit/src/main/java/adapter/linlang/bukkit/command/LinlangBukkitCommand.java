@@ -7,6 +7,7 @@ import adapter.linlang.bukkit.command.interact.InteractiveResolvers;
 import adapter.linlang.bukkit.command.resolvers.BukkitResolvers;
 import api.linlang.audit.LinAudit;
 import api.linlang.audit.LinLog;
+import api.linlang.command.CommandOptions;
 import api.linlang.command.LinCommand;
 import api.linlang.command.group.CommandRoot;
 import api.linlang.command.message.CommandMessages;
@@ -54,24 +55,9 @@ public final class LinlangBukkitCommand implements LinCommand, CommandExecutor, 
     @Override
     public LinlangBukkitCommand register(String spec,
                                          CommandExecutor exec,
-                                         Permission perm,
-                                         ExecTarget target,
-                                         Desc desc,
-                                         Map<String, Map<String, String>> labelsI18n) {
+                                         CommandOptions options) {
         ensureBukkitBinding(spec);
-        core.register(spec, exec, perm, target, desc, labelsI18n);
-        return this;
-    }
-
-    @Override
-    public LinlangBukkitCommand registerLazy(String spec,
-                                             CommandExecutor exec,
-                                             Permission perm,
-                                             ExecTarget target,
-                                             I18nSupplier descProvider,
-                                             Map<String, I18nSupplier> labelProviders) {
-        ensureBukkitBinding(spec);
-        core.registerLazy(spec, exec, perm, target, descProvider, labelProviders);
+        core.register(spec, exec, options);
         return this;
     }
 

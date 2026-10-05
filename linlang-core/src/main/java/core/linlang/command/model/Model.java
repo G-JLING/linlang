@@ -15,7 +15,6 @@ public final class Model {
         public List<Param>  params   = new ArrayList<>();
         public Exec exec;
         public String usage;
-        public Map<String,String> descI18n;
         public List<CommandSuccessHandler> successHandlers = new ArrayList<>();
         public List<CommandFailureHandler> failureHandlers = new ArrayList<>();
     }

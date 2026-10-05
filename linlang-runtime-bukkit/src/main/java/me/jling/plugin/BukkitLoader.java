@@ -37,6 +37,7 @@ public class BukkitLoader extends JavaPlugin {
             }
             sm.register(Linlang.class, bootstrap, this, ServicePriority.Highest);
 
+            // 启动计时
             long ms = (System.nanoTime() - t0) / 1_000_000L;
             LinLog.info(BuiltinLog.RUNTIME_ENABLED,
                     "elapsed", ms,

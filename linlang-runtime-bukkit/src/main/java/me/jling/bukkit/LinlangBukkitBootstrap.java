@@ -96,7 +96,7 @@ public final class LinlangBukkitBootstrap implements AutoCloseable, Linlang, Lin
         LinLog.info(BuiltinLog.RUNTIME_LOADING);
 
         this.runtimeConfig = this.config.bind(RuntimeConfig.class);
-        applyRuntimeConfig();
+        refreshRuntimePolicies();
         this.runtime.installAuditLanguages();
 
         this.language.setLocale(this.locale);
@@ -229,7 +229,7 @@ public final class LinlangBukkitBootstrap implements AutoCloseable, Linlang, Lin
     @Override
     public void applySettings() {
         checkLifecycle();
-        applyRuntimeConfig();
+        refreshRuntimePolicies();
         refreshRuntimeCommandLanguage();
     }
 
@@ -251,7 +251,7 @@ public final class LinlangBukkitBootstrap implements AutoCloseable, Linlang, Lin
         java.util.Map<String, Throwable> failures = new java.util.LinkedHashMap<>();
         try {
             reloadStep(failures, "config", config::reload);
-            reloadStep(failures, "file-policy", this::applyRuntimeConfig);
+            reloadStep(failures, "file-policy", this::refreshRuntimePolicies);
             reloadStep(failures, "language", () -> {
                 if (language.locale().equalsIgnoreCase(locale)) language.reload();
                 else applyParameters();
@@ -263,7 +263,10 @@ public final class LinlangBukkitBootstrap implements AutoCloseable, Linlang, Lin
         if (!failures.isEmpty()) throw new api.linlang.runtime.ReloadException(failures);
     }
 
-    private void applyRuntimeConfig() {
+    /**
+     * 根据当前运行时配置重新应用文件与版本兼容策略。
+     */
+    public void refreshRuntimePolicies() {
         runtime.autoRepairMissingKeys(runtimeConfig.fileService.autoRepairMissingKeys);
         VersionCheck.compatibleVersionWarnings(
                 runtimeConfig.compatibility.warnOnCompatibleVersionDifference

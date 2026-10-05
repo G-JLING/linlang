@@ -886,48 +886,13 @@ public final class LangServiceImpl implements LangService, LocaleAware {
             return new PackSpec("lang", FileType.YAML, true, "en_GB", true);
         }
 
-        String fp = null;
-        FileType fmt = null;
-        Boolean em = null;
-        String defaultLocale = "en_GB";
-        boolean normalizeLocale = true;
-
-        try {
-            var m = lp.annotationType().getMethod("filePath");
-            fp = String.valueOf(m.invoke(lp));
-        } catch (Throwable ignore) {
-        }
-
-        if (fp == null || fp.isBlank() || "lang".equals(fp)) {
-            try {
-                var m = lp.annotationType().getMethod("path");
-                String legacyPath = String.valueOf(m.invoke(lp));
-                if (legacyPath != null && !legacyPath.isBlank()) fp = legacyPath;
-            } catch (Throwable ignore) {
-            }
-        }
-
-        try {
-            var m = lp.annotationType().getMethod("format");
-            Object v = m.invoke(lp);
-            if (v instanceof FileType ft) fmt = ft;
-        } catch (Throwable ignore) {
-        }
-
-        try {
-            var m = lp.annotationType().getMethod("emit");
-            Object v = m.invoke(lp);
-            if (v instanceof Boolean b) em = b;
-        } catch (Throwable ignore) {
-        }
-
-        try {
-            defaultLocale = lp.defaultLocale();
-            normalizeLocale = lp.normalizeLocale();
-        } catch (Throwable ignore) {
-        }
-
-        return new PackSpec(fp, fmt, em == null || em, defaultLocale, normalizeLocale);
+        return new PackSpec(
+                lp.filePath(),
+                lp.format(),
+                lp.emit(),
+                lp.defaultLocale(),
+                lp.normalizeLocale()
+        );
     }
 
     // ------------------------------------------------------------

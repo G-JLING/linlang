@@ -9,6 +9,7 @@ package core.linlang.command.impl;
 import api.linlang.audit.LinAudit;
 import api.linlang.audit.LinLog;
 import api.linlang.audit.problem.ReportedProblemException;
+import api.linlang.command.CommandOptions;
 import api.linlang.command.LinCommand;
 import api.linlang.command.group.CommandFailure;
 import api.linlang.command.group.CommandFailureHandler;
@@ -18,7 +19,6 @@ import api.linlang.command.message.CommandMessages;
 import core.linlang.command.group.CommandGroupImpl;
 import core.linlang.file.runtime.LocaleTag;
 import core.linlang.command.model.Model;
-import core.linlang.command.model.Registration;
 import core.linlang.command.parser.ArgEngine;
 import core.linlang.command.parser.CommandArgumentException;
 import core.linlang.command.parser.CommandSpecException;
@@ -42,41 +42,22 @@ public final class LinCommandImpl implements LinCommand, LocaleAware, PrefixAwar
     private final List<Model.Node> nodes = new ArrayList<>();
     private final Map<String, Model.Node> signatures = new LinkedHashMap<>();
     private final Map<String, CommandGroupImpl> roots = new LinkedHashMap<>();
-    // 为每个已注册节点保存参数 i18n 标签映射（立即值）：paramName -> ( "zh_CN" -> "行号", ... )
-    public final Map<Model.Node, Map<String, Map<String, String>>> paramI18n = new IdentityHashMap<>();
-
     // 延迟 i18n：为每个节点保存「描述」的延迟提供者（localeTag -> text）
     private final Map<Model.Node, LinCommand.I18nSupplier> descLazy = new IdentityHashMap<>();
 
     // 延迟 i18n：为每个节点保存「参数标签」的延迟提供者（paramName -> (localeTag -> label)
     private final Map<Model.Node, Map<String, LinCommand.I18nSupplier>> paramLazy = new IdentityHashMap<>();
-    /**
-     * 注册命令（延迟 i18n 版本）。
-     * <p>与传统的 {@link #register(String, CommandExecutor, Permission, ExecTarget, Desc, Map)} 不同，
-     * 这里的描述与参数标签通过函数延迟取值：当语言变化时无需重注册命令，只要语言对象字段更新即可生效。</p>
-     *
-     * <p>注意：若你仍然需要在切换语言后更新命令框架的内建提示（messages），请继续通过 LocaleChanged 事件或外部逻辑更新 {@link #setLocale(String)}。</p>
-     */
     @Override
-    public LinCommand registerLazy(
-            String spec,
-            CommandExecutor exec,
-            Permission perm,
-            ExecTarget target,
-            LinCommand.I18nSupplier descProvider,
-            Map<String, LinCommand.I18nSupplier> labelProviders
-    ) {
-        Registration reg = doRegister(spec, exec, perm, target, null);
-        Model.Node n = reg.node;
-
-        if (descProvider != null) {
-            descLazy.put(n, descProvider);
+    public LinCommand register(String spec, CommandExecutor exec, CommandOptions options) {
+        CommandOptions value = Objects.requireNonNull(options, "options");
+        Model.Node node = doRegister(spec, exec, value.permission(), value.target());
+        if (value.description() != null) {
+            descLazy.put(node, value.description());
         }
-        if (labelProviders != null && !labelProviders.isEmpty()) {
-            paramLazy.put(n, new LinkedHashMap<>(labelProviders));
+        if (!value.labels().isEmpty()) {
+            paramLazy.put(node, new LinkedHashMap<>(value.labels()));
         }
-
-        n.usage = buildUsage(n);
+        node.usage = buildUsage(node);
         return this;
     }
     // 实例名字，或者叫命令前缀
@@ -135,59 +116,23 @@ public final class LinCommandImpl implements LinCommand, LocaleAware, PrefixAwar
         return this;
     }
 
-    public LinCommand register(String spec, CommandExecutor exec, Permission perm, ExecTarget target, Desc desc, Map<String, Map<String, String>> labelsI18n) {
-        Model.Node n = doRegister(spec, exec, perm, target, desc).node;
-        if (labelsI18n != null) {
-            paramI18n.put(n, labelsI18n);
-        }
-        n.usage = buildUsage(n);
-        return this;
-    }
-
-    /**
-     * 注册由命令组展开后的静态命令。
-     */
     public LinCommandImpl registerGrouped(
             String spec,
             CommandExecutor executor,
             List<String> permissions,
-            ExecTarget target,
-            Desc description,
-            Map<String, Map<String, String>> labels,
+            CommandOptions options,
             List<CommandSuccessHandler> successHandlers,
             List<CommandFailureHandler> failureHandlers
     ) {
+        CommandOptions value = Objects.requireNonNull(options, "options");
         Model.Node node = doRegister(
-                spec, executor, permissions, target, description, successHandlers, failureHandlers
-        ).node;
-        if (labels != null && !labels.isEmpty()) {
-            paramI18n.put(node, new LinkedHashMap<>(labels));
+                spec, executor, permissions, value.target(), successHandlers, failureHandlers
+        );
+        if (value.description() != null) {
+            descLazy.put(node, value.description());
         }
-        node.usage = buildUsage(node);
-        return this;
-    }
-
-    /**
-     * 注册由命令组展开后的动态国际化命令。
-     */
-    public LinCommandImpl registerGroupedLazy(
-            String spec,
-            CommandExecutor executor,
-            List<String> permissions,
-            ExecTarget target,
-            I18nSupplier description,
-            Map<String, I18nSupplier> labels,
-            List<CommandSuccessHandler> successHandlers,
-            List<CommandFailureHandler> failureHandlers
-    ) {
-        Model.Node node = doRegister(
-                spec, executor, permissions, target, null, successHandlers, failureHandlers
-        ).node;
-        if (description != null) {
-            descLazy.put(node, description);
-        }
-        if (labels != null && !labels.isEmpty()) {
-            paramLazy.put(node, new LinkedHashMap<>(labels));
+        if (!value.labels().isEmpty()) {
+            paramLazy.put(node, new LinkedHashMap<>(value.labels()));
         }
         node.usage = buildUsage(node);
         return this;
@@ -223,19 +168,6 @@ public final class LinCommandImpl implements LinCommand, LocaleAware, PrefixAwar
         }
     }
 
-    /** @deprecated 内部兼容别名：请改用 {@link #locale()} */
-    @Deprecated
-    public String defaultLocale() {
-        return locale();
-    }
-
-    /** @deprecated 内部兼容别名：请改用 {@link #setLocale(String)} */
-    @Deprecated
-    public void setDefaultLocale(String locale) {
-        setLocale(locale);
-    }
-
-
     // --- PrefixAware ---
 
     /**
@@ -250,20 +182,18 @@ public final class LinCommandImpl implements LinCommand, LocaleAware, PrefixAwar
     }
 
 
-    // 实际注册实现，返回 Registration 以便后续 .labels() 注入 i18n
-    private Registration doRegister(String spec, CommandExecutor exec, Permission perm, ExecTarget target, Desc desc) {
+    private Model.Node doRegister(String spec, CommandExecutor exec, Permission perm, ExecTarget target) {
         List<String> permissions = perm == null || perm.node() == null || perm.node().isBlank()
                 ? List.of()
                 : List.of(perm.node().trim());
-        return doRegister(spec, exec, permissions, target, desc, List.of(), List.of());
+        return doRegister(spec, exec, permissions, target, List.of(), List.of());
     }
 
-    private synchronized Registration doRegister(
+    private synchronized Model.Node doRegister(
             String spec,
             CommandExecutor exec,
             List<String> permissions,
             ExecTarget target,
-            Desc desc,
             List<CommandSuccessHandler> successHandlers,
             List<CommandFailureHandler> failureHandlers
     ) {
@@ -295,14 +225,11 @@ public final class LinCommandImpl implements LinCommand, LocaleAware, PrefixAwar
         if (successHandlers != null) n.successHandlers.addAll(successHandlers);
         if (failureHandlers != null) n.failureHandlers.addAll(failureHandlers);
 
-        n.descI18n = (desc == null ? java.util.Map.of() : desc.i18n());
-
-        // 初次构建 usage；若后续调用 .labels()，会重建
         n.usage = buildUsage(n);
 
         nodes.add(n);
         signatures.put(signature, n);
-        return new Registration(this, n);
+        return n;
     }
 
     private void reportRegistrationFailure(String spec, IllegalArgumentException exception) {
@@ -890,11 +817,6 @@ public final class LinCommandImpl implements LinCommand, LocaleAware, PrefixAwar
     }
 
 
-    @Deprecated
-    public LinCommandImpl withlocale(LocaleTag loc) {
-        return withPreferredLocale(loc);
-    }
-
     // —— 工具 —— //
     private static boolean matchLiterals(List<String> lits, String label, String[] args) {
         if (lits.isEmpty()) return false;
@@ -932,17 +854,11 @@ public final class LinCommandImpl implements LinCommand, LocaleAware, PrefixAwar
 
         LocaleTag senderLoc = (this.locale == null ? LocaleTag.parse("zh_CN") : this.locale);
         String localeTag = senderLoc.tag();
-        String localeDash = localeTag.replace('_', '-');
-        String langOnly = localeTag.contains("_")
-                ? localeTag.substring(0, localeTag.indexOf('_'))
-                : (localeTag.contains("-") ? localeTag.substring(0, localeTag.indexOf('-')) : localeTag);
-
         for (int i = from; i < to; i++) {
             var n = visibleNodes.get(i);
             String usagePerSender = buildUsage(n);
             String desc = "";
 
-            // 1) 优先使用延迟描述（动态取值）
             LinCommand.I18nSupplier lazyDesc = descLazy.get(n);
             if (lazyDesc != null) {
                 try {
@@ -956,15 +872,6 @@ public final class LinCommandImpl implements LinCommand, LocaleAware, PrefixAwar
                 }
             }
 
-            // 2) 若没有延迟描述，则回退到静态 i18n 映射
-            if ((desc == null || desc.isBlank()) && n.descI18n != null && !n.descI18n.isEmpty()) {
-                desc = n.descI18n.get(localeTag);
-                if (desc == null) desc = n.descI18n.get(localeDash);
-                if (desc == null) desc = n.descI18n.get(langOnly);
-                if (desc == null) desc = n.descI18n.get("zh_CN");
-                if (desc == null) desc = n.descI18n.get("en_GB");
-                if (desc == null && !n.descI18n.isEmpty()) desc = n.descI18n.values().iterator().next();
-            }
             boolean targetAvailable = n.exec.target == ExecTarget.ALL
                     || bridge.checkTarget(sender, n.exec.target);
             String description = desc == null ? "" : desc;
@@ -1171,36 +1078,8 @@ public final class LinCommandImpl implements LinCommand, LocaleAware, PrefixAwar
             }
         }
 
-        Map<String, Map<String, String>> labels = paramI18n.get(node);
-        if (labels != null) {
-            String value = localizedLabel(labels.get(parameterName), localeTag);
-            if (value != null && !value.isBlank()) return value;
-        }
         if (parameter.desc != null && !parameter.desc.isBlank()) return parameter.desc;
         return parameterName;
-    }
-
-    private String localizedLabel(Map<String, String> labels, String localeTag) {
-        if (labels == null || labels.isEmpty()) return null;
-        String normalized = localeTag == null ? "zh_CN" : localeTag;
-        String dashed = normalized.replace('_', '-');
-        String language = normalized.contains("_")
-                ? normalized.substring(0, normalized.indexOf('_'))
-                : (normalized.contains("-")
-                ? normalized.substring(0, normalized.indexOf('-'))
-                : normalized);
-
-        String value = labels.get(normalized);
-        if (value == null) value = labels.get(dashed);
-        if (value == null) value = labels.get(language);
-        if (value == null) value = labels.get("zh_CN");
-        if (value == null) value = labels.get("en_GB");
-        if (value == null) value = labels.values().iterator().next();
-        return value;
-    }
-
-    public void rebuildUsage(Model.Node n) {
-        n.usage = buildUsage(n);
     }
 
 }

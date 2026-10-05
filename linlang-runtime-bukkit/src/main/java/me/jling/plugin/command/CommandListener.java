@@ -14,6 +14,7 @@ import core.linlang.audit.problem.BuiltinProblemCatalog;
 import me.jling.facade.BukkitFacadeImpl;
 import me.jling.runtime.BukkitRuntimeImpl;
 import org.bukkit.command.CommandSender;
+import org.bukkit.command.ConsoleCommandSender;
 import org.bukkit.plugin.Plugin;
 import org.bukkit.plugin.java.JavaPlugin;
 
@@ -425,10 +426,24 @@ public final class CommandListener {
     }
 
     private List<FileTarget> fileTargets() {
+        FileTarget runtimeTarget = new FileTarget(
+                runtimePlugin.getName(),
+                runtime.getBootstrap().linFile()
+        );
+        List<FileTarget> facadeTargets = runtime.listFacades().stream()
+                .map(facade -> new FileTarget(facade.owner().getName(), facade.linFile()))
+                .toList();
+        return mergeFileTargets(runtimeTarget, facadeTargets);
+    }
+
+    static List<FileTarget> mergeFileTargets(FileTarget runtimeTarget,
+                                             Iterable<FileTarget> facadeTargets) {
+        Objects.requireNonNull(runtimeTarget, "runtimeTarget");
+        Objects.requireNonNull(facadeTargets, "facadeTargets");
         TreeMap<String, FileTarget> targets = new TreeMap<>(String.CASE_INSENSITIVE_ORDER);
-        for (BukkitFacadeImpl facade : runtime.listFacades()) {
-            targets.putIfAbsent(facade.owner().getName(),
-                    new FileTarget(facade.owner().getName(), facade.linFile()));
+        targets.put(runtimeTarget.name(), runtimeTarget);
+        for (FileTarget target : facadeTargets) {
+            if (target != null) targets.putIfAbsent(target.name(), target);
         }
         return List.copyOf(targets.values());
     }
@@ -507,17 +522,25 @@ public final class CommandListener {
 
             @Override
             public List<String> complete(LinCommand.ParseCtx context, String prefix) {
-                String normalized = prefix == null ? "" : prefix.toLowerCase(Locale.ROOT);
-                return names.get().stream()
+                String entered = prefix == null ? "" : prefix;
+                String normalized = entered.toLowerCase(Locale.ROOT);
+                List<String> matches = names.get().stream()
                         .filter(Objects::nonNull)
                         .filter(name -> name.toLowerCase(Locale.ROOT).startsWith(normalized))
                         .sorted(String.CASE_INSENSITIVE_ORDER)
+                        .toList();
+                if (entered.isEmpty() || context == null
+                        || !(context.sender() instanceof ConsoleCommandSender)) {
+                    return matches;
+                }
+                return matches.stream()
+                        .map(name -> entered + name.substring(entered.length()))
                         .toList();
             }
         };
     }
 
-    private record FileTarget(String name, LinFile files) {
+    record FileTarget(String name, LinFile files) {
     }
 
     private record RepairResult(int config, int language) {

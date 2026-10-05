@@ -1,5 +1,6 @@
 package core.linlang.command.group;
 
+import api.linlang.command.CommandOptions;
 import api.linlang.command.LinCommand;
 import api.linlang.command.group.CommandFailureHandler;
 import api.linlang.command.group.CommandGroup;
@@ -111,31 +112,12 @@ public final class CommandGroupImpl implements CommandRoot {
     public CommandGroup register(
             String spec,
             LinCommand.CommandExecutor executor,
-            LinCommand.Permission permission,
-            LinCommand.ExecTarget target,
-            LinCommand.Desc description,
-            Map<String, Map<String, String>> labels
+            CommandOptions options
     ) {
-        GroupRegistration registration = registration(spec, permission);
+        CommandOptions value = Objects.requireNonNull(options, "options");
+        GroupRegistration registration = registration(spec, value.permission());
         owner.registerGrouped(
-                registration.spec(), executor, registration.permissions(), target, description, labels,
-                registration.successHandlers(), registration.failureHandlers()
-        );
-        return this;
-    }
-
-    @Override
-    public CommandGroup registerLazy(
-            String spec,
-            LinCommand.CommandExecutor executor,
-            LinCommand.Permission permission,
-            LinCommand.ExecTarget target,
-            LinCommand.I18nSupplier description,
-            Map<String, LinCommand.I18nSupplier> labels
-    ) {
-        GroupRegistration registration = registration(spec, permission);
-        owner.registerGroupedLazy(
-                registration.spec(), executor, registration.permissions(), target, description, labels,
+                registration.spec(), executor, registration.permissions(), value,
                 registration.successHandlers(), registration.failureHandlers()
         );
         return this;

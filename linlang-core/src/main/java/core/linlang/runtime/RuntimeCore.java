@@ -207,13 +207,6 @@ public final class RuntimeCore<P> implements AutoCloseable {
     }
 
     /**
-     * 创建绑定到运行时宿主的消息服务。
-     */
-    public LinMessenger createMessenger(LangServiceImpl lang) {
-        return createMessenger(runtimeHost, lang);
-    }
-
-    /**
      * 返回绑定指定 owner 的日志与审计入口。
      */
     public LinAudit auditFor(P owner) {
@@ -390,15 +383,29 @@ public final class RuntimeCore<P> implements AutoCloseable {
      * 重载运行时和全部门面；存在失败时向调用方返回汇总异常。
      */
     public void reload() {
-        Map<String, Throwable> failures = reloadFailures();
+        reload(null);
+    }
+
+    /**
+     * 重载运行时和全部门面，并在运行时配置重载后刷新派生策略。
+     */
+    public void reload(Runnable runtimePolicyRefresh) {
+        Map<String, Throwable> failures = reloadFailures(runtimePolicyRefresh);
         if (!failures.isEmpty()) throw new api.linlang.runtime.ReloadException(failures);
     }
 
     public int reloadAndCountFailures() {
-        return reloadFailures().size();
+        return reloadAndCountFailures(null);
     }
 
-    private synchronized Map<String, Throwable> reloadFailures() {
+    /**
+     * 执行带运行时策略刷新的软重载并返回失败数量。
+     */
+    public int reloadAndCountFailures(Runnable runtimePolicyRefresh) {
+        return reloadFailures(runtimePolicyRefresh).size();
+    }
+
+    private synchronized Map<String, Throwable> reloadFailures(Runnable runtimePolicyRefresh) {
         checkLifecycle();
         if (reloading) throw new IllegalStateException("Recursive runtime reload is not allowed");
         reloading = true;
@@ -406,6 +413,10 @@ public final class RuntimeCore<P> implements AutoCloseable {
         try {
             reloadStep(failures, "runtime:config", runtimeHost,
                     () -> { if (runtimeConfig != null) runtimeConfig.reload(); });
+            if (runtimeConfig != null && runtimePolicyRefresh != null
+                    && !failures.containsKey("runtime:config")) {
+                reloadStep(failures, "runtime:policy", runtimeHost, runtimePolicyRefresh);
+            }
             reloadStep(failures, "runtime:language", runtimeHost,
                     () -> { if (runtimeLanguage != null) runtimeLanguage.reload(); });
             reloadStep(failures, "runtime:audit", runtimeHost, () -> refreshAudit(runtimeHost));

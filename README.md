@@ -27,7 +27,7 @@ depend:
 <dependency>
     <groupId>me.jling</groupId>
     <artifactId>linlang-api</artifactId>
-    <version>2.6.1.0</version>
+    <version>3.0.0.0</version>
     <scope>provided</scope>
 </dependency>
 ```

@@ -4,13 +4,11 @@ import adapter.linlang.bukkit.platform.BukkitPlatformAdapter;
 import api.linlang.audit.LinAudit;
 import api.linlang.audit.LinLog;
 import api.linlang.command.LinCommand;
-import api.linlang.command.message.CommandMessages;
 import api.linlang.file.database.DataService;
 import api.linlang.messenger.LinMessenger;
 import api.linlang.view.LinView;
 import core.linlang.event.api.LinEventBus;
 import core.linlang.audit.problem.BuiltinProblemCatalog;
-import core.linlang.event.dispatcher.EventDispatcher;
 import core.linlang.file.impl.ConfigServiceImpl;
 import core.linlang.file.impl.LangServiceImpl;
 import core.linlang.platform.PlatformAdapter;
@@ -28,7 +26,7 @@ import java.util.function.Function;
 /**
  * Bukkit 运行时薄壳：把平台无关逻辑下沉到 core 的 {@link RuntimeCore}。
  * <p>
- * 该类只保留 Bukkit 模块仍然需要的 API 形状（供 Bootstrap/旧 Facade 调用），
+ * 该类只保留 Bukkit 模块需要的平台装配入口，
  * 内部全部委托给 core。
  */
 public final class BukkitRuntimeImpl implements AutoCloseable {
@@ -36,7 +34,7 @@ public final class BukkitRuntimeImpl implements AutoCloseable {
     /** 运行时插件实例（Bukkit） */
     private final JavaPlugin runtimePlugin;
 
-    /** Bukkit 引导器（保留引用，便于旧逻辑仍能工作） */
+    /** Bukkit 引导器 */
     @Getter
     private final LinlangBukkitBootstrap bootstrap;
 
@@ -47,15 +45,7 @@ public final class BukkitRuntimeImpl implements AutoCloseable {
     @Getter
     private final RuntimeCore<JavaPlugin> core;
 
-    /** 平台事件调度器（兼容旧 getter） */
-    @Getter
-    private final EventDispatcher dispatcher;
-
-    /** 运行时事件总线（兼容旧 getter） */
-    @Getter
-    private final LinEventBus runtimeBus;
-
-    /** 旧 Facade 注册表（为了不立刻改 Facade 类型；下一步再收敛到 core） */
+    /** Bukkit Facade 注册表 */
     private final LinkedHashSet<BukkitFacadeImpl> facades = new LinkedHashSet<>();
 
     /**
@@ -67,9 +57,7 @@ public final class BukkitRuntimeImpl implements AutoCloseable {
         this.bootstrap = bootstrap;
 
         this.adapter = new BukkitPlatformAdapter();
-        this.dispatcher = this.adapter.dispatcher(plugin);
         this.core = new RuntimeCore<>(plugin, this.adapter);
-        this.runtimeBus = this.core.runtimeBus();
     }
 
     /**
@@ -148,27 +136,6 @@ public final class BukkitRuntimeImpl implements AutoCloseable {
     }
 
     /**
-     * 基于指定语言服务创建命令消息路由。
-     * <p>locale 参数当前仅用于兼容旧签名；实际由 lang 的当前语言决定。</p>
-     */
-    public CommandMessages createCommandMessages(LangServiceImpl lang, String locale) {
-        return core.createCommandMessages(lang);
-    }
-
-    /**
-     * 为指定插件创建命令系统实例并配置解析器与默认语言。
-     * <p>兼容旧调用：内部会使用 owner 自己的 LangService 来绑定命令消息。</p>
-     */
-    public LinCommand createCommands(JavaPlugin owner, String locale, Function<JavaPlugin, String> prefixFn) {
-        String useLocale = (locale == null || locale.isBlank()) ? "zh_CN" : locale.trim();
-        Function<JavaPlugin, String> fn = (prefixFn != null) ? prefixFn : adapter::defaultTotalPrefix;
-
-        // 旧逻辑：命令消息使用单独的 lang（owner 的）
-        LangServiceImpl lang = createLangService(owner);
-        return core.createCommands(owner, lang, useLocale, () -> fn.apply(owner));
-    }
-
-    /**
      * 使用既有语言服务创建命令系统。
      *
      * @param owner 命令所属插件
@@ -182,13 +149,6 @@ public final class BukkitRuntimeImpl implements AutoCloseable {
         String useLocale = (locale == null || locale.isBlank()) ? "zh_CN" : locale.trim();
         Function<JavaPlugin, String> fn = (prefixFn != null) ? prefixFn : adapter::defaultTotalPrefix;
         return core.createCommands(owner, lang, useLocale, () -> fn.apply(owner));
-    }
-
-    /**
-     * 基于指定语言服务创建消息发送器。
-     */
-    public LinMessenger createMessenger(LangServiceImpl lang) {
-        return core.createMessenger(lang);
     }
 
     /**
@@ -247,7 +207,7 @@ public final class BukkitRuntimeImpl implements AutoCloseable {
      */
     public void reload() {
         core.attachRuntimeFileServices(bootstrap.getConfig(), bootstrap.getLanguage());
-        core.reload();
+        core.reload(bootstrap::refreshRuntimePolicies);
         bootstrap.refreshRuntimeCommandLanguage();
     }
 
@@ -256,7 +216,7 @@ public final class BukkitRuntimeImpl implements AutoCloseable {
      */
     public int reloadAndCountFailures() {
         core.attachRuntimeFileServices(bootstrap.getConfig(), bootstrap.getLanguage());
-        int failures = core.reloadAndCountFailures();
+        int failures = core.reloadAndCountFailures(bootstrap::refreshRuntimePolicies);
         try {
             bootstrap.refreshRuntimeCommandLanguage();
         } catch (RuntimeException exception) {
