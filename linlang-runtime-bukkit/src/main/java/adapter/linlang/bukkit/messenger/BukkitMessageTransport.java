@@ -49,9 +49,9 @@ public final class BukkitMessageTransport implements MessageTransport {
 
     private void chat(CommandSender sender, LinText content) {
         if (sender instanceof Player player) {
-            player.spigot().sendMessage(renderer.render(content.source()));
+            player.spigot().sendMessage(renderer.render(content));
         } else {
-            sender.sendMessage(renderer.legacy(content.source()));
+            sender.sendMessage(renderer.legacy(content));
         }
     }
 
@@ -59,7 +59,7 @@ public final class BukkitMessageTransport implements MessageTransport {
         if (sender instanceof Player player) {
             player.spigot().sendMessage(
                     ChatMessageType.ACTION_BAR,
-                    renderer.render(message.content().source())
+                    renderer.render(message.content())
             );
             return;
         }
@@ -69,17 +69,15 @@ public final class BukkitMessageTransport implements MessageTransport {
     private void title(CommandSender sender, TransportMessage message) {
         if (sender instanceof Player player) {
             player.sendTitle(
-                    renderer.legacy(message.content().source()),
-                    renderer.legacy(message.subtitle().source()),
+                    renderer.legacy(message.content()),
+                    renderer.legacy(message.subtitle()),
                     message.titleTimes().fadeIn(),
                     message.titleTimes().stay(),
                     message.titleTimes().fadeOut()
             );
             return;
         }
-        LinText fallback = LinText.of(
-                message.content().source() + "[] | []" + message.subtitle().source()
-        );
+        LinText fallback = LinText.join(message.content(), LinText.plain(" | "), message.subtitle());
         unsupported(sender, message, fallback);
     }
 

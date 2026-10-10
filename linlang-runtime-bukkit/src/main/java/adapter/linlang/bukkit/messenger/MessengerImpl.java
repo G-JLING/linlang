@@ -63,7 +63,12 @@ public final class MessengerImpl implements LinMessenger, PrefixAware {
     public void send(Object recipient, LinMessage message) {
         final TransportMessage normalized;
         try {
-            normalized = normalizer.normalize(message, prefix());
+            normalized = normalizer.normalize(message, prefix(), message.locale());
+        } catch (IllegalArgumentException exception) {
+            audit.problem().report(BuiltinProblemCatalog.TEXT_PARSE_FAILED, exception,
+                    "recipient", recipient == null ? "null" : recipient.getClass().getName(),
+                    "operation", "normalize");
+            return;
         } catch (RuntimeException exception) {
             audit.problem().report(BuiltinProblemCatalog.MESSAGE_DELIVERY_FAILED, exception,
                     "recipient", recipient == null ? "null" : recipient.getClass().getName(),

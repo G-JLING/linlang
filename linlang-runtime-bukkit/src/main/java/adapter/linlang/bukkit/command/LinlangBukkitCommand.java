@@ -5,12 +5,14 @@ package adapter.linlang.bukkit.command;
 import adapter.linlang.bukkit.command.interact.InteractionHub;
 import adapter.linlang.bukkit.command.interact.InteractiveResolvers;
 import adapter.linlang.bukkit.command.resolvers.BukkitResolvers;
+import adapter.linlang.bukkit.messenger.BukkitTextRenderer;
 import api.linlang.audit.LinAudit;
 import api.linlang.audit.LinLog;
 import api.linlang.command.CommandOptions;
 import api.linlang.command.LinCommand;
 import api.linlang.command.group.CommandRoot;
 import api.linlang.command.message.CommandMessages;
+import api.linlang.text.LinText;
 import core.linlang.command.impl.LinCommandImpl;
 import core.linlang.command.parser.CommandSpecException;
 import core.linlang.command.parser.SpecParser;
@@ -39,6 +41,7 @@ public final class LinlangBukkitCommand implements LinCommand, CommandExecutor, 
     private TabCompleter previousCompleter;
     private InteractionHub hub;
     private CommandMessages messages = CommandMessages.defaults();
+    private final BukkitTextRenderer textRenderer = new BukkitTextRenderer();
     private final Map<UUID, java.util.List<BaseComponent>> pendingPlayerLine = new HashMap<>();
     private final Map<Object, StringBuilder> pendingConsoleLine = new IdentityHashMap<>();
 
@@ -119,7 +122,14 @@ public final class LinlangBukkitCommand implements LinCommand, CommandExecutor, 
 
     // 平台桥
     private final LinCommandImpl.PlatformBridge bridge = new LinCommandImpl.PlatformBridge() {
-        public void msg(Object sender, String text){ ((org.bukkit.command.CommandSender)sender).sendMessage(colorize(text)); }
+        public void msg(Object sender, String text){ rich(sender, LinText.parse(text)); }
+        public void rich(Object sender, LinText text) {
+            if (sender instanceof Player player) {
+                player.spigot().sendMessage(textRenderer.render(text));
+            } else {
+                ((org.bukkit.command.CommandSender) sender).sendMessage(textRenderer.legacy(text));
+            }
+        }
         public boolean hasPermission(Object sender, String node){ return node==null || node.isBlank() || ((org.bukkit.command.CommandSender)sender).hasPermission(node); }
         public boolean checkTarget(Object sender, ExecTarget target) {
             if (target == ExecTarget.ALL) return true;
@@ -137,10 +147,10 @@ public final class LinlangBukkitCommand implements LinCommand, CommandExecutor, 
         }
         public void clickable(Object sender, String text, String hover, String command, boolean append){
             if (sender instanceof Player p) {
-                String hv = colorize(hover == null ? "" : hover);
-                BaseComponent[] comps = TextComponent.fromLegacyText(colorize(text));
+                BaseComponent[] hv = textRenderer.render(hover == null ? "" : hover);
+                BaseComponent[] comps = textRenderer.render(text);
                 ClickEvent ce = new ClickEvent(ClickEvent.Action.RUN_COMMAND, command);
-                HoverEvent he = new HoverEvent(HoverEvent.Action.SHOW_TEXT, TextComponent.fromLegacyText(hv));
+                HoverEvent he = new HoverEvent(HoverEvent.Action.SHOW_TEXT, hv);
                 for (BaseComponent c : comps) { c.setClickEvent(ce); c.setHoverEvent(he); }
 
                 UUID id = p.getUniqueId();
@@ -181,12 +191,11 @@ public final class LinlangBukkitCommand implements LinCommand, CommandExecutor, 
                 if (pending != null && !pending.isEmpty()) buf.addAll(pending);
 
                 for (int i = 0; i < texts.length; i++) {
-                    String t  = colorize(texts[i] != null ? texts[i] : "");
-                    String hv = colorize((hovers != null && i < hovers.length && hovers[i] != null) ? hovers[i] : "");
+                    String t  = texts[i] != null ? texts[i] : "";
+                    String hv = (hovers != null && i < hovers.length && hovers[i] != null) ? hovers[i] : "";
                     String cmd= (commands != null && i < commands.length && commands[i] != null) ? commands[i] : "";
 
-                    net.md_5.bungee.api.chat.BaseComponent[] comps =
-                            net.md_5.bungee.api.chat.TextComponent.fromLegacyText(t);
+                    net.md_5.bungee.api.chat.BaseComponent[] comps = textRenderer.render(t);
 
                     if (!cmd.isEmpty()) {
                         var ce = new net.md_5.bungee.api.chat.ClickEvent(
@@ -196,7 +205,7 @@ public final class LinlangBukkitCommand implements LinCommand, CommandExecutor, 
                     if (!hv.isEmpty()) {
                         var he = new net.md_5.bungee.api.chat.HoverEvent(
                                 net.md_5.bungee.api.chat.HoverEvent.Action.SHOW_TEXT,
-                                net.md_5.bungee.api.chat.TextComponent.fromLegacyText(hv));
+                                textRenderer.render(hv));
                         for (var c : comps) c.setHoverEvent(he);
                     }
                     java.util.Collections.addAll(buf, comps);

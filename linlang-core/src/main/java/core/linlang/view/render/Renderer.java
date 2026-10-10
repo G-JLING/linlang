@@ -6,6 +6,8 @@ import core.linlang.view.compile.CompiledView;
 import core.linlang.view.session.DefaultGuiSession;
 import core.linlang.view.spec.*;
 import core.linlang.file.text.ConfigTextResolver;
+import api.linlang.text.LinText;
+import api.linlang.text.TextArgs;
 
 import java.util.*;
 
@@ -37,7 +39,7 @@ public final class Renderer {
         Map<String, Object> vars = baseVars(session, platformVars);
 
         // title
-        String title = apply(cv.spec().titleSource() == null ? cv.spec().title()
+        String title = renderText(cv.spec().titleSource() == null ? cv.spec().title()
                 : texts.text(cv.spec().titleSource()), vars);
 
         // 1) render static defaults
@@ -157,11 +159,11 @@ public final class Renderer {
     private IconSpec renderIcon(IconSpec icon, Map<String, Object> vars) {
         if (icon == null) return null;
         String key = apply(icon.key(), vars);
-        String name = apply(icon.nameSource() == null ? icon.name() : texts.text(icon.nameSource()), vars);
+        String name = renderText(icon.nameSource() == null ? icon.name() : texts.text(icon.nameSource()), vars);
 
         List<String> lore = new ArrayList<>();
         List<String> sourceLines = icon.loreSource() == null ? icon.lore() : texts.lines(icon.loreSource());
-        for (String s : sourceLines) lore.add(apply(s, vars));
+        for (String s : sourceLines) lore.add(renderText(s, vars));
 
         @SuppressWarnings("unchecked")
         Map<String, Object> meta = (Map<String, Object>) applyValue(icon.meta(), vars);
@@ -181,11 +183,16 @@ public final class Renderer {
         if (w == null || w.icon() == null) return null;
         var i = w.icon();
         String key = apply(i.key(), vars);
-        String name = apply(i.name(), vars);
-        List<String> lore = i.lore() == null ? List.of() : i.lore().stream().map(s -> apply(s, vars)).toList();
+        String name = renderText(i.name(), vars);
+        List<String> lore = i.lore() == null ? List.of() : i.lore().stream()
+                .map(s -> renderText(s, vars)).toList();
         @SuppressWarnings("unchecked")
         Map<String, Object> meta = (Map<String, Object>) applyValue(i.meta(), vars);
         return new IconSpec(i.kind(), key, i.amount(), name, lore, meta);
+    }
+
+    private static String renderText(String source, Map<String, Object> vars) {
+        return LinText.parse(source).bind(TextArgs.from(vars)).toLegacyText();
     }
 
     private static ActionSpec toActionSpec(api.linlang.view.model.GuiAction a, Map<String, Object> vars) {

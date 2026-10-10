@@ -5,7 +5,7 @@ import api.linlang.messenger.MessageChannel;
 import api.linlang.messenger.PrefixMode;
 import api.linlang.messenger.transport.TransportMessage;
 import api.linlang.text.LinText;
-import core.linlang.text.TextTemplate;
+import api.linlang.text.TextContext;
 
 import java.util.Objects;
 
@@ -21,21 +21,22 @@ public final class MessageNormalizer {
      * @param prefix 当前消息前缀
      * @return 规范化传输消息
      */
-    public TransportMessage normalize(LinMessage message, String prefix) {
+    public TransportMessage normalize(LinMessage message, String prefix, String locale) {
         Objects.requireNonNull(message, "message");
-        String content = TextTemplate.bind(message.content().resolve(), message.args());
+        TextContext context = new TextContext(locale, message.args());
+        LinText content = message.content().resolveText(context);
         if (includesPrefix(message)) {
             String resolvedPrefix = Objects.requireNonNullElse(prefix, "");
-            if (!resolvedPrefix.isEmpty()) content = resolvedPrefix + "[]" + content;
+            if (!resolvedPrefix.isEmpty()) content = LinText.parse(resolvedPrefix).append(content);
         }
 
         LinText subtitle = null;
         if (message.subtitle() != null) {
-            subtitle = LinText.of(TextTemplate.bind(message.subtitle().resolve(), message.args()));
+            subtitle = message.subtitle().resolveText(context);
         }
         return new TransportMessage(
                 message.channel(),
-                LinText.of(content),
+                content,
                 subtitle,
                 message.titleTimes(),
                 message.fallbackPolicy()

@@ -15,6 +15,7 @@ import api.linlang.file.file.annotations.LangPack;
 import api.linlang.file.file.annotations.NoEmit;
 import api.linlang.file.file.tool.LocaleId;
 import api.linlang.file.file.path.PathResolver;
+import api.linlang.text.LinText;
 import core.linlang.audit.log.BuiltinLog;
 import core.linlang.audit.problem.BuiltinProblemCatalog;
 import core.linlang.file.runtime.TreeMapper;
@@ -729,6 +730,17 @@ public final class LangServiceImpl implements LangService, LocaleAware {
                                                Map<String, Object> document) {
         Map<String, Object> snapshot = immutableDeepCopy(document);
         Map<String, String> values = immutableTextSnapshot(snapshot);
+        values.forEach((key, value) -> {
+            if (!value.contains("[@")) return;
+            try {
+                LinText.parse(value);
+            } catch (IllegalArgumentException exception) {
+                audit.problem().report(BuiltinProblemCatalog.TEXT_PARSE_FAILED, exception,
+                        "file", meta.filePath,
+                        "locale", locale,
+                        "key", key);
+            }
+        });
         meta.documents.put(locale, snapshot);
         meta.texts.put(locale, values);
         cache.compute(locale, (key, current) -> {

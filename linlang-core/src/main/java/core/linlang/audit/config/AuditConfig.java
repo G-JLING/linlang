@@ -7,7 +7,6 @@ import api.linlang.file.file.annotations.NamingStyle;
 
 /**
  * 琳琅日志与审计配置。
- * <p>建议：对每个插件单独绑定一份 AuditConfig，这样每个插件有自己的日志级别和输出路径。</p>
  */
 @ConfigFile(name = "audit", path = "linlang/linlog", format = FileType.YAML)
 @NamingStyle(NamingStyle.Style.KEBAB)
