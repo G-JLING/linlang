@@ -4,12 +4,15 @@ import api.linlang.audit.LinLog;
 import api.linlang.banner.LinBanner;
 import api.linlang.runtime.Lin;
 import api.linlang.runtime.Linlang;
+import adapter.linlang.bukkit.text.BukkitGameTextListener;
 import core.linlang.audit.log.BuiltinLog;
 import core.linlang.audit.problem.BuiltinProblemCatalog;
 import me.jling.bukkit.LinlangBukkitBootstrap;
 import me.jling.runtime.BukkitRuntimeImpl;
 import org.bukkit.plugin.PluginDescriptionFile;
 import org.bukkit.plugin.java.JavaPlugin;
+import org.bukkit.event.HandlerList;
+import org.bukkit.event.Listener;
 
 import org.bukkit.plugin.ServicePriority;
 
@@ -19,6 +22,7 @@ public class BukkitLoader extends JavaPlugin {
 
     private LinlangBukkitBootstrap bootstrap;
     private BukkitRuntimeImpl runtime;
+    private Listener gameTextListener;
 
     @Override
     public void onEnable() {
@@ -27,6 +31,8 @@ public class BukkitLoader extends JavaPlugin {
             // 初始化运行时装配器
             this.bootstrap = LinlangBukkitBootstrap.install(this);
             this.runtime = bootstrap.getRuntime();
+            this.gameTextListener = new BukkitGameTextListener(bootstrap::gameTextSettings);
+            getServer().getPluginManager().registerEvents(gameTextListener, this);
 
             // 重复实例处理
             var sm = getServer().getServicesManager();
@@ -73,6 +79,10 @@ public class BukkitLoader extends JavaPlugin {
     @Override
     public void onDisable() {
         LinLog.info(BuiltinLog.RUNTIME_DISABLING);
+        if (gameTextListener != null) {
+            HandlerList.unregisterAll(gameTextListener);
+            gameTextListener = null;
+        }
         try {
             getServer().getServicesManager().unregisterAll(this);
         } catch (RuntimeException exception) {

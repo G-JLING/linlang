@@ -24,6 +24,7 @@ import org.bukkit.Bukkit;
 import org.bukkit.event.HandlerList;
 import org.bukkit.event.Listener;
 import org.bukkit.plugin.java.JavaPlugin;
+import me.jling.plugin.config.RuntimeConfig;
 
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -36,6 +37,11 @@ import java.util.function.Supplier;
 public final class BukkitPlatformAdapter implements PlatformAdapter<JavaPlugin> {
 
     private final Map<JavaPlugin, Listener> viewListeners = new ConcurrentHashMap<>();
+    private volatile Supplier<RuntimeConfig.GameText> gameTextSettings = RuntimeConfig.GameText::new;
+
+    public void gameTextSettings(Supplier<RuntimeConfig.GameText> settings) {
+        this.gameTextSettings = java.util.Objects.requireNonNull(settings, "settings");
+    }
 
     @Override
     public EventDispatcher dispatcher(JavaPlugin runtimeHost) {
@@ -62,7 +68,7 @@ public final class BukkitPlatformAdapter implements PlatformAdapter<JavaPlugin> 
 
     @Override
     public LinMessenger createMessenger(JavaPlugin owner, LangServiceImpl lang) {
-        return new MessengerImpl(owner, lang);
+        return new MessengerImpl(owner, lang, gameTextSettings);
     }
 
     @Override

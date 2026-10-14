@@ -153,6 +153,11 @@ public final class CommandListener {
                     BukkitFacadeImpl target = findFacade(sender, ctx.get("bukkit"));
                     if (target == null) return;
 
+                    if (!target.canRestart()) {
+                        send(sender, messenger, text.restart.unavailable, "name", target.owner().getName());
+                        return;
+                    }
+
                     try {
                         target.restart();
                         send(sender, messenger, text.restart.success, "name", target.owner().getName());
@@ -300,17 +305,32 @@ public final class CommandListener {
                 "linlang restart-all",
                 ctx -> {
                     CommandSender sender = (CommandSender) ctx.sender();
-                    int total = runtime.listFacades().size();
+                    Set<BukkitFacadeImpl> facades = runtime.listFacades();
+                    List<String> skippedNames = facades.stream()
+                            .filter(facade -> !facade.canRestart())
+                            .map(facade -> facade.owner().getName())
+                            .toList();
+                    long eligible = facades.stream().filter(BukkitFacadeImpl::canRestart).count();
+                    long skipped = skippedNames.size();
                     int success = runtime.restart();
+                    long failed = eligible - success;
 
                     send(sender, messenger, text.restartAll.result,
                             "success", success,
-                            "total", total);
+                            "total", facades.size(),
+                            "skipped", skipped,
+                            "failed", failed);
+                    if (!skippedNames.isEmpty()) {
+                        send(sender, messenger, text.restartAll.skipped,
+                                "names", String.join(", ", skippedNames));
+                    }
                     runtime.audit().record(AuditEvent.builder("runtime.facade.restart-all")
                             .actor(actor(sender))
-                            .outcome(success == total ? AuditOutcome.SUCCESS : AuditOutcome.FAILURE)
+                            .outcome(failed == 0 ? AuditOutcome.SUCCESS : AuditOutcome.FAILURE)
                             .field("success", success)
-                            .field("total", total)
+                            .field("total", facades.size())
+                            .field("skipped", skipped)
+                            .field("failed", failed)
                             .build());
                 },
                 options()

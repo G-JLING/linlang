@@ -26,6 +26,7 @@ restart:
   candidate: "&7  - &f{name}"
   not-found: " &c未找到名称为 &f{name} &c的已注册插件。"
   success: " &a已重建插件 &f{name} &a的琳琅实例。"
+  unavailable: " &e插件 &f{name} &e未注册 onRebuild，未改变其服务。"
   failed: " &c重建失败，问题代码：&f{code}"
 
 reload-plugin:
@@ -41,7 +42,8 @@ reload-all:
 
 restart-all:
   description: "重建所有已注册插件的琳琅服务"
-  result: " &7已尝试对所有插件执行重建：成功 &f{success} &7/ &f{total}&7。"
+  result: " &7重建完成：成功 &f{success} &7个，未注册 onRebuild 而跳过 &f{skipped} &7个，失败 &f{failed} &7个。"
+  skipped: " &e未注册 onRebuild 而跳过：&f{names}"
 
 file-repair:
   description: "修复指定插件托管文件中的缺失键"

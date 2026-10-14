@@ -17,3 +17,15 @@ permissions:
   linlangruntimebukkit.admin:
     description: Allows to use linlang runtime admin commands
     default: op
+  linlang.text.chat:
+    description: Allows advanced text in player chat
+    default: op
+  linlang.text.book:
+    description: Allows advanced text in edited book pages
+    default: op
+  linlang.text.anvil:
+    description: Allows advanced text in anvil item names
+    default: op
+  linlang.text.sign:
+    description: Allows advanced text on signs
+    default: op

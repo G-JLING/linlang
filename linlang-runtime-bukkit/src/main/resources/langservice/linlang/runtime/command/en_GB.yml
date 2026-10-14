@@ -26,6 +26,7 @@ restart:
   candidate: "&7  - &f{name}"
   not-found: " &cNo registered plugin named &f{name} &cwas found."
   success: " &aRebuilt the Linlang services of &f{name}&a."
+  unavailable: " &e{name} has not registered onRebuild; its services were not changed."
   failed: " &cRebuild failed. Problem code: &f{code}"
 
 reload-plugin:
@@ -41,7 +42,8 @@ reload-all:
 
 restart-all:
   description: "Rebuild all registered plugin facades"
-  result: " &7Rebuilt plugin facades: &f{success} &7/ &f{total}&7."
+  result: " &7Rebuild complete: &f{success} &7succeeded, &f{skipped} &7skipped (no onRebuild), &f{failed} &7failed."
+  skipped: " &eSkipped plugins without onRebuild: &f{names}"
 
 file-repair:
   description: "Repair missing keys in a registered plugin"

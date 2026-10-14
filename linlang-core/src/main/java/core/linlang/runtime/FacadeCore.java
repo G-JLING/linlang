@@ -331,6 +331,15 @@ public final class FacadeCore<P> implements Linlang, Linlang.Configurable, Linla
     }
 
     /**
+     * 返回当前门面是否已注册重建回调。
+     */
+    public boolean canRestart() {
+        synchronized (lifecycleLock) {
+            return !closed && rebuildHook != null;
+        }
+    }
+
+    /**
      * 显式重建门面服务；未提供恢复回调时拒绝破坏现有状态。
      */
     @Override

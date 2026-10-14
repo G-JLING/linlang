@@ -453,6 +453,7 @@ public final class RuntimeCore<P> implements AutoCloseable {
         int success = 0;
         try {
             for (FacadeCore<P> facade : listFacades()) {
+                if (!facade.canRestart()) continue;
                 try {
                     facade.restart();
                     success++;

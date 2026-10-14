@@ -55,6 +55,7 @@ public final class RuntimeCommandKeys {
         public LangText candidate = LangText.of("&7  - &f{name}");
         public LangText notFound = LangText.of(" &cNo registered plugin named &f{name} &cwas found.");
         public LangText success = LangText.of(" &aRebuilt the Linlang services of &f{name}&a.");
+        public LangText unavailable = LangText.of(" &e{name} has not registered onRebuild; its services were not changed.");
         public LangText failed = LangText.of(" &cRebuild failed. Problem code: &f{code}");
     }
 
@@ -73,7 +74,8 @@ public final class RuntimeCommandKeys {
 
     public static final class RestartAll {
         public LangText description = LangText.of("Rebuild all registered plugin facades");
-        public LangText result = LangText.of(" &7Rebuilt plugin facades: &f{success} &7/ &f{total}&7.");
+        public LangText result = LangText.of(" &7Rebuild complete: &f{success} &7succeeded, &f{skipped} &7skipped (no onRebuild), &f{failed} &7failed.");
+        public LangText skipped = LangText.of(" &eSkipped plugins without onRebuild: &f{names}");
     }
 
     public static final class FileRepair {

@@ -196,6 +196,13 @@ public final class BukkitFacadeImpl implements Linlang, Linlang.Configurable, Li
     }
 
     /**
+     * 返回插件是否已提供重建后的初始化回调。
+     */
+    public boolean canRestart() {
+        return core.canRestart();
+    }
+
+    /**
      * 返回门面是否已关闭。
      */
     public boolean isClosed() {
