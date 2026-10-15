@@ -12,6 +12,7 @@ import net.kyori.adventure.text.format.TextDecoration;
 import net.md_5.bungee.api.ChatColor;
 import net.md_5.bungee.api.chat.BaseComponent;
 import net.md_5.bungee.api.chat.TextComponent;
+import net.md_5.bungee.api.chat.hover.content.Text;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -87,7 +88,7 @@ public final class BukkitTextRenderer {
             append((Component) hover.value(), Style.empty(), lines);
             target.setHoverEvent(new net.md_5.bungee.api.chat.HoverEvent(
                     net.md_5.bungee.api.chat.HoverEvent.Action.SHOW_TEXT,
-                    lines.toArray(BaseComponent[]::new)));
+                    new Text(lines.toArray(BaseComponent[]::new))));
         }
     }
 

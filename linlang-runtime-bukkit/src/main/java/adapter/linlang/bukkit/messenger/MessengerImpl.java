@@ -5,19 +5,12 @@ import api.linlang.audit.LinLog;
 import api.linlang.file.file.LangService;
 import api.linlang.messenger.LinMessage;
 import api.linlang.messenger.LinMessenger;
-import api.linlang.messenger.MessageChannel;
 import api.linlang.messenger.transport.MessageTransport;
 import api.linlang.messenger.transport.TransportMessage;
-import api.linlang.text.LinText;
-import api.linlang.text.TextArgs;
-import api.linlang.text.TextSource;
 import core.linlang.audit.problem.BuiltinProblemCatalog;
 import core.linlang.messenger.MessageNormalizer;
 import core.linlang.total.prefix.PrefixAware;
-import me.jling.plugin.config.RuntimeConfig;
 import java.util.Comparator;
-import java.util.LinkedHashMap;
-import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.function.Supplier;
@@ -30,19 +23,12 @@ public final class MessengerImpl implements LinMessenger, PrefixAware {
     private final LinAudit audit;
     private final MessageNormalizer normalizer = new MessageNormalizer();
     private final CopyOnWriteArrayList<MessageTransport> transports = new CopyOnWriteArrayList<>();
-    private final Supplier<RuntimeConfig.GameText> gameTextSettings;
 
     private volatile String totalPrefix = "";
     private volatile Supplier<String> localPrefixSupplier = () -> "";
 
     public MessengerImpl(Object owner, LangService language) {
-        this(owner, language, RuntimeConfig.GameText::new);
-    }
-
-    public MessengerImpl(Object owner, LangService language,
-                         Supplier<RuntimeConfig.GameText> gameTextSettings) {
         this.audit = LinLog.forOwner(owner);
-        this.gameTextSettings = Objects.requireNonNull(gameTextSettings, "gameTextSettings");
         registerTransport(new BukkitMessageTransport(new BukkitTextRenderer()));
     }
 
@@ -77,7 +63,7 @@ public final class MessengerImpl implements LinMessenger, PrefixAware {
     public void send(Object recipient, LinMessage message) {
         final TransportMessage normalized;
         try {
-            normalized = normalizer.normalize(applyGameTextSettings(message), prefix(), message.locale());
+            normalized = normalizer.normalize(message, prefix(), message.locale());
         } catch (IllegalArgumentException exception) {
             audit.problem().report(BuiltinProblemCatalog.TEXT_PARSE_FAILED, exception,
                     "recipient", recipient == null ? "null" : recipient.getClass().getName(),
@@ -151,31 +137,6 @@ public final class MessengerImpl implements LinMessenger, PrefixAware {
         } catch (RuntimeException exception) {
             return transport.getClass().getName();
         }
-    }
-
-    private LinMessage applyGameTextSettings(LinMessage message) {
-        RuntimeConfig.GameText settings = gameTextSettings.get();
-        if (settings == null) return message;
-        if (message.channel() == MessageChannel.ACTION_BAR && !settings.actionBar) {
-            return LinMessage.actionBar(LinText.plain(message.content().resolve(message.locale())))
-                    .args(plainArgs(message)).prefix(message.prefixMode())
-                    .fallback(message.fallbackPolicy()).locale(message.locale());
-        }
-        if (message.channel() == MessageChannel.TITLE && !settings.title) {
-            return LinMessage.title(
-                            LinText.plain(message.content().resolve(message.locale())),
-                            LinText.plain(message.subtitle().resolve(message.locale())))
-                    .args(plainArgs(message)).prefix(message.prefixMode())
-                    .fallback(message.fallbackPolicy()).times(message.titleTimes()).locale(message.locale());
-        }
-        return message;
-    }
-
-    private static TextArgs plainArgs(LinMessage message) {
-        Map<String, Object> values = new LinkedHashMap<>();
-        message.args().values().forEach((name, value) -> values.put(name,
-                value instanceof TextSource source ? source.resolve(message.locale()) : value));
-        return TextArgs.from(values);
     }
 
     private String prefix() {

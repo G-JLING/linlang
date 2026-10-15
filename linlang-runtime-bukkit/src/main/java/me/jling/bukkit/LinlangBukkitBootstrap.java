@@ -268,7 +268,6 @@ public final class LinlangBukkitBootstrap implements AutoCloseable, Linlang, Lin
      */
     public void refreshRuntimePolicies() {
         runtime.autoRepairMissingKeys(runtimeConfig.fileService.autoRepairMissingKeys);
-        runtime.gameTextSettings(this::gameTextSettings);
         VersionCheck.compatibleVersionWarnings(
                 runtimeConfig.compatibility.warnOnCompatibleVersionDifference
         );

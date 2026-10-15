@@ -20,6 +20,9 @@ permissions:
   linlang.text.chat:
     description: Allows advanced text in player chat
     default: op
+  linlang.text.command:
+    description: Allows advanced text in supported text command arguments
+    default: op
   linlang.text.book:
     description: Allows advanced text in edited book pages
     default: op

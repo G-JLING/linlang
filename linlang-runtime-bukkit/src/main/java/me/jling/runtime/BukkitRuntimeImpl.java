@@ -17,13 +17,11 @@ import lombok.Getter;
 import me.jling.bukkit.LinlangBukkitBootstrap;
 import me.jling.facade.BukkitFacadeImpl;
 import org.bukkit.plugin.java.JavaPlugin;
-import me.jling.plugin.config.RuntimeConfig;
 
 import java.util.Collections;
 import java.util.LinkedHashSet;
 import java.util.Set;
 import java.util.function.Function;
-import java.util.function.Supplier;
 
 /**
  * Bukkit 运行时薄壳：把平台无关逻辑下沉到 core 的 {@link RuntimeCore}。
@@ -128,10 +126,6 @@ public final class BukkitRuntimeImpl implements AutoCloseable {
      */
     public void autoRepairMissingKeys(boolean enabled) {
         core.autoRepairMissingKeys(enabled);
-    }
-
-    public void gameTextSettings(Supplier<RuntimeConfig.GameText> settings) {
-        ((BukkitPlatformAdapter) adapter).gameTextSettings(settings);
     }
 
     /**
