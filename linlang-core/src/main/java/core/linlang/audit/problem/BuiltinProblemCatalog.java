@@ -79,6 +79,7 @@ public final class BuiltinProblemCatalog {
     public static final String EVENT_LISTENER_FAILED = "LIN-EVENT-LISTENER-FAIL";
     public static final String TEXT_SOURCE_TOO_LONG = "LIN-TEXT-SOURCE-TOO-LONG";
     public static final String TEXT_PARSE_FAILED = "LIN-TEXT-PARSE-FAIL";
+    public static final String GAME_TEXT_RENDER_FAILED = "LIN-TEXT-GAME-RENDER-FAIL";
     public static final String YAML_INITIALIZATION_FAILED = "LIN-YAML-INIT-FAIL";
     public static final String MESSAGE_PREFIX_RESOLVE_FAILED = "LIN-MESSAGE-PREFIX-RESOLVE-FAIL";
     public static final String MESSAGE_DELIVERY_FAILED = "LIN-MESSAGE-DELIVERY-FAIL";
@@ -333,6 +334,9 @@ public final class BuiltinProblemCatalog {
         add(values, TEXT_PARSE_FAILED, "Text",
                 "高级字符串描述符无法解析。",
                 "请根据文件、键名和错误位置检查描述符语法。");
+        add(values, GAME_TEXT_RENDER_FAILED, "Text",
+                "游戏文本无法通过当前平台接口渲染或保存。",
+                "请根据 operation 与 event 检查平台版本、文本来源和其他插件的修改。");
         add(values, YAML_INITIALIZATION_FAILED, "YAML",
                 "SnakeYAML 无法加载或初始化。",
                 "请检查 SnakeYAML 依赖是否存在，并确认版本与当前 Runtime 兼容。");

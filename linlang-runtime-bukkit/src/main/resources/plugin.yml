@@ -32,3 +32,33 @@ permissions:
   linlang.text.sign:
     description: Allows advanced text on signs
     default: op
+  linlang.text.join:
+    description: Allows advanced text in the player's join message
+    default: op
+  linlang.text.quit:
+    description: Allows advanced text in the player's quit message
+    default: op
+  linlang.text.death:
+    description: Allows advanced text in the player's death message
+    default: op
+  linlang.text.advancement:
+    description: Allows advanced text in the player's advancement announcement
+    default: op
+  linlang.text.kick:
+    description: Allows advanced text in the player's kick messages
+    default: op
+  linlang.text.broadcast:
+    description: Allows rendering trusted server broadcasts
+    default: op
+  linlang.text.motd:
+    description: Allows rendering trusted server list MOTD text
+    default: op
+  linlang.text.item:
+    description: Allows rendering item names and lore
+    default: op
+  linlang.text.entity:
+    description: Allows rendering entity custom names
+    default: op
+  linlang.text.text-display:
+    description: Allows rendering TextDisplay text on supported server versions
+    default: op

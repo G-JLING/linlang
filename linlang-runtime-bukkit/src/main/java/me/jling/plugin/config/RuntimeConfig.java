@@ -24,18 +24,33 @@ public final class RuntimeConfig {
     public static final class GameText {
         @Comment({
                 "启用后，具备 linlang.text.chat 权限的玩家可在聊天中使用点击、悬浮等交互描述符。",
-                "交互消息会接管 Bukkit 聊天事件并以组件重新投递；可能绕过其他插件的聊天签名、日志或后续处理。",
-                "普通颜色消息仍由原聊天事件发送。请确认服务器的聊天管理规则后再开启。"
+                "Paper 优先使用组件聊天事件；Bukkit 对组件消息接管投递，可能影响聊天签名与日志。"
         })
         public volatile boolean chat = false;
         @Comment({
-                "启用后，原版 /say 的高级字符串由琳琅接管并以组件广播。",
-                "这会绕过原命令的执行、签名、审计及其他插件对该命令的处理；请确认风险后再开启。",
-                "其他支持的文本命令仅改写消息参数，不保证目标命令保留颜色或交互效果。"
+                "Paper 提供命令装饰事件时直接修改原生消息组件；其他平台接管原版 /say 并以组件广播。",
+                "Bukkit 接管会绕过原命令的执行、签名、审计及其他插件对该命令的处理；请确认风险后再开启。",
+                "兼容路径中的其他文本命令仅改写消息参数，不保证保留颜色或交互效果。"
         })
         public volatile boolean command = false;
         public volatile boolean book = false;
         public volatile boolean anvil = false;
         public volatile boolean sign = false;
+        public volatile boolean join = false;
+        public volatile boolean quit = false;
+        public volatile boolean death = false;
+        public volatile boolean advancement = false;
+        public volatile boolean kick = false;
+        public volatile boolean broadcast = false;
+        public volatile boolean motd = false;
+        @Comment("在物品打开、拾取和编辑后解析名称与 Lore；实际修改物品并保存原始文本。")
+        public volatile boolean item = false;
+        public volatile boolean entity = false;
+        public volatile boolean textDisplay = false;
+        @Comment({
+                "允许解析没有玩家来源的广播、MOTD、实体生成与区块加载文本。",
+                "仍须开启对应位置开关，且控制台须拥有该位置的 linlang.text.* 权限。"
+        })
+        public volatile boolean allowServerSources = false;
     }
 }

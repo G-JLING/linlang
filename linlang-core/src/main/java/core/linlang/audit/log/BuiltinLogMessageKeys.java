@@ -18,6 +18,7 @@ public final class BuiltinLogMessageKeys {
 
     public static final class LinRuntime {
         public String loading = "Linlang 正在加载";
+        public String platform = "Linlang running on {platform} server";
         public String enabled =
                 "Linlang 运行时已启用，耗时 {elapsed}ms。API={api}, Runtime={runtime}, Plugin={plugin}";
         public String disabling = "Linlang 运行时正在关闭";

@@ -1,4 +1,5 @@
 lin-runtime:
+  platform: "Linlang running on {platform} server"
   loading: "Linlang 正在加载"
   enabled: "Linlang 运行时已启用，耗时 {elapsed}ms。API={api}, Runtime={runtime}, Plugin={plugin}"
   disabling: "Linlang 运行时正在关闭"

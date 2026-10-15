@@ -24,8 +24,12 @@ import java.util.Locale;
 public final class BukkitTextRenderer {
 
     public BaseComponent[] render(LinText text) {
+        return render(text.component());
+    }
+
+    public BaseComponent[] render(Component component) {
         List<BaseComponent> output = new ArrayList<>();
-        append(text.component(), Style.empty(), output);
+        append(component, Style.empty(), output);
         return output.toArray(BaseComponent[]::new);
     }
 
@@ -49,7 +53,9 @@ public final class BukkitTextRenderer {
         } else if (component instanceof KeybindComponent keybind) {
             rendered = new net.md_5.bungee.api.chat.KeybindComponent(keybind.keybind());
         } else if (component instanceof TranslatableComponent translation) {
-            rendered = new net.md_5.bungee.api.chat.TranslatableComponent(translation.key());
+            Object[] arguments = translation.args().stream()
+                    .map(argument -> new TextComponent(render(argument))).toArray();
+            rendered = new net.md_5.bungee.api.chat.TranslatableComponent(translation.key(), arguments);
         }
         if (rendered != null) {
             apply(rendered, style);

@@ -51,39 +51,62 @@ public final class BukkitGameTextListener implements Listener {
     private final Predicate<String> unclaimedCommand;
     private final BiConsumer<CommandSender, LinText> sayBroadcast;
     private final Consumer<ChatDelivery> chatBroadcast;
+    private final boolean paperChat;
+    private final boolean paperCommand;
+    private final GameTextObjectRenderer objects;
+    private final Consumer<Runnable> nextTick;
 
     public BukkitGameTextListener(Plugin owner, Supplier<RuntimeConfig.GameText> settings) {
+        this(owner, settings, false, false, null);
+    }
+
+    BukkitGameTextListener(Plugin owner, Supplier<RuntimeConfig.GameText> settings,
+                          boolean paperChat, boolean paperCommand, GameTextObjectRenderer objects) {
         this(settings, name -> Bukkit.getPluginCommand(name) == null,
                 BukkitGameTextListener::broadcastSay,
-                delivery -> broadcastChat(owner, delivery));
+                delivery -> broadcastChat(owner, delivery), paperChat, paperCommand, objects,
+                task -> Bukkit.getScheduler().runTask(owner, task));
     }
 
     BukkitGameTextListener(Supplier<RuntimeConfig.GameText> settings,
                            Predicate<String> unclaimedCommand,
                            BiConsumer<CommandSender, LinText> sayBroadcast,
                            Consumer<ChatDelivery> chatBroadcast) {
+        this(settings, unclaimedCommand, sayBroadcast, chatBroadcast, false, false, null, Runnable::run);
+    }
+
+    BukkitGameTextListener(Supplier<RuntimeConfig.GameText> settings,
+                          Predicate<String> unclaimedCommand, BiConsumer<CommandSender, LinText> sayBroadcast,
+                          Consumer<ChatDelivery> chatBroadcast, boolean paperChat, boolean paperCommand,
+                          GameTextObjectRenderer objects, Consumer<Runnable> nextTick) {
         this.settings = Objects.requireNonNull(settings, "settings");
         this.unclaimedCommand = Objects.requireNonNull(unclaimedCommand, "unclaimedCommand");
         this.sayBroadcast = Objects.requireNonNull(sayBroadcast, "sayBroadcast");
         this.chatBroadcast = Objects.requireNonNull(chatBroadcast, "chatBroadcast");
+        this.paperChat = paperChat;
+        this.paperCommand = paperCommand;
+        this.objects = objects;
+        this.nextTick = nextTick;
     }
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void onChat(AsyncPlayerChatEvent event) {
+        if (paperChat || event.isCancelled()) return;
         RuntimeConfig.GameText policy = settings.get();
         if (policy == null || !policy.chat || !event.getPlayer().hasPermission("linlang.text.chat")) return;
         String source = event.getMessage();
         if (!containsDescriptor(source)) return;
         try {
             LinText parsed = LinText.parse(source);
-            if (!hasInteraction(parsed.component())) event.setMessage(parsed.toLegacyText());
+            if (!GameTextComponents.needsComponent(parsed.component())) event.setMessage(parsed.toLegacyText());
         } catch (IllegalArgumentException ignored) {
             // 非法输入保留原文，避免影响聊天投递。
         }
     }
 
-    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void onRichChat(AsyncPlayerChatEvent event) {
+        if (paperChat) return;
         RuntimeConfig.GameText policy = settings.get();
         if (event.isCancelled() || policy == null || !policy.chat
                 || !event.getPlayer().hasPermission("linlang.text.chat")) return;
@@ -91,7 +114,7 @@ public final class BukkitGameTextListener implements Listener {
         if (!containsDescriptor(source)) return;
         try {
             LinText parsed = LinText.parse(source);
-            if (!hasInteraction(parsed.component())) return;
+            if (!GameTextComponents.needsComponent(parsed.component())) return;
             ChatDelivery delivery = new ChatDelivery(
                     new HashSet<>(event.getRecipients()),
                     formatChat(event.getFormat(), event.getPlayer().getDisplayName(), parsed),
@@ -110,6 +133,7 @@ public final class BukkitGameTextListener implements Listener {
         if (policy == null || !policy.command
                 || !event.getPlayer().hasPermission("linlang.text.command")) return;
         String command = event.getMessage();
+        if (paperCommand && nativeTextCommand(command)) return;
         LinText say = sayText(command, event.getPlayer());
         if (say != null) {
             event.setCancelled(true);
@@ -123,7 +147,7 @@ public final class BukkitGameTextListener implements Listener {
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void onServerCommand(ServerCommandEvent event) {
         RuntimeConfig.GameText policy = settings.get();
-        if (policy == null || !policy.command) return;
+        if (policy == null || !policy.command || !event.getSender().hasPermission("linlang.text.command")) return;
         String command = event.getCommand();
         LinText say = sayText(command, event.getSender());
         if (say != null) {
@@ -140,6 +164,14 @@ public final class BukkitGameTextListener implements Listener {
         RuntimeConfig.GameText policy = settings.get();
         if (policy == null || !policy.book || !event.getPlayer().hasPermission("linlang.text.book")) return;
         BookMeta original = event.getNewBookMeta();
+        if (objects != null) {
+            try {
+                event.setNewBookMeta(objects.book(original));
+            } catch (IllegalArgumentException ignored) {
+                // 无效书页保留本次编辑的原始内容。
+            }
+            return;
+        }
         Map<Integer, BaseComponent[]> pages = new LinkedHashMap<>();
         try {
             for (int page = 1; page <= original.getPageCount(); page++) {
@@ -164,6 +196,10 @@ public final class BukkitGameTextListener implements Listener {
         ItemStack result = event.getResult();
         if (result == null || !containsDescriptor(source)) return;
         try {
+            if (objects != null) {
+                event.setResult(objects.rename(result, source));
+                return;
+            }
             String name = LinText.parse(source).toLegacyText();
             ItemStack updated = result.clone();
             ItemMeta meta = updated.getItemMeta();
@@ -181,6 +217,10 @@ public final class BukkitGameTextListener implements Listener {
     public void onSign(SignChangeEvent event) {
         RuntimeConfig.GameText policy = settings.get();
         if (policy == null || !policy.sign || !event.getPlayer().hasPermission("linlang.text.sign")) return;
+        if (objects != null) {
+            renderSign(event);
+            return;
+        }
         String[] lines = event.getLines().clone();
         boolean[] modified = new boolean[lines.length];
         boolean changed = false;
@@ -204,14 +244,46 @@ public final class BukkitGameTextListener implements Listener {
         return source != null && source.contains("[@");
     }
 
-    private static boolean hasInteraction(Component component) {
-        if (component.clickEvent() != null || component.hoverEvent() != null || component.insertion() != null) {
-            return true;
+    private void renderSign(SignChangeEvent event) {
+        java.lang.reflect.Method read = GameTextAccess.method(SignChangeEvent.class, "line", int.class);
+        java.lang.reflect.Method write = GameTextAccess.method(SignChangeEvent.class, "line", int.class, Component.class);
+        List<Component> original = new ArrayList<>();
+        try {
+            for (int index = 0; index < 4; index++) original.add(read == null
+                    ? GameTextComponents.legacy(event.getLine(index))
+                    : java.util.Objects.requireNonNullElse((Component) GameTextAccess.invoke(read, event, index), Component.empty()));
+            if (original.stream().noneMatch(GameTextComponents::contains)) return;
+            List<Component> rendered = original.stream().map(GameTextComponents::parse)
+                    .map(GameTextComponents::display).toList();
+            for (int index = 0; index < 4; index++) {
+                if (write == null) event.setLine(index, GameTextComponents.legacy(rendered.get(index)));
+                else GameTextAccess.invoke(write, event, index, rendered.get(index));
+            }
+            java.lang.reflect.Method side = GameTextAccess.method(SignChangeEvent.class, "getSide");
+            String name = side == null ? "front" : GameTextAccess.invoke(side, event).toString().toLowerCase(Locale.ROOT);
+            nextTick.accept(() -> {
+                RuntimeConfig.GameText current = settings.get();
+                if (event.isCancelled() || current == null || !current.sign
+                        || !event.getPlayer().hasPermission("linlang.text.sign")) return;
+                if (event.getBlock().getState() instanceof org.bukkit.block.Sign sign) {
+                    objects.rememberSign(sign, name, original, rendered);
+                }
+            });
+        } catch (IllegalArgumentException ignored) {
+            // 任一行语法无效时保留整个编辑结果。
         }
-        for (Component child : component.children()) {
-            if (hasInteraction(child)) return true;
-        }
-        return false;
+    }
+
+    private boolean nativeTextCommand(String command) {
+        int start = command.startsWith("/") ? 1 : 0;
+        String label = command.substring(start, nextWhitespace(command, start)).toLowerCase(Locale.ROOT);
+        boolean vanilla = label.startsWith("minecraft:");
+        if (vanilla) label = label.substring("minecraft:".length());
+        return switch (label) {
+            case "say", "me", "teammsg", "tm", "msg", "tell", "w", "whisper" ->
+                    vanilla || unclaimedCommand.test(label);
+            default -> false;
+        };
     }
 
     static BaseComponent[] formatChat(String format, String displayName, LinText message) {

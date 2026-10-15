@@ -4,15 +4,13 @@ import api.linlang.audit.LinLog;
 import api.linlang.banner.LinBanner;
 import api.linlang.runtime.Lin;
 import api.linlang.runtime.Linlang;
-import adapter.linlang.bukkit.text.BukkitGameTextListener;
+import adapter.linlang.bukkit.text.BukkitGameTextRuntime;
 import core.linlang.audit.log.BuiltinLog;
 import core.linlang.audit.problem.BuiltinProblemCatalog;
 import me.jling.bukkit.LinlangBukkitBootstrap;
 import me.jling.runtime.BukkitRuntimeImpl;
 import org.bukkit.plugin.PluginDescriptionFile;
 import org.bukkit.plugin.java.JavaPlugin;
-import org.bukkit.event.HandlerList;
-import org.bukkit.event.Listener;
 
 import org.bukkit.plugin.ServicePriority;
 
@@ -22,7 +20,7 @@ public class BukkitLoader extends JavaPlugin {
 
     private LinlangBukkitBootstrap bootstrap;
     private BukkitRuntimeImpl runtime;
-    private Listener gameTextListener;
+    private BukkitGameTextRuntime gameTextRuntime;
 
     @Override
     public void onEnable() {
@@ -31,8 +29,8 @@ public class BukkitLoader extends JavaPlugin {
             // 初始化运行时装配器
             this.bootstrap = LinlangBukkitBootstrap.install(this);
             this.runtime = bootstrap.getRuntime();
-            this.gameTextListener = new BukkitGameTextListener(this, bootstrap::gameTextSettings);
-            getServer().getPluginManager().registerEvents(gameTextListener, this);
+            this.gameTextRuntime = new BukkitGameTextRuntime(this, bootstrap::gameTextSettings);
+            LinLog.info(BuiltinLog.RUNTIME_PLATFORM, "platform", gameTextRuntime.platform());
 
             // 重复实例处理
             var sm = getServer().getServicesManager();
@@ -79,9 +77,9 @@ public class BukkitLoader extends JavaPlugin {
     @Override
     public void onDisable() {
         LinLog.info(BuiltinLog.RUNTIME_DISABLING);
-        if (gameTextListener != null) {
-            HandlerList.unregisterAll(gameTextListener);
-            gameTextListener = null;
+        if (gameTextRuntime != null) {
+            gameTextRuntime.close();
+            gameTextRuntime = null;
         }
         try {
             getServer().getServicesManager().unregisterAll(this);

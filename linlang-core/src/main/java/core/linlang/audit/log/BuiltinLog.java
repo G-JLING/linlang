@@ -19,6 +19,11 @@ public enum BuiltinLog implements LogTemplate {
             "Linlang 运行时已启用，耗时 {elapsed}ms。API={api}, Runtime={runtime}, Plugin={plugin}",
             keys -> keys.linRuntime.enabled
     ),
+    RUNTIME_PLATFORM(
+            "LIN-RUNTIME-PLATFORM",
+            "Linlang running on {platform} server",
+            keys -> keys.linRuntime.platform
+    ),
     RUNTIME_DISABLING(
             "LIN-RUNTIME-DISABLING",
             "Linlang 运行时正在关闭",
