@@ -3,8 +3,6 @@ package core.linlang.database.impl;
 import api.linlang.audit.LinAudit;
 import api.linlang.audit.LinLog;
 import api.linlang.file.database.DataService;
-import api.linlang.file.database.annotations.Entity;
-import api.linlang.file.database.annotations.Transient;
 import api.linlang.file.database.annotations.Column;
 import api.linlang.file.database.annotations.Id;
 import api.linlang.file.database.annotations.Index;
@@ -32,7 +30,7 @@ public final class DataServiceImpl implements DataService {
     private final LinAudit audit;
     private DbType mode;
     private HikariDataSource ds;
-    private final java.util.Set<Class<?>> registeredEntities = new java.util.LinkedHashSet<>();
+    private final Map<Class<?>, EntityMetadata<?>> registeredEntities = new LinkedHashMap<>();
     private final Map<Class<?>, Repository<?, ?>> openRepos = new ConcurrentHashMap<>();
 
 
@@ -94,11 +92,12 @@ public final class DataServiceImpl implements DataService {
     @Override
     public synchronized void migrate() {
         requireDataSource();
-        for (Class<?> et : registeredEntities) {
+        for (var entry : registeredEntities.entrySet()) {
+            Class<?> et = entry.getKey();
             try {
                 Binder.BoundTable t = Binder.tableOf(et).orElse(null);
                 if (t == null) continue;
-                ensureSchema(et, t);
+                ensureSchema(entry.getValue(), t);
             } catch (DataMappingException exception) {
                 reportInvalidEntity(et, exception);
                 throw exception;
@@ -116,11 +115,12 @@ public final class DataServiceImpl implements DataService {
             @SuppressWarnings("unchecked")
             Repository<T, ID> existing = (Repository<T, ID>) openRepos.get(entityType);
             if (existing != null) return existing;
-            ensureSchema(entityType, t);
+            EntityMetadata<T> metadata = EntityMetadata.inspect(entityType);
+            ensureSchema(metadata, t);
             Repository<T, ID> repository = new RepositoryImpl<>(
-                    dataSource, entityType, t.name(), DatabaseDialect.from(mode), audit
+                    dataSource, metadata, t.name(), DatabaseDialect.from(mode), audit
             );
-            registeredEntities.add(entityType);
+            registeredEntities.put(entityType, metadata);
             openRepos.put(entityType, repository);
             return repository;
         } catch (DataMappingException exception) {
@@ -137,11 +137,12 @@ public final class DataServiceImpl implements DataService {
         );
     }
 
-    private <T> void ensureSchema(Class<T> type, Binder.BoundTable table) {
+    private void ensureSchema(EntityMetadata<?> metadata, Binder.BoundTable table) {
+        Class<?> type = metadata.type();
         HikariDataSource dataSource = requireDataSource();
         DatabaseDialect dialect = DatabaseDialect.from(mode);
-        List<Col> cols = columns(type, dialect);
-        validateEntity(type, table.name(), cols);
+        DatabaseDialect.quote(table.name());
+        List<Col> cols = columns(metadata, dialect);
         Col primaryKey = cols.stream().filter(Col::id).findFirst().orElseThrow();
         String colDefs = cols.stream().map(col -> col.ddl(dialect)).collect(Collectors.joining(", "));
         String ddl = "CREATE TABLE IF NOT EXISTS " + DatabaseDialect.quote(table.name()) + " ("
@@ -180,31 +181,16 @@ public final class DataServiceImpl implements DataService {
         }
     }
 
-    private static <T> List<Col> columns(Class<T> type, DatabaseDialect dialect) {
-        boolean implicit = type.isAnnotationPresent(Entity.class);
-
+    private static List<Col> columns(EntityMetadata<?> metadata, DatabaseDialect dialect) {
         List<Col> out = new ArrayList<>();
-        for (Field f : type.getDeclaredFields()) {
-            int mod = f.getModifiers();
-            // 跳过 static / Java 关键字 transient 字段
-            if (java.lang.reflect.Modifier.isStatic(mod) || java.lang.reflect.Modifier.isTransient(mod)) continue;
-
-            var id = f.getAnnotation(Id.class);
-            var col = f.getAnnotation(Column.class);
-
-            boolean excludedByTransient = f.isAnnotationPresent(Transient.class);
-            boolean include =
-                    (col != null)            // 显式 @Column
-                            || (id != null)             // 主键
-                            || (implicit && !excludedByTransient); // @Entity 默认入库，除非 @Transient
-
-            if (!include) continue;
-
-            String name = (col != null && !col.name().isEmpty()) ? col.name() : f.getName();
+        for (EntityMetadata.MappedField mapped : metadata.fields()) {
+            Field f = mapped.field();
+            Id id = mapped.id();
+            Column col = mapped.column();
             boolean notNull = f.isAnnotationPresent(NotNull.class) || (col != null && !col.nullable());
             boolean auto = id != null && id.auto();
             String sql = guessType(f, col, dialect);
-            out.add(new Col(f, name, sql, notNull, id != null, auto,
+            out.add(new Col(f, mapped.name(), sql, notNull, id != null, auto,
                     col == null ? "" : col.defaultValue().trim()));
         }
         return out;
@@ -235,24 +221,6 @@ public final class DataServiceImpl implements DataService {
             return "TEXT";
         }
         throw new DataMappingException("Unsupported database field type: " + f);
-    }
-
-    private static void validateEntity(Class<?> type, String table, List<Col> cols) {
-        DatabaseDialect.quote(table);
-        if (cols.isEmpty()) throw new DataMappingException("No persistent fields on " + type.getName());
-        long ids = cols.stream().filter(Col::id).count();
-        if (ids != 1) throw new DataMappingException("Exactly one @Id field is required on " + type.getName());
-        Set<String> names = new HashSet<>();
-        for (Col col : cols) {
-            DatabaseDialect.quote(col.name());
-            if (!names.add(DatabaseDialect.normalizeIdentifier(col.name()))) {
-                throw new DataMappingException("Duplicate mapped column: " + col.name());
-            }
-            if (col.auto() && col.field().getType() != Long.class && col.field().getType() != long.class
-                    && col.field().getType() != Integer.class && col.field().getType() != int.class) {
-                throw new DataMappingException("Auto-generated @Id must be int or long on " + type.getName());
-            }
-        }
     }
 
     private static Set<String> existingColumns(Connection connection, String table) throws SQLException {

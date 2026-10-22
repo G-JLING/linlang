@@ -11,7 +11,7 @@ import api.linlang.messenger.LinMessage;
 import api.linlang.messenger.LinMessenger;
 import api.linlang.runtime.Lin;
 import core.linlang.audit.problem.BuiltinProblemCatalog;
-import me.jling.facade.BukkitFacadeImpl;
+import core.linlang.runtime.FacadeCore;
 import me.jling.runtime.BukkitRuntimeImpl;
 import org.bukkit.command.CommandSender;
 import org.bukkit.command.ConsoleCommandSender;
@@ -115,7 +115,7 @@ public final class CommandListener {
                 "linlang plugins",
                 ctx -> {
                     CommandSender sender = (CommandSender) ctx.sender();
-                    Set<BukkitFacadeImpl> facades = runtime.listFacades();
+                    Set<FacadeCore<JavaPlugin>> facades = runtime.listFacades();
 
                     if (facades.isEmpty()) {
                         send(sender, messenger, text.plugins.empty);
@@ -123,8 +123,8 @@ public final class CommandListener {
                     }
 
                     send(sender, messenger, text.plugins.title, "count", facades.size());
-                    for (BukkitFacadeImpl facade : facades) {
-                        Plugin plugin = facade.owner();
+                    for (FacadeCore<JavaPlugin> facade : facades) {
+                        Plugin plugin = facade.getOwner();
                         String version = text.common.unknown.resolve();
                         try {
                             version = plugin.getDescription().getVersion();
@@ -150,32 +150,32 @@ public final class CommandListener {
                 RESTART_SPEC,
                 ctx -> {
                     CommandSender sender = (CommandSender) ctx.sender();
-                    BukkitFacadeImpl target = findFacade(sender, ctx.get("bukkit"));
+                    FacadeCore<JavaPlugin> target = findFacade(sender, ctx.get("bukkit"));
                     if (target == null) return;
 
                     if (!target.canRestart()) {
-                        send(sender, messenger, text.restart.unavailable, "name", target.owner().getName());
+                        send(sender, messenger, text.restart.unavailable, "name", target.getOwner().getName());
                         return;
                     }
 
                     try {
                         target.restart();
-                        send(sender, messenger, text.restart.success, "name", target.owner().getName());
+                        send(sender, messenger, text.restart.success, "name", target.getOwner().getName());
                         runtime.audit().record(AuditEvent.builder("runtime.facade.restart")
                                 .actor(actor(sender))
-                                .resource(target.owner().getName())
+                                .resource(target.getOwner().getName())
                                 .outcome(AuditOutcome.SUCCESS)
                                 .build());
                     } catch (Throwable throwable) {
                         if (!(throwable instanceof api.linlang.audit.problem.ReportedProblemException)) runtime.audit().problem().report(
                                 BuiltinProblemCatalog.FACADE_RESTART_FAILED,
                                 throwable,
-                                "owner", target.owner().getName(),
+                                "owner", target.getOwner().getName(),
                                 "actor", actor(sender)
                         );
                         runtime.audit().record(AuditEvent.builder("runtime.facade.restart")
                                 .actor(actor(sender))
-                                .resource(target.owner().getName())
+                                .resource(target.getOwner().getName())
                                 .outcome(AuditOutcome.FAILURE)
                                 .build());
                         send(sender, messenger, text.restart.failed,
@@ -189,30 +189,30 @@ public final class CommandListener {
         );
     }
 
-    private BukkitFacadeImpl findFacade(CommandSender sender, String pluginName) {
+    private FacadeCore<JavaPlugin> findFacade(CommandSender sender, String pluginName) {
         if (pluginName == null || pluginName.isBlank()) {
             send(sender, messenger, text.restart.emptyName);
             return null;
         }
 
-        Set<BukkitFacadeImpl> facades = runtime.listFacades();
-        BukkitFacadeImpl target = facades.stream()
-                .filter(facade -> facade.owner().getName().equalsIgnoreCase(pluginName))
+        Set<FacadeCore<JavaPlugin>> facades = runtime.listFacades();
+        FacadeCore<JavaPlugin> target = facades.stream()
+                .filter(facade -> facade.getOwner().getName().equalsIgnoreCase(pluginName))
                 .findFirst()
                 .orElse(null);
 
         if (target == null) {
             String lower = pluginName.toLowerCase(Locale.ROOT);
-            Set<BukkitFacadeImpl> candidates = facades.stream()
-                    .filter(facade -> facade.owner().getName().toLowerCase(Locale.ROOT).contains(lower))
+            Set<FacadeCore<JavaPlugin>> candidates = facades.stream()
+                    .filter(facade -> facade.getOwner().getName().toLowerCase(Locale.ROOT).contains(lower))
                     .collect(Collectors.toSet());
             if (candidates.size() == 1) {
                 target = candidates.iterator().next();
             } else if (candidates.size() > 1) {
                 send(sender, messenger, text.restart.ambiguous);
-                for (BukkitFacadeImpl candidate : candidates) {
+                for (FacadeCore<JavaPlugin> candidate : candidates) {
                     sendLine(sender, messenger, text.restart.candidate,
-                            "name", candidate.owner().getName());
+                            "name", candidate.getOwner().getName());
                 }
                 return null;
             }
@@ -231,24 +231,24 @@ public final class CommandListener {
                 RELOAD_SPEC,
                 ctx -> {
                     CommandSender sender = (CommandSender) ctx.sender();
-                    BukkitFacadeImpl target = findFacade(sender, ctx.get("bukkit"));
+                    FacadeCore<JavaPlugin> target = findFacade(sender, ctx.get("bukkit"));
                     if (target == null) return;
                     try {
                         target.reload();
                         runtime.audit().record(AuditEvent.builder("runtime.facade.reload")
                                 .actor(actor(sender))
-                                .resource(target.owner().getName())
+                                .resource(target.getOwner().getName())
                                 .outcome(AuditOutcome.SUCCESS)
                                 .build());
-                        send(sender, messenger, text.reload.success, "name", target.owner().getName());
+                        send(sender, messenger, text.reload.success, "name", target.getOwner().getName());
                     } catch (RuntimeException exception) {
                         if (!(exception instanceof api.linlang.audit.problem.ReportedProblemException)) {
                             runtime.audit().problem().report(BuiltinProblemCatalog.FACADE_RELOAD_FAILED,
-                                    exception, "owner", target.owner().getName(), "actor", actor(sender));
+                                    exception, "owner", target.getOwner().getName(), "actor", actor(sender));
                         }
                         runtime.audit().record(AuditEvent.builder("runtime.facade.reload")
                                 .actor(actor(sender))
-                                .resource(target.owner().getName())
+                                .resource(target.getOwner().getName())
                                 .outcome(AuditOutcome.FAILURE)
                                 .build());
                         send(sender, messenger, text.reload.failed,
@@ -305,12 +305,12 @@ public final class CommandListener {
                 "linlang restart-all",
                 ctx -> {
                     CommandSender sender = (CommandSender) ctx.sender();
-                    Set<BukkitFacadeImpl> facades = runtime.listFacades();
+                    Set<FacadeCore<JavaPlugin>> facades = runtime.listFacades();
                     List<String> skippedNames = facades.stream()
                             .filter(facade -> !facade.canRestart())
-                            .map(facade -> facade.owner().getName())
+                            .map(facade -> facade.getOwner().getName())
                             .toList();
-                    long eligible = facades.stream().filter(BukkitFacadeImpl::canRestart).count();
+                    long eligible = facades.stream().filter(FacadeCore::canRestart).count();
                     long skipped = skippedNames.size();
                     int success = runtime.restart();
                     long failed = eligible - success;
@@ -434,7 +434,7 @@ public final class CommandListener {
 
     private List<String> facadeNames() {
         return runtime.listFacades().stream()
-                .map(facade -> facade.owner().getName())
+                .map(facade -> facade.getOwner().getName())
                 .sorted(String.CASE_INSENSITIVE_ORDER)
                 .toList();
     }
@@ -451,7 +451,7 @@ public final class CommandListener {
                 runtime.getBootstrap().linFile()
         );
         List<FileTarget> facadeTargets = runtime.listFacades().stream()
-                .map(facade -> new FileTarget(facade.owner().getName(), facade.linFile()))
+                .map(facade -> new FileTarget(facade.getOwner().getName(), facade.linFile()))
                 .toList();
         return mergeFileTargets(runtimeTarget, facadeTargets);
     }

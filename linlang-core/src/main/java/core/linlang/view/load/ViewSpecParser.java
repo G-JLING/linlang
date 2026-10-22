@@ -173,15 +173,6 @@ public final class ViewSpecParser {
         return Map.of();
     }
 
-    private static List<String> listStr(Object o) {
-        if (o instanceof List<?> l) {
-            List<String> out = new ArrayList<>();
-            for (Object x : l) out.add(String.valueOf(x));
-            return out;
-        }
-        return List.of();
-    }
-
     private static String str(Object o, String def) { return o == null ? def : String.valueOf(o); }
 
     private static int integer(Object o, int def) {

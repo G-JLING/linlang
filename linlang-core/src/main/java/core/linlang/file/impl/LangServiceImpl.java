@@ -20,6 +20,9 @@ import core.linlang.audit.log.BuiltinLog;
 import core.linlang.audit.problem.BuiltinProblemCatalog;
 import core.linlang.file.runtime.TreeMapper;
 import core.linlang.file.util.IOs;
+import core.linlang.file.util.FileDiffWriter;
+
+import static core.linlang.file.util.DocumentTrees.*;
 import core.linlang.json.JsonCodec;
 import core.linlang.total.i18n.LocaleAware;
 import core.linlang.yaml.YamlCodec;
@@ -52,6 +55,7 @@ public final class LangServiceImpl implements LangService, LocaleAware {
 
     private final PathResolver paths;
     private final LinAudit audit;
+    private final FileDiffWriter diffWriter;
 
     /** 当前应用的全局语言代码。 */
     private volatile String appliedLocale = "zh_CN";
@@ -176,6 +180,8 @@ public final class LangServiceImpl implements LangService, LocaleAware {
     public LangServiceImpl(PathResolver paths, Object owner) {
         this.paths = paths;
         this.audit = LinLog.forOwner(owner);
+        this.diffWriter = new FileDiffWriter(audit, BuiltinLog.LANGUAGE_DIFF_GENERATED,
+                BuiltinLog.LANGUAGE_MISSING_KEYS);
     }
 
     /**
@@ -564,7 +570,7 @@ public final class LangServiceImpl implements LangService, LocaleAware {
                 mergeDefaultsCollect(defaults, doc, "", missing);
 
                 if (fileExists && !missing.isEmpty()) {
-                    writeDiff(f, spec.fmt, doc, missing);
+                    diffWriter.write(f, spec.fmt, doc, missing);
                 }
 
                 if (!fileExists) {
@@ -807,7 +813,7 @@ public final class LangServiceImpl implements LangService, LocaleAware {
                     }
                 } else {
                     if (!missing.isEmpty()) {
-                        writeDiff(f, spec.fmt, doc, missing);
+                        diffWriter.write(f, spec.fmt, doc, missing);
                         if (autoRepairMissingKeys) {
                             persistMissingKeys(f, spec.fmt, doc, missing);
                         }
@@ -1246,83 +1252,6 @@ public final class LangServiceImpl implements LangService, LocaleAware {
             m.put(k, v);
         }
         return m;
-    }
-
-    // ------------------------------------------------------------
-    // Diff writer
-    // ------------------------------------------------------------
-
-    private void writeDiff(java.nio.file.Path f, FileType fmt, Map<String, Object> fullDoc, Set<String> missing) {
-        if (missing == null || missing.isEmpty()) return;
-        try {
-            java.nio.file.Path diff = f.getParent().resolve(stripExt(f.getFileName().toString()) + "-diff" + extOf(fmt));
-            if (fmt == FileType.YAML) {
-                Map<String, List<String>> comments = new LinkedHashMap<>();
-                for (String path : missing) {
-                    comments.put(path, List.of("[Linlang] MISSING_KEY"));
-                }
-                IOs.writeString(diff, YamlCodec.dumpWithComments(fullDoc, comments));
-                audit.logger().info(BuiltinLog.LANGUAGE_DIFF_GENERATED, "diff", diff);
-            } else {
-                Map<String, Object> wrapper = new LinkedHashMap<>();
-                wrapper.put("_missing", new ArrayList<>(missing));
-                wrapper.put("_file", fullDoc);
-                IOs.writeString(diff, JsonCodec.dump(wrapper));
-                audit.logger().info(BuiltinLog.LANGUAGE_DIFF_GENERATED, "diff", diff);
-            }
-            audit.logger().warn(BuiltinLog.LANGUAGE_MISSING_KEYS, "file", f, "count", missing.size(), "diff", diff);
-        } catch (Exception exception) {
-            audit.problem().report(
-                    BuiltinProblemCatalog.DIFF_WRITE_FAILED, exception,
-                    "file", f,
-                    "operation", "language-diff"
-            );
-        }
-    }
-
-    private static String stripExt(String name) {
-        int i = name.lastIndexOf('.');
-        return i > 0 ? name.substring(0, i) : name;
-    }
-
-    private static Object mutableDeepCopyValue(Object value) {
-        if (value instanceof Map<?, ?> map) {
-            Map<String, Object> copy = new LinkedHashMap<>();
-            for (var entry : map.entrySet()) {
-                copy.put(String.valueOf(entry.getKey()), mutableDeepCopyValue(entry.getValue()));
-            }
-            return copy;
-        }
-        if (value instanceof Collection<?> collection) {
-            List<Object> copy = new ArrayList<>(collection.size());
-            for (Object element : collection) copy.add(mutableDeepCopyValue(element));
-            return copy;
-        }
-        return value;
-    }
-
-    private static Map<String, Object> immutableDeepCopy(Map<String, Object> src) {
-        Map<String, Object> out = new LinkedHashMap<>();
-        for (var entry : src.entrySet()) {
-            out.put(entry.getKey(), immutableDeepCopyValue(entry.getValue()));
-        }
-        return Collections.unmodifiableMap(out);
-    }
-
-    private static Object immutableDeepCopyValue(Object value) {
-        if (value instanceof Map<?, ?> map) {
-            Map<String, Object> copy = new LinkedHashMap<>();
-            for (var entry : map.entrySet()) {
-                copy.put(String.valueOf(entry.getKey()), immutableDeepCopyValue(entry.getValue()));
-            }
-            return Collections.unmodifiableMap(copy);
-        }
-        if (value instanceof Collection<?> collection) {
-            List<Object> copy = new ArrayList<>(collection.size());
-            for (Object element : collection) copy.add(immutableDeepCopyValue(element));
-            return Collections.unmodifiableList(copy);
-        }
-        return value;
     }
 
 }

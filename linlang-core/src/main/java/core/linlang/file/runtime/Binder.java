@@ -1,22 +1,17 @@
 package core.linlang.file.runtime;
 
-// linlang-core/src/main/java/io/linlang/file/runtime/Binder.java
-
 import api.linlang.file.database.annotations.Table;
 import api.linlang.file.file.FileType;
-import api.linlang.file.file.annotations.Comment;
 import api.linlang.file.file.annotations.ConfigFile;
-import api.linlang.file.file.annotations.Key;
 
-import java.lang.reflect.Field;
-import java.util.*;
+import java.util.Optional;
 
 public final class Binder {
     public static Optional<BoundConfig> configOf(Class<?> type) {
         ConfigFile cf = type.getAnnotation(ConfigFile.class);
         if (cf == null) return Optional.empty();
         return Optional.of(new BoundConfig(
-                cf.path(), cf.name(), cf.format(), cf.emit(), comments(type), fieldKeys(type)
+                cf.path(), cf.name(), cf.format(), cf.emit()
         ));
     }
 
@@ -25,29 +20,9 @@ public final class Binder {
         if (t == null) return Optional.empty();
         return Optional.of(new BoundTable(t.name(), t.comment(), type));
     }
-
-
-    public record BoundConfig(String path, String name, FileType fmt, boolean emit, List<String> comments,
-                              Map<Field, String> keyMap) {
+    public record BoundConfig(String path, String name, FileType fmt, boolean emit) {
     }
 
     public record BoundTable(String name, String comment, Class<?> type) {
     }
-
-
-    private static List<String> comments(Class<?> type) {
-        Comment c = type.getAnnotation(Comment.class);
-        return c == null ? List.of() : List.of(c.value());
-    }
-
-    private static Map<Field, String> fieldKeys(Class<?> type) {
-        Map<Field, String> m = new LinkedHashMap<>();
-        for (Field f : type.getFields()) {
-            if (!java.lang.reflect.Modifier.isPublic(f.getModifiers())) continue;
-            Key k = f.getAnnotation(Key.class);
-            m.put(f, k == null ? f.getName() : k.value());
-        }
-        return m;
-    }
-
 }

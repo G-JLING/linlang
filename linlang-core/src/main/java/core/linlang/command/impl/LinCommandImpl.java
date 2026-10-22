@@ -45,26 +45,14 @@ public final class LinCommandImpl implements LinCommand, LocaleAware, PrefixAwar
     private final List<Model.Node> nodes = new ArrayList<>();
     private final Map<String, Model.Node> signatures = new LinkedHashMap<>();
     private final Map<String, CommandGroupImpl> roots = new LinkedHashMap<>();
-    // 延迟 i18n：为每个节点保存「描述」的延迟提供者（localeTag -> text）
-    private final Map<Model.Node, LinCommand.I18nSupplier> descLazy = new IdentityHashMap<>();
+    // 描述和参数标签均保存为延迟文本来源。
     private final Map<Model.Node, TextSource> richDesc = new IdentityHashMap<>();
-
-    // 延迟 i18n：为每个节点保存「参数标签」的延迟提供者（paramName -> (localeTag -> label)
-    private final Map<Model.Node, Map<String, LinCommand.I18nSupplier>> paramLazy = new IdentityHashMap<>();
     private final Map<Model.Node, Map<String, TextSource>> richLabels = new IdentityHashMap<>();
     @Override
     public LinCommand register(String spec, CommandExecutor exec, CommandOptions options) {
         CommandOptions value = Objects.requireNonNull(options, "options");
         Model.Node node = doRegister(spec, exec, value.permission(), value.target());
-        if (value.description() != null) {
-            descLazy.put(node, value.description());
-        }
-        if (value.richDescription() != null) richDesc.put(node, value.richDescription());
-        if (!value.labels().isEmpty()) {
-            paramLazy.put(node, new LinkedHashMap<>(value.labels()));
-        }
-        if (!value.richLabels().isEmpty()) richLabels.put(node, new LinkedHashMap<>(value.richLabels()));
-        node.usage = buildUsage(node);
+        applyOptions(node, value);
         return this;
     }
     // 实例名字，或者叫命令前缀
@@ -135,16 +123,15 @@ public final class LinCommandImpl implements LinCommand, LocaleAware, PrefixAwar
         Model.Node node = doRegister(
                 spec, executor, permissions, value.target(), successHandlers, failureHandlers
         );
-        if (value.description() != null) {
-            descLazy.put(node, value.description());
-        }
-        if (value.richDescription() != null) richDesc.put(node, value.richDescription());
-        if (!value.labels().isEmpty()) {
-            paramLazy.put(node, new LinkedHashMap<>(value.labels()));
-        }
-        if (!value.richLabels().isEmpty()) richLabels.put(node, new LinkedHashMap<>(value.richLabels()));
-        node.usage = buildUsage(node);
+        applyOptions(node, value);
         return this;
+    }
+
+    private void applyOptions(Model.Node node, CommandOptions options) {
+        if (options.richDescription() != null) richDesc.put(node, options.richDescription());
+        Map<String, TextSource> labels = options.richLabels();
+        if (!labels.isEmpty()) richLabels.put(node, labels);
+        node.usage = buildUsage(node);
     }
 
     // --- LocaleAware ---
@@ -866,31 +853,22 @@ public final class LinCommandImpl implements LinCommand, LocaleAware, PrefixAwar
         for (int i = from; i < to; i++) {
             var n = visibleNodes.get(i);
             String usagePerSender = buildUsage(n);
-            String desc = "";
-
-            LinCommand.I18nSupplier lazyDesc = descLazy.get(n);
-            if (lazyDesc != null) {
-                try {
-                    desc = lazyDesc.get(localeTag);
-                } catch (Throwable exception) {
-                    desc = "";
-                    audit.problem().report(BuiltinProblemCatalog.COMMAND_LOCALE_REFRESH_FAILED, exception,
-                            "command", n.usage,
-                            "locale", localeTag,
-                            "resource", "description");
-                }
-            }
-
             boolean targetAvailable = n.exec.target == ExecTarget.ALL
                     || bridge.checkTarget(sender, n.exec.target);
-            String description = desc == null ? "" : desc;
+            TextSource source = richDesc.get(n);
             LinText descriptionText;
             try {
-                TextSource rich = richDesc.get(n);
-                descriptionText = rich == null ? LinText.parse(description)
-                        : rich.resolveText(new TextContext(localeTag, null));
-            } catch (RuntimeException exception) {
-                descriptionText = LinText.plain(description);
+                descriptionText = source == null ? LinText.plain("")
+                        : source.resolveText(new TextContext(localeTag, null));
+            } catch (Throwable exception) {
+                descriptionText = LinText.plain("");
+                // 仅在解析失败时回退原文，正常渲染不重复读取。
+                if (source != null && exception instanceof IllegalArgumentException) {
+                    try {
+                        descriptionText = LinText.plain(source.resolve(localeTag));
+                    } catch (Throwable ignored) {
+                    }
+                }
                 audit.problem().report(BuiltinProblemCatalog.COMMAND_LOCALE_REFRESH_FAILED, exception,
                         "command", n.usage, "locale", localeTag, "resource", "description-text");
             }
@@ -1087,31 +1065,16 @@ public final class LinCommandImpl implements LinCommand, LocaleAware, PrefixAwar
         String localeTag = effectiveLocale.tag();
         String parameterName = parameter.name == null ? "" : parameter.name.trim();
 
-        Map<String, LinCommand.I18nSupplier> lazyLabels = paramLazy.get(node);
         Map<String, TextSource> rich = richLabels.get(node);
         if (rich != null && rich.containsKey(parameterName)) {
             try {
-                return rich.get(parameterName).resolveText(new TextContext(localeTag, null)).toPlainText();
-            } catch (RuntimeException exception) {
+                String value = rich.get(parameterName).resolveText(new TextContext(localeTag, null)).toPlainText();
+                if (!value.isBlank()) return value;
+            } catch (Throwable exception) {
                 audit.problem().report(BuiltinProblemCatalog.COMMAND_LOCALE_REFRESH_FAILED, exception,
                         "command", node.usage, "locale", localeTag, "argument", parameterName);
             }
         }
-        if (lazyLabels != null) {
-            LinCommand.I18nSupplier supplier = lazyLabels.get(parameterName);
-            if (supplier != null) {
-                try {
-                    String value = supplier.get(localeTag);
-                    if (value != null && !value.isBlank()) return value;
-                } catch (Throwable exception) {
-                    audit.problem().report(BuiltinProblemCatalog.COMMAND_LOCALE_REFRESH_FAILED, exception,
-                            "command", node.usage,
-                            "locale", localeTag,
-                            "argument", parameterName);
-                }
-            }
-        }
-
         if (parameter.desc != null && !parameter.desc.isBlank()) return parameter.desc;
         return parameterName;
     }

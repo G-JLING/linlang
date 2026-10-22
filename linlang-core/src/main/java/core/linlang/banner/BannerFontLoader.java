@@ -55,9 +55,7 @@ public final class BannerFontLoader {
         }
 
         if (in == null) {
-            // 到这里说明在所有尝试过的 ClassLoader 中都找不到该资源
-            // 可以在调用方（如 BukkitBanner）增加一条更详细的 warn 日志，
-            // 包含当前 classpath / 已加载 jar 等信息。
+            // 资源缺失时由调用方报告，避免重复日志。
             return null;
         }
 

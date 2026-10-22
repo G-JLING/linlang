@@ -431,11 +431,6 @@ public final class ViewCoreImpl implements LinView, ViewEventBridge, AutoCloseab
         if (stack.isEmpty()) navigation.remove(viewer);
     }
 
-    private void reopen(DefaultGuiSession session) {
-        Map<String, Object> state = new LinkedHashMap<>(session.state());
-        openInternal(session.viewer(), session.viewId(), next -> next.putAll(state), true);
-    }
-
     private static Map<String, Object> actionState(Map<String, Object> args) {
         Object nested = args.get("state");
         Map<String, Object> state = new LinkedHashMap<>();

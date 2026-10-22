@@ -6,7 +6,6 @@ import api.linlang.file.LinFile;
 import api.linlang.messenger.LinMessenger;
 import api.linlang.runtime.Linlang;
 import api.linlang.view.LinView;
-import core.linlang.audit.problem.BuiltinProblemCatalog;
 import core.linlang.event.api.LinEventBus;
 import core.linlang.runtime.FacadeCore;
 import core.linlang.total.i18n.LocaleController;
@@ -24,8 +23,6 @@ import java.util.function.Function;
  */
 public final class BukkitFacadeImpl implements Linlang, Linlang.Configurable, Linlang.Parametric, AutoCloseable {
 
-    private final JavaPlugin owner;
-    private final BukkitRuntimeImpl runtime;
     private final FacadeCore<JavaPlugin> core;
 
     /**
@@ -34,17 +31,10 @@ public final class BukkitFacadeImpl implements Linlang, Linlang.Configurable, Li
     public static BukkitFacadeImpl create(BukkitRuntimeImpl runtime, JavaPlugin owner) {
         Objects.requireNonNull(runtime, "runtime");
         Objects.requireNonNull(owner, "owner bukkit");
-        BukkitFacadeImpl f = new BukkitFacadeImpl(runtime, owner);
-
-        // TODO: 下一世代取消支持
-        runtime.registerFacade(f);
-        return f;
+        return new BukkitFacadeImpl(runtime, owner);
     }
 
     private BukkitFacadeImpl(BukkitRuntimeImpl runtime, JavaPlugin owner) {
-        this.runtime = runtime;
-        this.owner = owner;
-
         this.core = runtime.getCore().createFacade(owner);
     }
 
@@ -52,7 +42,7 @@ public final class BukkitFacadeImpl implements Linlang, Linlang.Configurable, Li
      * 获取该门面对应的 Bukkit 插件实例。
      */
     public JavaPlugin owner() {
-        return owner;
+        return core.getOwner();
     }
 
     /**
@@ -215,15 +205,5 @@ public final class BukkitFacadeImpl implements Linlang, Linlang.Configurable, Li
     @Override
     public void close() {
         core.close();
-        try {
-            runtime.unregisterFacade(this);
-        } catch (RuntimeException exception) {
-            linAudit().problem().report(
-                    BuiltinProblemCatalog.RESOURCE_CLOSE_FAILED,
-                    exception,
-                    "resource", "bukkit-facade-registration",
-                    "owner", owner.getName()
-            );
-        }
     }
 }

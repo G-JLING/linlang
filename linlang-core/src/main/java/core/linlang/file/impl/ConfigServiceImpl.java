@@ -27,9 +27,11 @@ import core.linlang.file.runtime.TreeMapper;
 import core.linlang.json.JsonCodec;
 import core.linlang.file.runtime.Binder;
 import core.linlang.file.util.IOs;
+import core.linlang.file.util.FileDiffWriter;
+
+import static core.linlang.file.util.DocumentTrees.*;
 import core.linlang.yaml.YamlCodec;
 
-import java.lang.reflect.Field;
 import java.nio.file.Path;
 import java.util.*;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -38,6 +40,7 @@ public final class ConfigServiceImpl implements ConfigService {
     private final PathResolver paths;
     private final List<Migrator> migrators;
     private final LinAudit audit;
+    private final FileDiffWriter diffWriter;
     private volatile LangService language;
     private final ConfigTextResolver textResolver;
     private final Map<Class<?>, ConfigLoadException> failedConfigs = new LinkedHashMap<>();
@@ -60,6 +63,8 @@ public final class ConfigServiceImpl implements ConfigService {
         this.migrators = new CopyOnWriteArrayList<>();
         if (migrators != null) this.migrators.addAll(migrators);
         this.audit = LinLog.forOwner(owner);
+        this.diffWriter = new FileDiffWriter(audit, BuiltinLog.CONFIG_DIFF_GENERATED,
+                BuiltinLog.CONFIG_MISSING_KEYS);
         this.textResolver = new ConfigTextResolver(() -> language,
                 reference -> audit.problem().report("LIN-FILE-LANGUAGE-REFERENCE-FAIL", null, "reference", reference));
     }
@@ -142,11 +147,11 @@ public final class ConfigServiceImpl implements ConfigService {
         boolean exists = IOs.exists(file);
 
         T inst = newInstance(type);
-        Map<String, Object> defaults = exportSnapshot(inst, meta.keyMap());
+        Map<String, Object> defaults = immutableDeepCopy(ConfigMapper.export(inst));
         Map<String, Object> doc = loadOrInit(file, meta, defaults);
         if (!exists) writeCurrentVersion(type, doc);
         applyMigrations(type, doc);
-        Map<String, Object> diskDocument = deepCopyMap(doc);
+        Map<String, Object> diskDocument = mutableDeepCopy(doc);
 
         java.util.Set<String> missing = new java.util.LinkedHashSet<>();
         if (exists) mergeDefaultsCollect(defaults, doc, "", missing);
@@ -162,7 +167,7 @@ public final class ConfigServiceImpl implements ConfigService {
         prepared.commit(() -> {
             if (!shouldEmit) return;
             if (!missing.isEmpty() && !repairingMissingKeys) {
-                writeDiff(file, meta.fmt(), doc, missing);
+                diffWriter.write(file, meta.fmt(), doc, missing);
             }
             persist(file, meta.fmt(), repair ? doc : diskDocument, comments,
                     repair ? missing : Set.of());
@@ -218,7 +223,7 @@ public final class ConfigServiceImpl implements ConfigService {
         Path file = toFile(meta.path(), meta.name(), meta.fmt());
 
         Map<String, Object> doc = new LinkedHashMap<>();
-        export(config, meta.keyMap(), doc);
+        doc.putAll(ConfigMapper.export(config));
         writeCurrentVersion(type, doc);
 
         Map<String, List<String>> comments = TreeMapper.extractComments(type);
@@ -257,7 +262,7 @@ public final class ConfigServiceImpl implements ConfigService {
                 Path file = toFile(meta.path(), meta.name(), meta.fmt());
 
                 Map<String, Object> doc = new LinkedHashMap<>();
-                export(config, meta.keyMap(), doc);
+                doc.putAll(ConfigMapper.export(config));
                 writeCurrentVersion(type, doc);
 
                 Map<String, List<String>> comments = TreeMapper.extractComments(type);
@@ -343,7 +348,7 @@ public final class ConfigServiceImpl implements ConfigService {
         // 迁移
         if (!exists) writeCurrentVersion(type, doc);
         applyMigrations(type, doc);
-        Map<String, Object> diskDocument = deepCopyMap(doc);
+        Map<String, Object> diskDocument = mutableDeepCopy(doc);
 
         // 合并默认值并收集缺失键，保证删除字段在 reload 后回到绑定时默认值
         java.util.Set<String> missing = new java.util.LinkedHashSet<>();
@@ -363,7 +368,7 @@ public final class ConfigServiceImpl implements ConfigService {
         prepared.commit(() -> {
             if (!shouldEmit) return;
             if (!missing.isEmpty() && !repairingMissingKeys) {
-                writeDiff(file, meta.fmt(), doc, missing);
+                diffWriter.write(file, meta.fmt(), doc, missing);
             }
             persist(file, meta.fmt(), repair ? doc : diskDocument, comments,
                     repair ? missing : Set.of());
@@ -499,20 +504,6 @@ public final class ConfigServiceImpl implements ConfigService {
         }
     }
 
-    static void populate(Object inst, Map<Field, String> ignored, Map<String, Object> doc) {
-        TreeMapper.populate(inst, doc);
-    }
-
-    static void export(Object inst, Map<Field, String> ignored, Map<String, Object> doc) {
-        doc.putAll(ConfigMapper.export(inst));
-    }
-
-    private static Map<String, Object> exportSnapshot(Object instance, Map<Field, String> keyMap) {
-        Map<String, Object> defaults = new LinkedHashMap<>();
-        export(instance, keyMap, defaults);
-        return immutableDeepCopy(defaults);
-    }
-
     private ConfigLoadException reportFailure(Class<?> type, Exception exception, boolean emit, String code) {
         Attempt current = attempt;
         Path file = current == null ? paths.sub(type == null ? "config" : type.getSimpleName()) : current.file();
@@ -540,16 +531,6 @@ public final class ConfigServiceImpl implements ConfigService {
         return Binder.configOf(type).map(Binder.BoundConfig::emit).orElse(false);
     }
 
-    // 极简类型转换
-    private static Object convert(Object val, Class<?> target) {
-        if (val == null || target.isInstance(val)) return val;
-        if (target == String.class) return String.valueOf(val);
-        if (target == int.class || target == Integer.class) return Integer.parseInt(String.valueOf(val));
-        if (target == long.class || target == Long.class) return Long.parseLong(String.valueOf(val));
-        if (target == boolean.class || target == Boolean.class) return Boolean.parseBoolean(String.valueOf(val));
-        return val; // 复杂类型交给调用侧或自定义序列化器扩展
-    }
-
     @SuppressWarnings("unchecked")
     private static void mergeDefaultsCollect(Map<String, Object> defaults, Map<String, Object> doc,
                                              String prefix, java.util.Set<String> missing) {
@@ -570,96 +551,4 @@ public final class ConfigServiceImpl implements ConfigService {
             // 其他类型：保留 doc 的值
         }
     }
-
-    private void writeDiff(Path f, FileType fmt, Map<String, Object> fullDoc, java.util.Set<String> missing) {
-        if (missing.isEmpty()) return;
-        try {
-            Path diff = f.getParent().resolve(stripExt(f.getFileName().toString()) + "-diff" + extOf(fmt));
-            if (fmt == FileType.YAML) {
-                Map<String, List<String>> comments = new LinkedHashMap<>();
-                for (String path : missing) {
-                    comments.put(path, List.of("[Linlang] MISSING_KEY"));
-                }
-                IOs.writeString(diff, YamlCodec.dumpWithComments(fullDoc, comments));
-                audit.logger().info(BuiltinLog.CONFIG_DIFF_GENERATED, "diff", diff);
-            } else {
-                Map<String, Object> wrapper = new LinkedHashMap<>();
-                wrapper.put("_missing", new java.util.ArrayList<>(missing));
-                wrapper.put("_file", fullDoc);
-                IOs.writeString(diff, JsonCodec.dump(wrapper));
-                audit.logger().info(BuiltinLog.CONFIG_DIFF_GENERATED, "diff", diff);
-            }
-            audit.logger().warn(BuiltinLog.CONFIG_MISSING_KEYS, "file", f, "count", missing.size(), "diff", diff);
-        } catch (Exception exception) {
-            audit.problem().report(
-                    BuiltinProblemCatalog.DIFF_WRITE_FAILED, exception,
-                    "file", f,
-                    "operation", "config-diff"
-            );
-        }
-    }
-
-    private static String stripExt(String name) {
-        int i = name.lastIndexOf('.');
-        return i > 0 ? name.substring(0, i) : name;
-    }
-
-    private static String extOf(FileType fmt) {
-        return fmt == FileType.YAML ? ".yml" : ".json";
-    }
-
-    @SuppressWarnings("unchecked")
-    private static Map<String, Object> deepCopyMap(Map<String, Object> src) {
-        return mutableDeepCopy(src);
-    }
-
-    private static Map<String, Object> mutableDeepCopy(Map<String, Object> src) {
-        Map<String, Object> out = new LinkedHashMap<>();
-        for (var e : src.entrySet()) {
-            out.put(e.getKey(), mutableDeepCopyValue(e.getValue()));
-        }
-        return out;
-    }
-
-    @SuppressWarnings("unchecked")
-    private static Object mutableDeepCopyValue(Object value) {
-        if (value instanceof Map<?, ?> map) {
-            Map<String, Object> copy = new LinkedHashMap<>();
-            for (var entry : map.entrySet()) {
-                copy.put(String.valueOf(entry.getKey()), mutableDeepCopyValue(entry.getValue()));
-            }
-            return copy;
-        }
-        if (value instanceof Collection<?> collection) {
-            List<Object> copy = new ArrayList<>(collection.size());
-            for (Object element : collection) copy.add(mutableDeepCopyValue(element));
-            return copy;
-        }
-        return value;
-    }
-
-    private static Map<String, Object> immutableDeepCopy(Map<String, Object> src) {
-        Map<String, Object> out = new LinkedHashMap<>();
-        for (var entry : src.entrySet()) {
-            out.put(entry.getKey(), immutableDeepCopyValue(entry.getValue()));
-        }
-        return Collections.unmodifiableMap(out);
-    }
-
-    private static Object immutableDeepCopyValue(Object value) {
-        if (value instanceof Map<?, ?> map) {
-            Map<String, Object> copy = new LinkedHashMap<>();
-            for (var entry : map.entrySet()) {
-                copy.put(String.valueOf(entry.getKey()), immutableDeepCopyValue(entry.getValue()));
-            }
-            return Collections.unmodifiableMap(copy);
-        }
-        if (value instanceof Collection<?> collection) {
-            List<Object> copy = new ArrayList<>(collection.size());
-            for (Object element : collection) copy.add(immutableDeepCopyValue(element));
-            return Collections.unmodifiableList(copy);
-        }
-        return value;
-    }
-
 }

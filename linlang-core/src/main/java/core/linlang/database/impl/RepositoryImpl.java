@@ -2,10 +2,7 @@ package core.linlang.database.impl;
 
 import api.linlang.audit.LinAudit;
 import api.linlang.audit.LinLog;
-import api.linlang.file.database.annotations.Column;
-import api.linlang.file.database.annotations.Entity;
 import api.linlang.file.database.annotations.Id;
-import api.linlang.file.database.annotations.Transient;
 import api.linlang.file.database.dto.Page;
 import api.linlang.file.database.dto.QuerySpec;
 import api.linlang.file.database.repo.Repository;
@@ -40,48 +37,21 @@ public final class RepositoryImpl<T, ID> implements Repository<T, ID> {
     }
 
     RepositoryImpl(DataSource ds, Class<T> type, String table, DatabaseDialect dialect, LinAudit audit) {
+        this(ds, EntityMetadata.inspect(type), table, dialect, audit);
+    }
+
+    RepositoryImpl(DataSource ds, EntityMetadata<T> metadata, String table, DatabaseDialect dialect, LinAudit audit) {
         this.ds = ds;
-        this.type = type;
+        this.type = metadata.type();
         this.table = table;
         this.dialect = Objects.requireNonNull(dialect, "dialect");
         this.audit = Objects.requireNonNull(audit, "audit");
-        List<Field> tmp = new ArrayList<>();
+        this.fields = metadata.fields().stream().map(EntityMetadata.MappedField::field).toList();
         Map<Field, String> names = new LinkedHashMap<>();
-        Field idF = null;
-        boolean implicit = type.isAnnotationPresent(Entity.class);
-
-        for (Field f : type.getDeclaredFields()) {
-            int mod = f.getModifiers();
-            if (java.lang.reflect.Modifier.isStatic(mod) || java.lang.reflect.Modifier.isTransient(mod)) continue;
-
-            Column c = f.getAnnotation(Column.class);
-            Id id = f.getAnnotation(Id.class);
-
-            boolean excludedByTransient = f.isAnnotationPresent(Transient.class);
-            boolean include =
-                    (c != null) || (id != null) || (implicit && !excludedByTransient);
-
-            if (!include) continue;
-
-            f.setAccessible(true);
-            if (id != null) {
-                if (idF != null) throw new DataMappingException("Multiple @Id fields on " + type.getName());
-                idF = f;
-            }
-            String name = (c != null && !c.name().isEmpty()) ? c.name() : f.getName();
-            tmp.add(f);
-            names.put(f, name);
-        }
-        this.fields = tmp;
-        this.colName = names;
-        if (idF == null) throw new DataMappingException("@Id missing on " + type.getName());
-        this.idField = idF;
-        try {
-            this.constructor = type.getDeclaredConstructor();
-            this.constructor.setAccessible(true);
-        } catch (ReflectiveOperationException exception) {
-            throw new DataMappingException("No zero-argument constructor on " + type.getName(), exception);
-        }
+        metadata.fields().forEach(field -> names.put(field.field(), field.name()));
+        this.colName = Collections.unmodifiableMap(names);
+        this.idField = metadata.id();
+        this.constructor = metadata.constructor();
     }
 
     @Override

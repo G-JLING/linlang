@@ -13,13 +13,11 @@ import core.linlang.file.impl.ConfigServiceImpl;
 import core.linlang.file.impl.LangServiceImpl;
 import core.linlang.platform.PlatformAdapter;
 import core.linlang.runtime.RuntimeCore;
+import core.linlang.runtime.FacadeCore;
 import lombok.Getter;
 import me.jling.bukkit.LinlangBukkitBootstrap;
-import me.jling.facade.BukkitFacadeImpl;
 import org.bukkit.plugin.java.JavaPlugin;
 
-import java.util.Collections;
-import java.util.LinkedHashSet;
 import java.util.Set;
 import java.util.function.Function;
 
@@ -44,9 +42,6 @@ public final class BukkitRuntimeImpl implements AutoCloseable {
     /** core 运行时（平台无关） */
     @Getter
     private final RuntimeCore<JavaPlugin> core;
-
-    /** Bukkit Facade 注册表 */
-    private final LinkedHashSet<BukkitFacadeImpl> facades = new LinkedHashSet<>();
 
     /**
      * 初始化运行时对象。
@@ -174,32 +169,10 @@ public final class BukkitRuntimeImpl implements AutoCloseable {
     }
 
     /**
-     * 注册一个插件门面实例，纳入统一生命周期管理。
-     * <p>注意：这还是旧 Facade 注册表，下一步会收敛到 FacadeCore。</p>
-     */
-    public void registerFacade(BukkitFacadeImpl facade) {
-        synchronized (facades) {
-            facades.add(facade);
-        }
-    }
-
-    /**
-     * 取消注册一个插件门面实例。
-     */
-    public void unregisterFacade(BukkitFacadeImpl facade) {
-        synchronized (facades) {
-            facades.remove(facade);
-        }
-    }
-
-    /**
      * 获取当前所有已注册的插件门面快照。
      */
-    public Set<BukkitFacadeImpl> listFacades() {
-        synchronized (facades) {
-            facades.removeIf(BukkitFacadeImpl::isClosed);
-            return Collections.unmodifiableSet(new LinkedHashSet<>(facades));
-        }
+    public Set<FacadeCore<JavaPlugin>> listFacades() {
+        return core.listFacades();
     }
 
     /**
@@ -242,23 +215,6 @@ public final class BukkitRuntimeImpl implements AutoCloseable {
      */
     @Override
     public void close() {
-        // 先关旧 facades
-        synchronized (facades) {
-            for (BukkitFacadeImpl f : facades.toArray(new BukkitFacadeImpl[0])) {
-                try {
-                    f.close();
-                } catch (RuntimeException exception) {
-                    audit().problem().report(
-                            BuiltinProblemCatalog.FACADE_CLOSE_FAILED,
-                            exception,
-                            "owner", f.owner().getName()
-                    );
-                }
-            }
-            facades.clear();
-        }
-
-        // 再关 core
         try {
             core.close();
         } catch (RuntimeException exception) {
